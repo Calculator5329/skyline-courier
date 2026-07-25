@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-07-25 — geometry unlock, vegetation, instrumentation, audio
+
+Shipped as `78603ac`. Four parallel workstreams; the commit message named only
+three of them, so recording the fourth here.
+
+- **`src/props.js`** — real curved geometry. Lathed shafts and domes, radiating
+  arch voussoirs, swept tubes, involute gear teeth, chamfered boxes, and a
+  noise-displaced blob for rounded rock. Nothing has to be a stacked box now.
+- **`src/foliage.js`** — instanced alpha-tested vegetation off a procedurally
+  generated atlas, with vertex-shader wind. Vegetation is roughly 40% of the
+  reference by screen area and the game previously had none.
+- **`src/kit.js`** — rebuilt on both. Turned balusters, columns with real
+  base/shaft/capital, ivy on every lip, moss in the junctions.
+- **`src/hud.js` + `index.html`** — brass instrumentation, and wayfinding now
+  exists: an edge chevron that orbits the frame perimeter and cannot enter the
+  centre, a bearing rose, an altimeter tape, checkpoint pips, and ability lamps
+  with real lit/unlit contrast. Needs `hud.setNav(camera, level)` from main.js.
+- **`src/audio.js`** — surface-aware cues (the contact material was never
+  published on the player, so audio reads the collision world itself), six
+  mix buses with ducking, a procedurally generated stereo impulse response with
+  frequency-dependent decay, a ray-probe driving reverb wet from 0.05 in open
+  sky to ~0.4 in a corridor, and a clockwork layer that free-wheels when you
+  leave the ground. Output is soft-clipped so clipping is structurally
+  impossible.
+
+Measured: 1.23M triangles at 52–65 draw calls, 4.3–11 ms/frame, all eight
+harness shots rendering with no clipping low.
+
+**Not verified:** how the audio actually sounds. It was checked structurally
+against a mock Web Audio graph — node counts, gain ranges, voice budgets, IR
+decay — but nobody has listened to it.
+
 ## 2026-07-25
 
 - **Graphics push closed out at 52/100.** A baseline critique scored the game
