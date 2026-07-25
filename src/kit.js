@@ -82,11 +82,28 @@ function discRects(r, facets = 3, squash = 1) {
   return out
 }
 
+// Vertical tie-break between the rectangles that make up one faceted disc.
+//
+// Every rect in a disc shares a centre AND a height, so their top faces are
+// exactly coplanar and heavily overlapping. Two coplanar surfaces give the
+// depth test no winner, and which one survives flips per pixel and per camera
+// position — so the ground visibly flickers between materials as you walk.
+// (Playtest, Ethan 2026-07-25: "the ground was like switching between green
+// and the cobblestone right where you spawn.")
+//
+// 0.6 mm per rect breaks the tie deterministically. That is comfortably above
+// depth-buffer precision at our near/far range, and far below anything a
+// player can see or stand on differently — a six-rect stack spans 3 mm,
+// against a 1.45 m vault height.
+const DISC_EPSILON = 6e-4
+
 /** A faceted disc/drum course. Returns the number of boxes emitted. */
 function disc(put, cx, cy, cz, r, h, kind, facets = 3, squash = 1) {
   let n = 0
+  let i = 0
   for (const q of discRects(r, facets, squash)) {
-    n += put(cx, cy, cz, q.hx * 2, h, q.hz * 2, kind)
+    n += put(cx, cy - i * DISC_EPSILON, cz, q.hx * 2, h, q.hz * 2, kind)
+    i++
   }
   return n
 }
