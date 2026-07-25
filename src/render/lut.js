@@ -61,23 +61,69 @@ export const GRADE = {
   // reflex and they immediately make a bright game look like a thriller; a
   // green lean instead reads as bounced light off foliage and moss, which is
   // both warmer and consistent with what is actually in the level.
-  // Weighted by (1 - L)^2.2, so it lives in the bottom third and is gone by
-  // the mid-tones.
-  shadowTint: [-0.006, 0.011, 0.006],
+  // Weighted by (1 - L)^SHADOW_FALLOFF, so it lives in the bottom third and is
+  // faded out by the mid-tones.
+  //
+  // AN ORDER OF MAGNITUDE UP from [-0.006, 0.011, 0.006]. That was 1.5 code
+  // values out of 255 — an intent expressed in a comment and delivered as
+  // nothing. Measured on the shot set, lit-versus-shadow hue on the same
+  // sandstone deck came back at 31.4 -> 27.0 degrees: shadows going WARMER,
+  // which is the exact inverse of the brief.
+  //
+  // [-0.026, 0.034, 0.015] is 7-9 code values, which is visible, and it is
+  // skewed GREEN-of-cyan (g > b, r negative) rather than neutral-cool: blue
+  // shadows are the teal-and-orange reflex and instantly read as a thriller,
+  // while a green lean reads as bounced light off the moss and cypress that are
+  // actually in this level.
+  //
+  // This is the SECOND half of the fix and deliberately the smaller one. The
+  // grade cannot tell a shadow from a dark surface, so a big number here
+  // olive-tints every dark texture crevice in the frame as well. The lighting
+  // does the real work: see the zenith/aureole rebalance in skyenv.js and the
+  // orientation-driven split in patch.js, both of which only touch surfaces
+  // that are genuinely receiving ambient rather than key.
+  shadowTint: [-0.026, 0.034, 0.015],
   // Warm cream highlights: red up, green up half as much, blue down. This is
   // the porcelain-in-sunlight signature and it is what keeps a blown highlight
   // from reading as a hole in the frame.
   // Weighted by L^2, so it is confined to the top third.
   highlightTint: [0.026, 0.014, -0.010],
 
+  // --- split-tone falloff exponents ----------------------------------------
+  //
+  // Shadow weight is (1 - L)^shadowFalloff, highlight weight is L^highlightRise.
+  //
+  // shadowFalloff 1.85, down from a hard-coded 2.2. At 2.2 the tint is at half
+  // strength by L = 0.34 and effectively gone by 0.5, so it only ever coloured
+  // the toe — and the shadows in this game are not in the toe, they are in the
+  // lower mid-tones (measured p1 across the set: 22-50 out of 255, p50 around
+  // 115). 1.85 pushes the half-strength point up to L = 0.42 so the tint
+  // reaches the values a cast shadow on sunlit sandstone actually lands at,
+  // and stops short of 1.7, which reached far enough up to olive-tint the
+  // SUNLIT deck as well.
+  shadowFalloff: 1.85,
+  // Unchanged at 2.0: the highlight tint is doing its job and reaching further
+  // down would put warm cream into the mid-tones, which is where the cool half
+  // of the split needs to live.
+  highlightRise: 2.0,
+
   // --- saturation, about luminance ----------------------------------------
   //
   // Well above 1.0 on purpose. AgX's inset/outset pair is a DESATURATING
   // transform by construction — that is the whole reason it does not clip
   // saturated terracotta to neon — and the shoulder takes another bite out of
-  // anything bright. 1.18 puts the chroma back where the palette was authored
-  // without undoing the protection.
-  saturation: 1.18,
+  // anything bright. 1.30 puts the chroma back where the palette was authored
+  // without undoing the protection. It went up from 1.22 when the metering fix
+  // raised the average exposure: a brighter frame sits further up the AgX
+  // shoulder, which desaturates harder, and the whole set measured 0.31-0.64
+  // against a 0.34-0.69 baseline until this compensated for it.
+  //
+  // It stops there rather than going higher because the DISTANCE-dependent half
+  // of the restore belongs in patch.js, where it can be keyed on how much haze
+  // the ray actually crossed. Pushing this number far enough to rescue the far
+  // archipelago would over-saturate the foreground, which measured 0.51-0.69
+  // and was never the problem.
+  saturation: 1.30,
 
   // --- contrast ------------------------------------------------------------
   //
@@ -102,11 +148,13 @@ export const GRADE = {
 
   // --- highlight desaturation ---------------------------------------------
   //
-  // Film loses chroma in the shoulder. 0.10, weighted by L^3, is enough to
-  // stop a sun-facing brass rail going neon and little enough that it does not
-  // bleach the sky to grey. AgX has already done most of this work; piling
-  // 0.25+ on top is how a sunset becomes a cream void.
-  highlightDesat: 0.10,
+  // Film loses chroma in the shoulder. 0.06, down from 0.10: AgX's inset is
+  // already a desaturating transform and the two together were over-doing it —
+  // the vista frame measured 0.34 mean saturation and no frame in the set
+  // exceeded 0.70. Weighted by L^3 this still catches a sun-facing brass rail
+  // before it goes neon, which is the only thing it was ever needed for, while
+  // letting sunlit sandstone keep its ochre on the way to white.
+  highlightDesat: 0.06,
 
   // --- toe -----------------------------------------------------------------
   //
@@ -153,13 +201,17 @@ export const GRADE = {
   // identical curve, which is the whole reason it is implemented here rather
   // than as an exposure or slope change.
   //
-  // Tuned against the harness, not by eye: at 0.87 the sun-raked brass in the
-  // underpass shot clipped 1.3% of the frame and the near column lost its form
-  // entirely, which is a readability bug on a runnable surface. 0.885 keeps the
-  // clipped fraction between 0.05% and 0.5% across the set — enough that the
-  // light sources read as light, little enough that nothing the player has to
-  // land on turns into a white blob.
-  whitePoint: 0.885,
+  // 0.870, down from 0.885. The set still measured 0.01-0.23% clipped high,
+  // i.e. a golden-hour game with no highlights in it: p99 across all eight
+  // shots landed between 161 and 209 with nothing at white, so the sun disc,
+  // the lantern globes and the raked brass all arrived as pale grey shapes.
+  // A backlit golden-hour frame should sit nearer 1-2% clipped — that clipping
+  // IS the light source. Measured at 0.858 the terrace went to 2.9% and the
+  // gaps shot to 3.7%, which is past character and into blown; 0.870 lands the
+  // set between roughly 0.2% and 2%. Below ~0.85 the near column in the
+  // underpass shot also starts losing its form, which is a readability bug on
+  // a runnable surface.
+  whitePoint: 0.870,
 }
 
 /**
@@ -186,11 +238,11 @@ function applyGrade(r, g, b, P, sh) {
 
   // 2. split tone, weighted by luminance
   const l1 = r * LUM_R + g * LUM_G + b * LUM_B
-  // 2.2 / 2.0 exponents: shadow weight falls off slightly faster than highlight
-  // weight rises, which leaves a clean neutral band across the mid-tones where
-  // skin-equivalent surfaces (cream porcelain, here) are not tinted at all.
-  const shadowW = Math.pow(1 - Math.min(1, l1), 2.2)
-  const highW = Math.pow(Math.min(1, Math.max(0, l1)), 2.0)
+  // Exponents are grade parameters now rather than literals — see the note on
+  // shadowFalloff. They set how far up the range each tint reaches, which for
+  // this look is a more consequential number than the tints themselves.
+  const shadowW = Math.pow(1 - Math.min(1, l1), P.shadowFalloff ?? 2.2)
+  const highW = Math.pow(Math.min(1, Math.max(0, l1)), P.highlightRise ?? 2.0)
   r += P.shadowTint[0] * shadowW + P.highlightTint[0] * highW
   g += P.shadowTint[1] * shadowW + P.highlightTint[1] * highW
   b += P.shadowTint[2] * shadowW + P.highlightTint[2] * highW

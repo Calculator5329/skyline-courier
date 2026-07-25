@@ -103,6 +103,110 @@ function blob(ctx, x, y, r, inner, outer) {
   })
 }
 
+/**
+ * A deterministic, spatially coherent 0..1 field, bilinearly sampled from a
+ * small random lattice.
+ *
+ * Needed because `rand()` on its own is white noise, and white noise makes a
+ * mask that reads as film grain rather than as patchy growth. The lattice is
+ * drawn from the caller's seeded rng, so the world still looks identical every
+ * reload.
+ */
+function coherent(rand, cells) {
+  const g = new Float32Array(cells * cells)
+  for (let i = 0; i < g.length; i++) g[i] = rand()
+  return (x, y) => {
+    // Texture space -> lattice space, wrapping, so the field tiles with the map.
+    const u = (x / SIZE) * cells
+    const v = (y / SIZE) * cells
+    const xi = Math.floor(u), yi = Math.floor(v)
+    const fx = u - xi, fy = v - yi
+    // Smoothstep, not linear: a linear lattice leaves visible diamond creases.
+    const sx = fx * fx * (3 - 2 * fx)
+    const sy = fy * fy * (3 - 2 * fy)
+    const x0 = ((xi % cells) + cells) % cells
+    const y0 = ((yi % cells) + cells) % cells
+    const x1 = (x0 + 1) % cells
+    const y1 = (y0 + 1) % cells
+    const a = g[y0 * cells + x0], b = g[y0 * cells + x1]
+    const c = g[y1 * cells + x0], d = g[y1 * cells + x1]
+    const top = a + (b - a) * sx
+    const bot = c + (d - c) * sx
+    return top + (bot - top) * sy
+  }
+}
+
+/**
+ * Read a height canvas back and return "how deep in a pocket is this texel",
+ * normalised to roughly 0..1.
+ *
+ * This is the same measurement `normalFromHeight` packs into the normal map's
+ * alpha, computed early so a PAINTER can use it. That matters because the art
+ * review's standing complaint about brass is that the verdigris was placed by
+ * independent noise and therefore landed on proud plate as often as in a
+ * groove, which reads as mould rather than as corrosion. Corrosion is not a
+ * random event; it is where water sits. So the mask has to be the geometry.
+ */
+function cavityField(hctx, radius, gain) {
+  const src = hctx.getImageData(0, 0, SIZE, SIZE).data
+  const hf = new Float32Array(SIZE * SIZE)
+  for (let i = 0; i < hf.length; i++) hf[i] = src[i * 4] / 255
+  const blurred = new Float32Array(SIZE * SIZE)
+  boxBlurWrap(hf, blurred, SIZE, radius)
+  const cav = new Float32Array(SIZE * SIZE)
+  for (let i = 0; i < cav.length; i++) {
+    cav[i] = Math.max(0, Math.min(1, (blurred[i] - hf[i]) * gain))
+  }
+  return cav
+}
+
+/**
+ * Smear a mask downward with an exponential decay, so whatever collects in a
+ * recess also runs out of the bottom of it.
+ *
+ * Canvas y increases downward and texture v increases upward, and level.js maps
+ * v to world height on vertical faces — so +y here is genuinely "down the wall".
+ * Two passes because the tile wraps: one pass alone leaves the top of the tile
+ * unaware of what is dripping off the bottom of the copy above it.
+ */
+function dripDown(mask, decay) {
+  const out = new Float32Array(mask.length)
+  for (let x = 0; x < SIZE; x++) {
+    let run = 0
+    for (let pass = 0; pass < 2; pass++) {
+      for (let y = 0; y < SIZE; y++) {
+        const i = y * SIZE + x
+        run = Math.max(mask[i], run * decay)
+        out[i] = run
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Composite an RGBA field over a 2D context.
+ *
+ * `fill(i, x, y)` returns [r, g, b, a] in 0..255. Goes through a scratch canvas
+ * rather than putImageData on the target because putImageData REPLACES pixels
+ * and we want an alpha-blended overlay.
+ */
+function overlayField(ctx, fill) {
+  const [c, cx] = canvas2d()
+  const img = cx.createImageData(SIZE, SIZE)
+  const d = img.data
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = y * SIZE + x
+      const px = fill(i, x, y)
+      if (!px) continue
+      d[i * 4] = px[0]; d[i * 4 + 1] = px[1]; d[i * 4 + 2] = px[2]; d[i * 4 + 3] = px[3]
+    }
+  }
+  cx.putImageData(img, 0, 0)
+  ctx.drawImage(c, 0, 0)
+}
+
 function speckle(ctx, rand, count, colors, sizeMin, sizeMax) {
   for (let i = 0; i < count; i++) {
     ctx.fillStyle = colors[(rand() * colors.length) | 0]
@@ -156,11 +260,15 @@ function dome(hctx, x, y, r, peak, base = HEIGHT_MID) {
  * player moves.
  */
 function carvedBlock(h, x, y, w, hh, rand, joint, bevel) {
+  // Per-block set height: hand-cut stone is not shimmed to a common plane, and
+  // a +/-3% proud/shy variation is the cheapest thing that stops a wall from
+  // reading as one poured slab with lines scored into it.
+  //
+  // Drawn OUTSIDE wrapped(): a rand() call inside the replay gives each of the
+  // nine wrap copies a different height, so a block straddling the tile seam
+  // came back as two blocks at two levels with a step between them.
+  const top = 168 + (rand() - 0.5) * 22
   wrapped(h, () => {
-    // Per-block set height: hand-cut stone is not shimmed to a common plane,
-    // and a +/-3% proud/shy variation is the cheapest thing that stops a wall
-    // from reading as one poured slab with lines scored into it.
-    const top = 168 + (rand() - 0.5) * 22
     const x0 = x + joint
     const y0 = y + joint
     const w0 = w - joint * 2
@@ -185,12 +293,45 @@ function carvedBlock(h, x, y, w, hh, rand, joint, bevel) {
 }
 
 /**
- * COURSES must stay even: the half-block offset alternates per course, so an
- * odd count puts two identically-aligned courses next to each other across the
- * vertical wrap and the running bond visibly breaks once per tile.
+ * THE COURSE TABLE — the scale hierarchy, and the thing that used to be two
+ * global constants.
+ *
+ * It was COURSES = 4, BLOCKS_PER_COURSE = 3, applied identically to every
+ * course: one 0.79 x 0.60 m module repeated across the entire world, with the
+ * same joint width, the same joint depth and the same bevel on every unit. The
+ * review's note is exactly right — real architecture reads because it HAS
+ * hierarchy (a heavy plinth, mid ashlar, a thin string course, fine paving) and
+ * because no two blocks are identical. One module everywhere means the eye
+ * finds a grid rather than a building, and the repeat was plainly traceable
+ * across the deck in every ground shot.
+ *
+ * So the tile now carries four DIFFERENT courses, and the block count varies
+ * per course as well:
+ *
+ *   height  — fraction of the 2.38 m tile, summing to 1.
+ *   blocks  — nominal block count; the widths inside are then jittered and
+ *             renormalised, so the vertical joints do not line up between
+ *             courses and cannot line up with themselves across the wrap.
+ *   joint   — mortar channel half-width in texels (4.6 mm each).
+ *   bevel   — arris chamfer in texels. A heavy plinth is cut with a heavier
+ *             chamfer than a string course; that difference is most of what
+ *             makes one course read as structurally different from another.
+ *   offset  — where the course's first vertical joint sits, as a fraction of
+ *             the tile. Four unrelated values rather than the old alternating
+ *             half-block, so no two courses share a vertical joint line.
+ *
+ * Still four courses because the tile has to wrap. Heights must sum to 1.
  */
-const COURSES = 4              // 4 courses over 2.38 m -> ~0.6 m course height
-const BLOCKS_PER_COURSE = 3    // ~0.79 m blocks: cut stone, not brickwork
+const COURSE_TABLE = [
+  // A heavy plinth course: tall, few and wide blocks, deep joints, big chamfer.
+  { height: 0.31, blocks: 2, joint: 4.6, bevel: 9.5, offset: 0.11 },
+  // Standard ashlar.
+  { height: 0.25, blocks: 3, joint: 4.2, bevel: 7.0, offset: 0.63 },
+  // A thin string course: a band of small, finely-jointed units.
+  { height: 0.16, blocks: 5, joint: 2.8, bevel: 4.0, offset: 0.29 },
+  // Standard ashlar again, offset and cut differently from the first.
+  { height: 0.28, blocks: 4, joint: 4.6, bevel: 7.5, offset: 0.81 },
+]
 
 const PAINTERS = {
   /**
@@ -199,7 +340,11 @@ const PAINTERS = {
    * unit of the warm-key/cool-shadow split and it costs nothing.
    */
   porcelain(a, h, m, rand) {
-    a.fillStyle = '#e7d3ac'
+    // Peach/ochre rather than the old #e7d3ac: same value, noticeably lower
+    // saturation. The review measured 84% of the terrace inside one 20-degree
+    // hue bin; sandstone is the biggest contributor to that by area, and the
+    // cheapest thing it can do about it is stop shouting the same hue.
+    a.fillStyle = '#e8d2b0'
     a.fillRect(0, 0, SIZE, SIZE)
     // Joints are painted first and left exposed by the block faces on top: a
     // recess sees sky, not sun, so it is COOLER and greener than the face.
@@ -209,44 +354,157 @@ const PAINTERS = {
     h.fillStyle = hg(96)
     h.fillRect(0, 0, SIZE, SIZE)
 
-    const ch = SIZE / COURSES
-    const bw = SIZE / BLOCKS_PER_COURSE
-    const joint = 4.5   // ~21 mm mortar channel
-    const bevel = 7     // ~32 mm arris chamfer: a hand-cut stone, not a CNC edge
+    /**
+     * Lay the courses out ONCE, then paint height, albedo, roughness and the
+     * joint overlay from the same layout. Previously the joint overlay
+     * re-derived the grid from the constants, which is why the two could only
+     * ever agree if the grid stayed perfectly regular.
+     */
+    const courses = []
+    let y = 0
+    for (let r = 0; r < COURSE_TABLE.length; r++) {
+      const spec = COURSE_TABLE[r]
+      const ch = SIZE * spec.height
+      // Block widths, jittered +/-28% and then renormalised so the course still
+      // spans exactly one tile. Real ashlar is cut to fit the wall, not to a
+      // grid, and an even set of widths is the single loudest "this is a
+      // texture" tell on a large deck.
+      const raw = []
+      let total = 0
+      for (let b = 0; b < spec.blocks; b++) {
+        const w = 1 + (rand() - 0.5) * 0.56
+        raw.push(w)
+        total += w
+      }
+      const blocks = []
+      // Start each course at its own offset so vertical joints stagger between
+      // courses instead of stacking into a running seam.
+      let x = -SIZE * spec.offset
+      for (let b = 0; b < spec.blocks; b++) {
+        const w = (raw[b] / total) * SIZE
+        blocks.push({ x, w })
+        x += w
+      }
+      courses.push({ y, ch, blocks, spec })
+      y += ch
+    }
 
-    for (let r = 0; r < COURSES; r++) {
-      const offset = (r % 2) * bw * 0.5
-      for (let b = -1; b <= BLOCKS_PER_COURSE; b++) {
-        const x = b * bw + offset
-        const y = r * ch
-        carvedBlock(h, x, y, bw, ch, rand, joint, bevel)
+    for (const c of courses) {
+      for (const blk of c.blocks) {
+        // Per-block joint and bevel jitter on top of the course's own values:
+        // a hand-cut stone is not shimmed, and the widths of its mortar beds
+        // differ on all four sides.
+        const joint = c.spec.joint * (0.78 + rand() * 0.44)
+        const bevel = c.spec.bevel * (0.72 + rand() * 0.56)
+        carvedBlock(h, blk.x, c.y, blk.w, c.ch, rand, joint, bevel)
 
-        // Albedo: face colour only. Value jitter tracks the same idea as the
-        // height jitter — different stones out of a different part of the bed.
-        const v = 0.92 + rand() * 0.15
+        /**
+         * Albedo: face colour only. The old jitter was 0.92-1.07 in value and
+         * nothing else, a 15% range the review correctly called invisible.
+         * This is 0.80-1.14 in value AND a warm/cool swing of the same block —
+         * different stones out of different parts of the bed weather to
+         * different colours, not just different brightnesses, and the cool
+         * blocks are free hue variety on the material that dominates the frame.
+         */
+        const v = 0.80 + rand() * 0.34
+        /**
+         * The warm/cool swing is small AND biased warm, and both halves of that
+         * are load-bearing.
+         *
+         * At the +/-0.08 it started on, a "cool" block came out at rgb(213,210,
+         * 190) — hue 55, an olive. On a wall you never notice, because you read
+         * one or two blocks; on a deck you read forty at once and the paving
+         * measured hue 44-54 while the wall built of the SAME material measured
+         * 35. One substance reading as two depending on which way it faces is
+         * the exact failure the material palette exists to prevent.
+         *
+         * +/-0.045 around a +0.03 warm centre keeps the bed variety without any
+         * single block leaving the sandstone family.
+         */
+        const warm = 0.03 + (rand() - 0.5) * 0.09
+        // One block in eleven has been cut out and replaced: fresh unweathered
+        // stone, paler and much less patinated. It is the strongest single
+        // break in the grid and it costs one branch.
+        const fresh = rand() < 0.09 ? 1.13 : 1.0
         wrapped(a, () => {
-          a.fillStyle = `rgb(${(231 * v) | 0},${(211 * v) | 0},${(172 * v) | 0})`
-          a.fillRect(x + joint, y + joint, bw - joint * 2, ch - joint * 2)
+          a.fillStyle = `rgb(${(232 * v * (1 + warm) * fresh) | 0},${(210 * v * fresh) | 0},${(176 * v * (1 - warm) * fresh) | 0})`
+          a.fillRect(blk.x + joint, c.y + joint, blk.w - joint * 2, c.ch - joint * 2)
         })
         wrapped(m, () => {
           // A dressed face is smoother than a mortar joint, and blocks vary.
-          m.fillStyle = mg(0.62 + rand() * 0.16, 0.0)
-          m.fillRect(x + joint, y + joint, bw - joint * 2, ch - joint * 2)
+          m.fillStyle = mg(0.52 + rand() * 0.30, 0.0)
+          m.fillRect(blk.x + joint, c.y + joint, blk.w - joint * 2, c.ch - joint * 2)
         })
       }
     }
 
-    // The cool joint colour, laid back over the exposed channel.
+    // The cool joint colour, laid back over the exposed channel — driven off
+    // the same layout so it lands in the channels the blocks actually left.
     wrapped(a, () => {
-      a.fillStyle = 'rgba(126,134,118,0.62)'
-      for (let r = 0; r < COURSES; r++) {
-        const offset = (r % 2) * bw * 0.5
-        a.fillRect(0, r * ch - joint, SIZE, joint * 2)
-        for (let b = -1; b <= BLOCKS_PER_COURSE; b++) {
-          a.fillRect(b * bw + offset - joint, r * ch, joint * 2, ch)
+      /**
+       * THE JOINT COLOUR IS A MIP-AVERAGE PROBLEM, not just a colour choice.
+       *
+       * A cool grey-green mortar line is correct and cheap at close range — a
+       * recess sees sky, not sun. But a deck is viewed at a grazing angle, so
+       * several tiles' worth of texels land in one pixel and the frame samples
+       * the tile's MEAN, not its blocks. The course table above widened the
+       * joints, and the measured consequence was the paving going from hue 28
+       * to hue 55 while the wall built of the identical material stayed at 35 —
+       * one substance reading as two depending on which way it faced.
+       *
+       * So: same hue, less of it. 0.44 rather than 0.62, and a touch warmer.
+       */
+      a.fillStyle = 'rgba(132,132,114,0.44)'
+      for (const c of courses) {
+        a.fillRect(0, c.y - c.spec.joint, SIZE, c.spec.joint * 2)
+        for (const blk of c.blocks) {
+          a.fillRect(blk.x - c.spec.joint, c.y, c.spec.joint * 2, c.ch)
         }
       }
     })
+
+    // Settlement cracks: a handful of hairlines wandering across a face and,
+    // sometimes, straight through a joint. They are cut into HEIGHT so the
+    // normal map turns them into a real dark line under a raking sun, and they
+    // are the one feature in the tile that ignores the block grid entirely —
+    // which is precisely why the eye stops reading the grid as a grid.
+    h.lineCap = 'round'
+    // Five, not nine. At nine the deck came back covered in what read as
+    // scratches rather than as settlement: a crack is a rare event, and the
+    // thing that makes it break the grid is that it is singular.
+    for (let i = 0; i < 5; i++) {
+      // The whole path is generated FIRST and then replayed by wrapped(). Any
+      // rand() called inside a wrapped() draw gives each of the nine copies a
+      // different result, which is the one thing wrapped() exists to prevent.
+      const path = []
+      let cx = rand() * SIZE
+      let cy = rand() * SIZE
+      // Mostly-vertical, because a settlement crack follows the load path.
+      let ca = (rand() < 0.5 ? 1 : -1) * (Math.PI / 2) + (rand() - 0.5) * 0.9
+      const segs = 4 + ((rand() * 5) | 0)
+      for (let s = 0; s < segs; s++) {
+        const len = 6 + rand() * 14
+        const nx = cx + Math.cos(ca) * len
+        const ny = cy + Math.sin(ca) * len
+        // Tapers to nothing: a crack that keeps its width for 30 cm is a drawn
+        // line, not a fracture.
+        path.push([cx, cy, nx, ny, 1.7 * (1 - s / segs) + 0.4])
+        cx = nx; cy = ny; ca += (rand() - 0.5) * 0.9
+      }
+      wrapped(h, () => {
+        // 82, not 54. A deeper cut throws a bright normal-mapped lip beside the
+        // dark line and the pair reads as a hair lying on the deck.
+        h.strokeStyle = hg(82)
+        for (const [x0, y0, x1, y1, w] of path) {
+          h.lineWidth = w
+          h.beginPath()
+          h.moveTo(x0, y0)
+          h.lineTo(x1, y1)
+          h.stroke()
+        }
+      })
+    }
+    h.lineCap = 'butt'
 
     // Chisel tooling across the faces. Short, shallow, slightly off-vertical
     // strokes in HEIGHT: this is the difference between "cut stone" and
@@ -311,28 +569,53 @@ const PAINTERS = {
     // On a metal, albedo IS the specular colour, and the colour you see is the
     // environment TINTED by it. This sky is orange; a neutral-pale F0 therefore
     // returns orange, which is how the first pass ended up with a brass wall
-    // and a terracotta balustrade at the same hue. So the blue channel is
-    // pulled well down (linear ~0.94, 0.80, 0.25): a genuinely yellow-gold
-    // tint that bends an orange sky toward gold instead of passing it through.
-    a.fillStyle = '#f8e88c'
+    // and a terracotta balustrade at the same hue.
+    //
+    // So this F0 is deliberately GREEN-gold rather than the red-gold real brass
+    // has: linear (0.92, 0.87, 0.27), i.e. the green channel essentially equal
+    // to the red. The sun and sky arrive with green at ~0.6 of red, so an F0
+    // with G < R multiplies down to orange no matter what else we do; only an
+    // F0 with G >= R lands the reflection back in the gold band. The art review
+    // asked for "a greener gold" and this is the arithmetic behind it.
+    a.fillStyle = '#f4ec80'
     a.fillRect(0, 0, SIZE, SIZE)
     h.fillStyle = hg(HEIGHT_MID)
     h.fillRect(0, 0, SIZE, SIZE)
-    // 0.14: polished, not mirror. Low enough that the reflection still carries
-    // the horizon line between bright cloud deck and cool zenith, which is the
-    // structure that makes a surface read as reflective at all.
-    m.fillStyle = mg(0.14, 1.0)
+    /**
+     * 0.26 for the open plate, NOT the 0.14 this used to be — and that is a
+     * widening, not a dulling.
+     *
+     * A material reads as metal from the RANGE of its polish, not its mean: a
+     * plate at 0.14 and a rivet crown at 0.11 are the same finish, and the
+     * measured result was a 24-luma span across a 200x200 patch of "polished
+     * brass". Everything ornamental below now cuts well under this — rivet
+     * crowns at 0.05, gear rims at 0.07 — and everything recessed goes well
+     * over it, at 0.55-0.70. The plate is the middle of a real spread.
+     */
+    m.fillStyle = mg(0.26, 1.0)
     m.fillRect(0, 0, SIZE, SIZE)
 
     // --- planishing ------------------------------------------------------
-    // Fine marks ACROSS the plate, in roughness only. Horizontal because the
-    // bands and the run direction are horizontal, and because anisotropy along
-    // the direction of travel is what makes a wall-run surface read as one
-    // continuous machined run rather than as stacked planks.
-    for (let i = 0; i < 520; i++) {
+    /**
+     * Fine marks ACROSS the plate, in roughness only, at FULL alpha and over a
+     * much wider range than before (0.08 to 0.46 against the old 0.06-0.22 at
+     * 55% alpha).
+     *
+     * This is the cheap stand-in for anisotropy, and it does two jobs. A
+     * highlight crossing the plate breaks into horizontal streaks instead of
+     * washing it evenly, which is what brushed metal looks like; and because
+     * the streaks run along the wall's long axis, a wall-run gets directional
+     * parallax off the surface it is running along, which the review found
+     * completely absent. True anisotropic GGX would be better and is noted in
+     * the roadmap; it needs tangents on the level geometry, which is not ours.
+     */
+    for (let i = 0; i < 620; i++) {
       const y = rand() * SIZE
-      const t = 0.4 + rand() * 2.0
-      m.fillStyle = mg(0.14 + (rand() - 0.5) * 0.16, 1.0, 0.55)
+      // Under 1.5 texels (7 mm) — these are tool marks, not planks. At 2.6 the
+      // streaks were wide enough that a grazing view smeared the whole plate
+      // into what read as motion blur rather than as a brushed finish.
+      const t = 0.4 + rand() * 1.1
+      m.fillStyle = mg(0.12 + rand() * 0.26, 1.0)
       m.fillRect(0, y, SIZE, t)
     }
     // A whisper of the same signal in height, so grazing light finds it.
@@ -371,8 +654,12 @@ const PAINTERS = {
         // and dull in the ring where the tool never touched.
         wrapped(m, () => {
           const g = m.createRadialGradient(cx, y, 0, cx, y, 7.6)
-          g.addColorStop(0, mg(0.11, 1.0))
-          g.addColorStop(0.7, mg(0.17, 1.0))
+          // 0.05 at the crown: a struck rivet head is the most polished thing
+          // on the plate, and it needs to be far enough below the plate's 0.26
+          // that the highlight visibly BREAKS on the ornament instead of
+          // washing across it.
+          g.addColorStop(0, mg(0.05, 1.0))
+          g.addColorStop(0.7, mg(0.12, 1.0))
           g.addColorStop(1, mg(0.40, 1.0, 0))
           m.fillStyle = g
           m.beginPath()
@@ -380,9 +667,10 @@ const PAINTERS = {
           m.fill()
         })
       }
-      // The channel is where dirt and water sit, so it is duller than the plate.
+      // The channel is where dirt and water sit, so it is duller than the plate
+      // by a wide margin — this is the dark end of the roughness spread.
       wrapped(m, () => {
-        m.fillStyle = mg(0.52, 1.0, 0.72)
+        m.fillStyle = mg(0.66, 1.0, 0.8)
         m.fillRect(0, y - bandHalf, SIZE, bandHalf * 2)
       })
     }
@@ -449,55 +737,110 @@ const PAINTERS = {
       // stop AT the rim — running them out over the plate was a mistake in the
       // first pass, because a 2R-wide ring set on a wall reads as a big soft
       // circle drawn on the surface, which is the stencil failure again.
+      // Ring parameters are drawn before the replay, for the same reason
+      // carvedBlock hoists its set height: nine copies must be the same rings.
+      const rings = []
+      for (let k = 0; k < 22; k++) {
+        rings.push([R * (0.12 + k * 0.042), 0.10 + rand() * 0.26, 0.7 + rand() * 1.1])
+      }
       wrapped(m, () => {
-        for (let k = 0; k < 22; k++) {
-          const r = R * (0.12 + k * 0.042)
-          m.strokeStyle = mg(0.14 + (rand() - 0.5) * 0.14, 1.0, 0.5)
-          m.lineWidth = 0.7 + rand() * 1.1
+        for (const [r, rough, lw] of rings) {
+          m.strokeStyle = mg(rough, 1.0, 0.8)
+          m.lineWidth = lw
           m.beginPath()
           m.arc(cx, cy, r, 0, Math.PI * 2)
           m.stroke()
         }
         // The recessed channels hold grime and are markedly duller.
         for (let k = 1; k < 5; k += 2) {
-          m.strokeStyle = mg(0.58, 0.9, 0.8)
+          m.strokeStyle = mg(0.70, 0.9, 0.85)
           m.lineWidth = R * 0.085
           m.beginPath()
           m.arc(cx, cy, R * (0.80 - k * 0.145), 0, Math.PI * 2)
           m.stroke()
         }
+        // The tooth ring is the proud edge of the whole fitting, so it is where
+        // the plate gets rubbed and where the highlight should catch first.
+        // 0.07 against the plate's 0.26 is a visibly different finish, which is
+        // the entire point of an ornament on a metal: it breaks the specular.
+        m.strokeStyle = mg(0.07, 1.0, 0.9)
+        m.lineWidth = R * 0.20
+        m.beginPath()
+        m.arc(cx, cy, R * 0.97, 0, Math.PI * 2)
+        m.stroke()
       })
     }
     medallion(SIZE * 0.5, SIZE * 0.25, 58)
     medallion(0, SIZE * 0.75, 44)
     medallion(SIZE * 0.72, SIZE * 0.70, 30)
 
-    // --- verdigris ---------------------------------------------------------
-    // Read the height field back and bias the corrosion into the LOW ground:
-    // copper salts form where water sits, and water sits in channels and around
-    // rivets. Guessing at coordinates put it on proud faces before.
-    const hpx = h.getImageData(0, 0, SIZE, SIZE).data
-    let placed = 0
-    let guard = 0
-    while (placed < 20 && guard++ < 4000) {
-      const x = (rand() * SIZE) | 0
-      const y = (rand() * SIZE) | 0
-      const hv = hpx[(y * SIZE + x) * 4]
-      // Accept low ground almost always, mid ground rarely, proud never.
-      if (hv > 116 && rand() > 0.08) continue
-      placed++
-      // Small and tight. Big soft green blobs on a metal wall read as mould,
-      // not as corrosion: real verdigris is a crust that follows a seam.
-      const r = 5 + rand() * 14
-      // A genuinely cool blue-green — the coolest pixel we own.
-      blob(a, x, y, r, 'rgba(98,148,128,.70)', 'rgba(98,148,128,0)')
-      // ...and it is a DIELECTRIC crust. Dropping metalness here is what gives
-      // brass its material contrast: bright mirror next to dead matte green.
-      blob(m, x, y, r * 0.86, mg(0.88, 0.04, 0.9), mg(0.5, 0.6, 0))
-      // Crusty, so it also stands slightly proud.
-      dome(h, x, y, r * 0.7, HEIGHT_MID + 14, HEIGHT_MID)
-    }
-    speckle(a, rand, 420, ['rgba(96,142,124,.16)', 'rgba(60,44,18,.10)'], 0.8, 3)
+    /**
+     * --- verdigris -------------------------------------------------------
+     *
+     * DRIVEN ENTIRELY BY THE GEOMETRY, not by an independent noise field.
+     *
+     * The previous version sampled the height at a random point and accepted it
+     * "almost always if low, rarely if proud" — but the rarely-if-proud escape
+     * hatch fired 8% of the time on a tile that is 90% proud plate, so about
+     * two-fifths of the crust landed on open plate. That is what the review saw
+     * in chain.png and crossing.png: soft grey-green gaussians floating in the
+     * middle of flat panels, which reads as mould or compression mush.
+     *
+     * Copper carbonate is not a random event. It forms where water sits and
+     * where water runs, so the mask here is exactly that: the cavity field of
+     * the height map we just painted (rivet channels, gear-tooth roots, turned
+     * grooves, the band floors) plus a downward drip smear out of each of them,
+     * modulated by a coherent patchiness field so one band corrodes and the
+     * next does not. There is no term in it that can put crust on a crown.
+     */
+    // radius 6 texels ~ 2.8 cm: the scale a band channel is a pocket AT. Gain
+    // 5.5 turns the ~0.18 height drop across a channel lip into a full mask.
+    const cav = cavityField(h, 6, 5.5)
+    const drip = dripDown(cav, 0.972)   // ~24 texel (11 cm) e-folding run
+    const patch = coherent(rand, 9)     // ~57 texel (26 cm) patches
+    const grain = coherent(rand, 64)    // crust texture, ~2 cm
+
+    /**
+     * The mask is capped well under opaque. Driving it from the cavity got the
+     * PLACEMENT right immediately — the crust lands in the gear-tooth roots and
+     * the rivet channels and nowhere else — but at full strength that reads as
+     * a green gear painted onto a gold plate, which is a different failure with
+     * the same cause: the ornament stops being metal. A patina is a thin film;
+     * you should still read the boss underneath it.
+     */
+    const CRUST_MAX = 0.40
+    overlayField(a, (i, x, y) => {
+      // Crust in the pocket, a weaker stain running below it.
+      let k = cav[i] + drip[i] * 0.55
+      // Patchiness: real corrosion is local. Below 0.40 nothing grows at all,
+      // which is what keeps most of the plate and most of the ornament clean.
+      k *= Math.max(0, patch(x, y) - 0.40) * 2.2
+      k *= 0.55 + 0.75 * grain(x, y)
+      if (k <= 0.01) return null
+      // Pushed toward CYAN-green (hue ~163) rather than the grey-green it was:
+      // the review's note is that it has to separate from gold instead of
+      // muddying it, and this is the coolest pixel the material owns.
+      return [72, 152, 132, Math.min(CRUST_MAX, k) * 255]
+    })
+    overlayField(m, (i, x, y) => {
+      let k = cav[i] + drip[i] * 0.45
+      k *= Math.max(0, patch(x, y) - 0.40) * 2.2
+      if (k <= 0.01) return null
+      // A DIELECTRIC crust: metalness drops and roughness climbs wherever the
+      // film sits. Matte green immediately beside a bright mirror is most of
+      // what makes brass read as a corroded alloy rather than as painted metal,
+      // and this channel can run harder than the albedo one because a roughness
+      // change does not hide the form underneath it.
+      return [0, 230, 8, Math.min(0.85, k * 1.6) * 255]
+    })
+    // The crust stands proud of the groove it grew in. Deliberately weak: a
+    // strong lift here would fill the channel back in and undo the relief the
+    // mask was derived from.
+    overlayField(h, (i, x, y) => {
+      const k = cav[i] * Math.max(0, patch(x, y) - 0.34) * 2.4
+      if (k <= 0.02) return null
+      return [118, 118, 118, Math.min(150, k * 130)]
+    })
 
     // Scuff wear along the run line: brass that gets touched gets polished.
     for (let i = 0; i < 26; i++) {
@@ -517,7 +860,25 @@ const PAINTERS = {
    * the cool half of the palette.
    */
   moss(a, h, m, rand) {
-    a.fillStyle = '#4a7a36'
+    /**
+     * THE BASE COLOUR IS A THIRD BRIGHTER AND A HUE-WEDGE GREENER than it was,
+     * and both numbers came off a measurement rather than a preference.
+     *
+     * The art review sampled five points across the gaps deck and got a mean of
+     * rgb(43,44,7): value 0.17, red and green EQUAL, blue essentially zero —
+     * hue 62 degrees, which is khaki, not moss. The sandstone two metres below
+     * it measured 0.44. Two causes, and this is the first: the old base
+     * #4a7a36 has a linear green of 0.19 against sandstone's 0.63, so at equal
+     * irradiance moss was arithmetically guaranteed to come back 3x darker.
+     *
+     * #72ac47 has a linear green of 0.40 and a hue of 95 degrees. The blue
+     * channel is genuinely present (linear 0.062, up from 0.037) because the
+     * sun arrives at (1.00, 0.58, 0.20) linear and crushes blue by a factor of
+     * five — a base with no blue in it cannot come back green, only yellow.
+     * The second cause is the lighting response, and that is the wrap term in
+     * materials/shader.js.
+     */
+    a.fillStyle = '#67ad55'
     a.fillRect(0, 0, SIZE, SIZE)
     h.fillStyle = hg(112)
     h.fillRect(0, 0, SIZE, SIZE)
@@ -526,23 +887,26 @@ const PAINTERS = {
 
     // Clumps first: moss grows in mounds. The mound is now real height, so a
     // moss cap has a lit crown and a shaded flank instead of being a green
-    // noise field with painted-on blotches.
+    // noise field with painted-on blotches. Crowns are the sun-tipped part of
+    // the mat, so they are the yellowest and brightest thing on it.
     for (let i = 0; i < 44; i++) {
       const x = rand() * SIZE
       const y = rand() * SIZE
       const r = 26 + rand() * 62
       dome(h, x, y, r, 150 + rand() * 52, 112)
-      blob(a, x, y, r, `rgba(${(112 + rand() * 44) | 0},${(158 + rand() * 34) | 0},${(66 + rand() * 22) | 0},.40)`,
-           'rgba(118,160,70,0)')
+      blob(a, x, y, r, `rgba(${(140 + rand() * 44) | 0},${(186 + rand() * 34) | 0},${(84 + rand() * 26) | 0},.42)`,
+           'rgba(148,192,88,0)')
     }
     // Damp hollows between the mounds: deeper, darker, cooler, and wetter —
-    // hence smoother, which is what makes a hollow catch a sky glint.
+    // hence smoother, which is what makes a hollow catch a sky glint. Lifted
+    // out of near-black: a hollow in a 6 cm mat is shaded, not a hole, and the
+    // old rgba(30,58,40) was most of why the deck averaged value 0.17.
     for (let i = 0; i < 24; i++) {
       const x = rand() * SIZE
       const y = rand() * SIZE
       const r = 18 + rand() * 44
       dome(h, x, y, r, 78, 112)
-      blob(a, x, y, r, 'rgba(30,58,40,.36)', 'rgba(30,58,40,0)')
+      blob(a, x, y, r, 'rgba(58,104,58,.34)', 'rgba(58,104,58,0)')
       blob(m, x, y, r * 0.8, mg(0.72, 0, 0.45), mg(0.9, 0, 0))
     }
 
@@ -554,9 +918,12 @@ const PAINTERS = {
       const len = 3 + rand() * 9
       const ang = -Math.PI / 2 + (rand() - 0.5) * 1.5
       const bright = rand()
+      // Both ends of the blade spread moved up. The dark end used to bottom out
+      // at rgb(34,70,38) — a near-black that 40% of 4200 strokes then smeared
+      // over the mat at 34% alpha, dragging the whole deck down.
       a.strokeStyle = bright > 0.60
-        ? `rgba(${(146 + rand() * 54) | 0},${(188 + rand() * 44) | 0},${(92 + rand() * 40) | 0},.42)`
-        : `rgba(${(34 + rand() * 28) | 0},${(70 + rand() * 26) | 0},${(38 + rand() * 20) | 0},.34)`
+        ? `rgba(${(176 + rand() * 54) | 0},${(214 + rand() * 41) | 0},${(112 + rand() * 44) | 0},.44)`
+        : `rgba(${(72 + rand() * 30) | 0},${(118 + rand() * 30) | 0},${(58 + rand() * 24) | 0},.32)`
       a.lineWidth = 0.8 + rand() * 1.1
       a.beginPath()
       a.moveTo(x, y)
@@ -596,7 +963,12 @@ const PAINTERS = {
    * balustrade were telling the player the same thing.
    */
   terracotta(a, h, m, rand) {
-    a.fillStyle = '#c4552f'
+    // Pushed from hue 15 to hue 14 with a higher saturation and a lower value.
+    // Small in hue terms, but it is the direction the review asked for — this
+    // material's job is to be unmistakably RED-orange against brass's gold, and
+    // the extra saturation and the darker value do more for that separation
+    // than another few degrees of hue would.
+    a.fillStyle = '#c34a26'
     a.fillRect(0, 0, SIZE, SIZE)
     h.fillStyle = hg(84)
     h.fillRect(0, 0, SIZE, SIZE)
@@ -609,13 +981,16 @@ const PAINTERS = {
       for (let tx = -1; tx <= 4; tx++) {
         // Half-lap per row, wrapped: the same running bond the masonry uses.
         const ox = (ty % 2) * tile * 0.5
-        const v = 0.9 + rand() * 0.22
+        const v = 0.84 + rand() * 0.34
+        // Hoisted out of the wrapped() replays below for the same reason
+        // carvedBlock hoists its set height — nine copies, one tile.
+        const rough = 0.62 + rand() * 0.28
         const x = tx * tile + ox + gap
         const y = ty * tile + gap
         const w = tile - gap * 2
         const hh = tile - gap * 2
         wrapped(a, () => {
-          a.fillStyle = `rgb(${(196 * v) | 0},${(85 * v) | 0},${(47 * v) | 0})`
+          a.fillStyle = `rgb(${(195 * v) | 0},${(74 * v) | 0},${(38 * v) | 0})`
           a.fillRect(x, y, w, hh)
         })
         wrapped(h, () => {
@@ -634,7 +1009,7 @@ const PAINTERS = {
           h.fillRect(x, y, gap * 2, hh)
         })
         wrapped(m, () => {
-          m.fillStyle = mg(0.70 + rand() * 0.2, 0.0)
+          m.fillStyle = mg(rough, 0.0)
           m.fillRect(x, y, w, hh)
         })
       }
@@ -669,7 +1044,7 @@ const PAINTERS = {
    * whole island underside fills the lower third.
    */
   stone(a, h, m, rand) {
-    a.fillStyle = '#8f9280'
+    a.fillStyle = '#8e968b'
     a.fillRect(0, 0, SIZE, SIZE)
     h.fillStyle = hg(HEIGHT_MID)
     h.fillRect(0, 0, SIZE, SIZE)
@@ -685,8 +1060,8 @@ const PAINTERS = {
       const r = 22 + rand() * 58
       dome(h, x, y, r, 168 + rand() * 40, HEIGHT_MID)
       blob(a, x, y, r,
-           `rgba(${(160 + rand() * 30) | 0},${(162 + rand() * 26) | 0},${(140 + rand() * 22) | 0},.24)`,
-           'rgba(160,162,140,0)')
+           `rgba(${(158 + rand() * 28) | 0},${(166 + rand() * 24) | 0},${(152 + rand() * 22) | 0},.24)`,
+           'rgba(158,166,152,0)')
     }
     // Crevices between them: deep, cool, damp.
     for (let i = 0; i < 26; i++) {
@@ -696,7 +1071,7 @@ const PAINTERS = {
       dome(h, x, y, r, 74, HEIGHT_MID)
       blob(a, x, y, r, 'rgba(62,74,64,.28)', 'rgba(62,74,64,0)')
     }
-    speckle(a, rand, 3200, ['rgba(118,122,106,.18)', 'rgba(202,204,182,.22)', 'rgba(64,70,60,.12)'], 1, 5)
+    speckle(a, rand, 3200, ['rgba(116,124,112,.18)', 'rgba(198,206,192,.22)', 'rgba(62,72,64,.12)'], 1, 5)
     // Mineral streaking down the faces, cool and grey-green.
     for (let i = 0; i < 22; i++) {
       a.strokeStyle = 'rgba(72,84,72,.16)'

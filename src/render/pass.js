@@ -46,6 +46,31 @@ export const COMMON = /* glsl */ `
 // bright is this" — metering, Karis weighting, sharpen.
 float scLum( vec3 c ) { return dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ); }
 
+/**
+ * Replace non-finite components with 0.
+ *
+ * A single NaN texel anywhere in the scene buffer is not a local artefact in an
+ * HDR chain, it is a whole-frame outage, and it is worth one instruction to
+ * refuse it. NaN propagates through the bloom pyramid's downsample and, far
+ * worse, through the exposure reduction: max( nan, 1e-5 ) returns the floor, so
+ * the weighted log-average collapses, the meter pins at its minimum EV, and the
+ * value it writes into the adaptation ping-pong keeps it there for every
+ * subsequent frame. Observed exactly that: an intermittent NaN somewhere in the
+ * scene turned every capture in a harness session black and kept it black.
+ *
+ * A self-compare is false only for NaN, and the magnitude test catches +/-inf.
+ * Written without isnan()/isinf() because drivers have historically disagreed
+ * about them under fast-math, whereas the self-compare is the form that
+ * survives every one of them.
+ */
+vec3 scSanitize( vec3 c ) {
+  bvec3 finite = bvec3(
+    c.x == c.x && abs( c.x ) < 1e20,
+    c.y == c.y && abs( c.y ) < 1e20,
+    c.z == c.z && abs( c.z ) < 1e20 );
+  return vec3( finite.x ? c.x : 0.0, finite.y ? c.y : 0.0, finite.z ? c.z : 0.0 );
+}
+
 // sRGB OETF. This is the boundary between scene-referred linear light and
 // display-referred code values; everything after it is measured in the same
 // units a colourist works in.

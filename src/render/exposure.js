@@ -30,8 +30,11 @@ const METER = /* glsl */ `
 precision highp float;
 ${COMMON}
 uniform sampler2D tSrc;
+// Prepass normal buffer; .z is COVERAGE, 1 where opaque geometry was drawn and
+// 0 where the frame is sky. Only consulted when uMeter.w says it is valid.
+uniform sampler2D tCoverage;
 uniform vec2 uTexel;
-uniform vec4 uMeter;   // x tapClamp, y centreFalloff, z horizonBias, w unused
+uniform vec4 uMeter;   // x tapClamp, y centreFalloff, z horizonBias, w skyWeight (<0 = no mask)
 varying vec2 vUv;
 
 // Every tap is clamped BEFORE the log. The sky shader authors a solar disc at
@@ -40,7 +43,10 @@ varying vec2 vUv;
 // weighted mean by whole stops and the level visibly gulps. Clamping in linear
 // light first bounds any single tap's contribution to log2(uMeter.x).
 float meterTap( vec2 uv ) {
-  vec3 c = max( texture2D( tSrc, uv ).rgb, vec3( 0.0 ) );
+  // Sanitised BEFORE the max(): max(NaN, 0.0) is compiled as a select on a
+  // comparison that is false for NaN, so it happily returns NaN on most
+  // drivers and the whole weighted average goes with it. See scSanitize.
+  vec3 c = max( scSanitize( texture2D( tSrc, uv ).rgb ), vec3( 0.0 ) );
   return min( scLum( c ), uMeter.x );
 }
 
@@ -73,6 +79,29 @@ void main() {
   // is never far from level.
   w *= mix( 1.0, uMeter.z, smoothstep( 0.45, 0.95, vUv.y ) );
 
+  // ...and biased off the SKY, properly, using the prepass coverage mask.
+  //
+  // The screen-position bias above is a proxy that works for a camera near
+  // level and fails completely for the shot that matters most: from a high
+  // vantage, two thirds of the frame is sky and haze BELOW the horizon line,
+  // where the proxy gives it a full vote. Measured, the vista shot came back at
+  // the lowest luminance spread and the lowest saturation of the eight — it was
+  // being metered by its own sky, which is the textbook way to turn a
+  // golden-hour wide shot into dishwater. A sky-filled frame should be a BRIGHT
+  // frame; only the geometry in it needs to sit in the middle of the range.
+  //
+  // The mask is free: the contact-shadow prepass already wrote it this frame,
+  // one texture read, no new pass. 4 taps rather than 1 because the meter
+  // footprint is ~30 source texels wide and a single tap on a NEAREST-filtered
+  // mask would alias the silhouettes into the exposure.
+  if ( uMeter.w >= 0.0 ) {
+    float cov = texture2D( tCoverage, vUv + vec2( -1.0, -1.0 ) * uTexel ).z
+              + texture2D( tCoverage, vUv + vec2(  1.0, -1.0 ) * uTexel ).z
+              + texture2D( tCoverage, vUv + vec2( -1.0,  1.0 ) * uTexel ).z
+              + texture2D( tCoverage, vUv + vec2(  1.0,  1.0 ) * uTexel ).z;
+    w *= mix( uMeter.w, 1.0, clamp( cov * 0.25, 0.0, 1.0 ) );
+  }
+
   gl_FragColor = vec4( log2( lum ) * w, w, 0.0, 1.0 );
 }
 `
@@ -98,6 +127,7 @@ void main() {
 
 const ADAPT = /* glsl */ `
 precision highp float;
+${COMMON}
 uniform sampler2D tSrc;
 uniform sampler2D tPrev;
 uniform vec4 uParams;   // x dt, y rateBrighten, z rateDarken, w compensation (stops)
@@ -122,8 +152,17 @@ void main() {
   // shadowed alcove at arm's length), not a lighting change.
   ev100 = clamp( ev100, uLimits.x, uLimits.y );
 
-  float prevEv = texture2D( tPrev, vec2( 0.5 ) ).g;
+  float prevEv = scSanitize( texture2D( tPrev, vec2( 0.5 ) ).ggg ).g;
   if ( uLimits.z > 0.5 ) prevEv = ev100;   // first frame: snap, do not fade in from black
+  // The adaptation is a feedback loop through a render target, which means one
+  // bad value is not one bad frame, it is every frame from here on. Both inputs
+  // are checked so the loop can always recover on its own rather than needing a
+  // resetExposure() from a caller who has no way of knowing it is stuck.
+  if ( !( ev100 == ev100 ) ) ev100 = prevEv;
+  if ( !( prevEv == prevEv ) ) prevEv = ev100;
+  // Both poisoned: fall back to EV 0 rather than to a stuck loop. One wrong
+  // frame that then adapts is recoverable; a latched NaN is not.
+  if ( !( ev100 == ev100 ) ) { ev100 = 0.0; prevEv = 0.0; }
 
   // Asymmetric adaptation. A higher EV means less exposure, i.e. the image gets
   // DARKER. The eye (and every film stock) closes down fast and opens up slowly,
@@ -154,6 +193,7 @@ export class AutoExposure {
   constructor(type) {
     this.meterPass = new Pass('sc-meter', METER, {
       tSrc: { value: null },
+      tCoverage: { value: null },
       uTexel: { value: new THREE.Vector2() },
       uMeter: {
         value: new THREE.Vector4(
@@ -170,7 +210,17 @@ export class AutoExposure {
           // IS the key light here and ignoring it entirely makes the exposure
           // jump every time the player looks down at a ledge.
           0.30,
-          0
+          // skyWeight: a sky texel votes at 15% of a geometry texel. Negative
+          // disables the mask entirely, which is what happens when there is no
+          // prepass to read (no float render targets); the screen-position bias
+          // above is then the only sky rejection, exactly as before.
+          //
+          // Not zero: with the mask at zero, a frame that is entirely sky has no
+          // votes at all and the weighted average divides by its epsilon. 0.15
+          // also keeps a genuinely brighter sky nudging the meter, which is
+          // right — walking out of an arch into open sky should stop down a
+          // little.
+          0.15
         ),
       },
     })
@@ -252,6 +302,18 @@ export class AutoExposure {
 
   set exposureCompensation(stops) {
     this.adaptPass.uniforms.uParams.value.w = stops
+  }
+
+  /**
+   * Point the meter at this frame's prepass coverage mask, or null to fall back
+   * to screen-position sky rejection alone.
+   *
+   * @param {THREE.Texture|null} tex prepass normal buffer (.z = coverage)
+   * @param {number} skyWeight relative vote of a sky texel, 0..1
+   */
+  setCoverage(tex, skyWeight = 0.15) {
+    this.meterPass.uniforms.tCoverage.value = tex
+    this.meterPass.uniforms.uMeter.value.w = tex ? skyWeight : -1
   }
 
   update(renderer, sourceTexture, sw, sh, dt) {

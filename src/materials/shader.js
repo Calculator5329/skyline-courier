@@ -172,6 +172,27 @@ float scCavity = 1.0;
  * bumps in different places, which is worse than the seam it fixes.
  */
 vec2 scUv0 = vec2( 0.0 );
+/**
+ * The world-space projection frame the tile is laid out in: scTuW along +u,
+ * scTvW along +v, scNwW the face normal. Written by the map block.
+ *
+ * Kept as globals so the normal chunk can build a tangent frame from them
+ * ANALYTICALLY under SC_WORLDUV. The obvious alternative — three's
+ * getTangentFrame(), which derives the frame from the screen-space derivatives
+ * of the uv — turned out to be a NaN source: it scales its tangents by
+ * inversesqrt(det), and on a fragment where the world-planar uv happens to have
+ * a near-zero derivative that scale overflows, the subsequent normalize() sees
+ * an infinity, and one NaN normal poisons the exposure meter's log-average and
+ * takes the WHOLE FRAME to black. Measured: every capture came back at
+ * luminance 5.9 with a dynamic range of 3.8.
+ *
+ * The level is axis-aligned boxes, so the analytic frame is not an
+ * approximation — it is exactly the frame the projection was built in, and it
+ * cannot degenerate.
+ */
+vec3 scTuW = vec3( 1.0, 0.0, 0.0 );
+vec3 scTvW = vec3( 0.0, 1.0, 0.0 );
+vec3 scNwW = vec3( 0.0, 0.0, 1.0 );
 
 /**
  * Height-preserving blend of two samples of the same texture.
@@ -219,6 +240,8 @@ const MAIN_FRAGMENT = /* glsl */ `
                    vec3( 1.0, 0.0, 0.0 ), scUp );
   vec3 scTv = mix( vec3( 0.0, 1.0, 0.0 ), vec3( 0.0, 0.0, 1.0 ), scUp );
   vec2 scWuv = vec2( dot( vScWPos, scTu ), dot( vScWPos, scTv ) );
+  // Published for the normal chunk; see the declarations above.
+  scTuW = scTu; scTvW = scTv; scNwW = scNw;
 
   vec2 scMuv = scWuv * scMacroP.x;
   vec4 mac = texture2D( scMacroTex, scMuv );
@@ -482,15 +505,132 @@ const SUN_LOBE = /* glsl */ `
 `
 
 /**
+ * ============================ THE HORIZON GLINT ============================
+ *
+ * The sun lobe above only fires on faces that mirror the sun into the eye, and
+ * `scFace` deliberately gates it off on everything else. That is correct, and
+ * it also means a brass wall facing anywhere but the sun has NOTHING sharp to
+ * reflect: skyenv.js is a 128x64 equirect of smooth gradients, run through
+ * PMREM, so what a polished plate returns is a smooth gradient. Measured on the
+ * crossing capture, a 200x200 patch of "polished brass" spanned 24 luma. That
+ * is orange paint, and no roughness value fixes it, because you cannot get a
+ * highlight out of an environment that has none.
+ *
+ * The real sky has exactly one sharp feature: the line where the cloud sea ends
+ * and the sky begins. It is bright, it is narrow, and — this is the part that
+ * matters — a polished surface shows it as a BAND that sweeps as the camera
+ * moves, because the reflected direction sweeps. That sweep is the actual
+ * perceptual cue for "metal"; colour is not.
+ *
+ * So: an analytic band added into `radiance`, keyed to the elevation of the
+ * reflected direction, widened by the surface's own roughness, and weighted by
+ * a Fresnel term so grazing angles go bright. Three consequences:
+ *
+ *   - It is view-dependent, so it moves. A wall-run gets directional parallax
+ *     off the wall it is running along.
+ *   - It goes through RE_IndirectSpecular, so it is tinted by F0. On brass that
+ *     is a gold tint; on sandstone (F0 = 0.04 dielectric) it is a faint white
+ *     sheen, which is what separates the two.
+ *   - Because it is added to `radiance` AFTER the cavity occlusion below, a
+ *     rivet channel does not glint and the rivet crown beside it does.
+ *
+ * It is a stylisation of one specific real feature, not a fake highlight: the
+ * band is where the environment actually is bright.
+ */
+const HORIZON_GLINT = /* glsl */ `
+#ifdef SC_CAVITY
+  // SPECULAR OCCLUSION. Reflected radiance is the only thing painting a metal,
+  // so without this a recessed plate is exactly as bright as a proud rivet and
+  // brass has no dark end at all. This is what gives it a value RANGE.
+  radiance *= mix( 1.0 - scGlintP.y, 1.0, scCavity );
+#endif
+#ifdef SC_GLINT
+{
+  vec3 scRv = reflect( -geometryViewDir, geometryNormal );
+  // Band half-width in sin(elevation). A mirror shows the horizon as a hard
+  // line; a satin finish smears it over tens of degrees. Driving the width off
+  // the material's own roughness is what makes the polished rivet crowns read
+  // as a different finish from the plate they sit in.
+  float scBw = mix( 0.05, 0.40, material.roughness );
+  float scBand = exp( -( scRv.y * scRv.y ) / ( scBw * scBw ) );
+  // Schlick-shaped weight: at normal incidence a surface returns a few percent
+  // of what it sees, at grazing it returns nearly all of it. 0.30 rather than
+  // 0 at the bottom because F0 on a metal is already high.
+  float scFr = pow( 1.0 - clamp( dot( geometryNormal, geometryViewDir ), 0.0, 1.0 ), 4.0 );
+  radiance += scHorizonCol * scBand * ( 0.30 + 1.10 * scFr ) * scGlintP.x;
+}
+#endif
+`
+
+/**
+ * ================================= WRAP ===================================
+ *
+ * The sun sits at elevation 9.8 degrees (world.js: sunDir.y = 0.17). A flat
+ * moss deck facing straight up therefore collects cos(80 deg) = 0.17 of the
+ * key, and everything else it has is ambient — which is why the measured moss
+ * deck came back at value 0.17 while the sandstone beside it was at 0.44. Half
+ * of that is albedo (fixed in textures.js) and half is this: Lambert is simply
+ * the wrong BRDF for foliage.
+ *
+ * Moss is a stack of translucent filaments a few millimetres deep. Light that
+ * enters near the terminator scatters inside and leaves again on the shaded
+ * side, so the real falloff is much softer than max(N.L, 0) — the standard
+ * cheap model is (N.L + w)/(1 + w), and at w = 0.4 an up-facing deck under this
+ * sun goes from 0.17 to 0.41 of the key. That is the single biggest available
+ * lever on "the moss reads as mud".
+ *
+ * Plus a back-lit transmission term: a cap edge overhanging the void with the
+ * sun behind it glows, because you are looking THROUGH a few millimetres of
+ * moss at the sun. It is the reference art's most recognisable vegetation cue.
+ *
+ * Both terms are unshadowed, which is a deliberate simplification: three
+ * applies the shadow inside the light loop and does not publish the result, and
+ * a transmission term that respects a shadow map cast by the very surface it is
+ * transmitting through is wrong anyway. The amounts are sized so an in-shadow
+ * moss cap gains a lift, not a second sun.
+ */
+const WRAP_DIFFUSE = /* glsl */ `
+#if defined( SC_WRAP ) && ( NUM_DIR_LIGHTS > 0 )
+{
+  vec3 scWl = directionalLights[ 0 ].direction;
+  float scNl = dot( geometryNormal, scWl );
+  float scWrapped = clamp( ( scNl + scWrapP.x ) / ( 1.0 + scWrapP.x ), 0.0, 1.0 );
+  // Only the part Lambert did not already deliver, so this never double-counts
+  // the lit side — it fills in the terminator and the shaded hemisphere.
+  float scExtra = max( scWrapped - max( scNl, 0.0 ), 0.0 );
+  // Back-lit: sun behind the surface AND pointed at the eye. Squared, so it is
+  // a rim on the edge that overhangs the void rather than a wash.
+  float scBack = clamp( -dot( geometryViewDir, scWl ), 0.0, 1.0 );
+  scBack *= scBack * clamp( 0.30 - scNl, 0.0, 1.0 );
+  reflectedLight.directDiffuse += directionalLights[ 0 ].color * material.diffuseColor
+    * ( scExtra * scWrapP.y + scBack * scWrapP.z ) * RECIPROCAL_PI;
+}
+#endif
+`
+
+/**
  * Chunk overrides. `<color_fragment>` is deliberately absent: level.js owns the
  * vertex colour channels and they must apply exactly as they do today.
  */
 const OVERRIDES = [
   // Roughness offset from the macro bands / wedge / top wear. The 0.04 floor
-  // keeps porcelain and brass glossy enough to still catch a highlight.
+  // keeps porcelain and brass glossy enough to still catch a highlight. The
+  // chunk is replaced rather than appended to because under SC_WORLDUV the
+  // sample has to move to the world-planar uv along with the albedo.
   [
     '#include <roughnessmap_fragment>',
-    '#include <roughnessmap_fragment>\nroughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );',
+    `float roughnessFactor = roughness;
+#ifdef USE_ROUGHNESSMAP
+  roughnessFactor *= texture2D( roughnessMap, scUv0 ).g;
+#endif
+roughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );`,
+  ],
+  [
+    '#include <metalnessmap_fragment>',
+    `float metalnessFactor = metalness;
+#ifdef USE_METALNESSMAP
+  metalnessFactor *= texture2D( metalnessMap, scUv0 ).b;
+#endif`,
   ],
   // The macro tilt is added AFTER the tile-scale normal map, not instead of
   // it: they work at different scales and both are wanted. `normal` is
@@ -499,14 +639,37 @@ const OVERRIDES = [
   [
     '#include <normal_fragment_maps>',
     `#include <normal_fragment_maps>
+#if defined( SC_WORLDUV ) && defined( USE_NORMALMAP_TANGENTSPACE ) && defined( USE_MAP )
+{
+  // The tangent frame three just built was derived from the screen-space
+  // derivatives of vNormalMapUv, and we sampled somewhere else entirely — so it
+  // has to be rebuilt in the frame the world-planar projection actually used.
+  // Built analytically from that projection rather than from derivatives; see
+  // the scTuW declaration for why the derivative route is a NaN hazard.
+  //
+  // viewMatrix's upper 3x3 is a rotation, and scTuW/scTvW/scNwW are an
+  // orthonormal triple by construction, so this needs no renormalisation and
+  // has no degenerate case.
+  vec3 scMapN = texture2D( normalMap, scUv0 ).xyz * 2.0 - 1.0;
+  scMapN.xy *= normalScale;
+  normal = mat3( viewMatrix ) * ( scTuW * scMapN.x + scTvW * scMapN.y + scNwW * scMapN.z );
+  normal = normalize( normal );
+}
+#endif
 #if defined( SC_RELIEF ) && defined( USE_MAP )
   normal = normalize( normal + mat3( viewMatrix ) * scTiltW );
 #endif`,
   ],
-  // The sun's aureole, into the IBL specular accumulator only. Placed after
-  // <lights_fragment_maps> because that is where `radiance` is filled and
-  // before <lights_fragment_end>, which is where it is consumed.
-  ['#include <lights_fragment_maps>', '#include <lights_fragment_maps>\n' + SUN_LOBE],
+  // Wrapped and back-lit diffuse, added to the direct chain right after three
+  // has finished accumulating it.
+  ['#include <lights_fragment_begin>', '#include <lights_fragment_begin>\n' + WRAP_DIFFUSE],
+  // The sun's aureole and the horizon band, into the IBL specular accumulator
+  // only. Placed after <lights_fragment_maps> because that is where `radiance`
+  // is filled and before <lights_fragment_end>, which is where it is consumed.
+  [
+    '#include <lights_fragment_maps>',
+    '#include <lights_fragment_maps>\n' + HORIZON_GLINT + SUN_LOBE,
+  ],
 ]
 
 /**
@@ -514,7 +677,7 @@ const OVERRIDES = [
  * invalidate a warm program cache — three keys programs on the chunk set plus
  * this string, and will happily reuse a stale compiled program otherwise.
  */
-const SHADER_VERSION = 'sc2'
+const SHADER_VERSION = 'sc3'
 
 export const DEFAULT_PARAMS = {
   /** macro tiles per metre. 0.085 -> ~11.8 m period, so features land at 1-4 m. */
@@ -561,6 +724,30 @@ export const DEFAULT_PARAMS = {
   cavity: 0,
   /** how hard the sun-away hemisphere is tinted cool; 0 disables */
   shadeTint: 0,
+  /**
+   * How much of the cloud-sea horizon band this surface mirrors back. 0
+   * disables the term and its branch. See THE HORIZON GLINT — this is the knob
+   * that decides whether a material reads as polished or as painted.
+   */
+  glint: 0,
+  /**
+   * How much reflected radiance a fully-enclosed pocket loses. Needs cavity > 0
+   * (the signal rides in the normal map's alpha). On a metal this is the only
+   * thing that produces a dark end at all.
+   */
+  specAo: 0.55,
+  /** wrapped-diffuse width w in (N.L + w)/(1 + w). See WRAP. */
+  wrapWidth: 0.4,
+  /** wrapped-diffuse amount; 0 disables the term and its branch */
+  wrap: 0,
+  /** back-lit transmission amount; rides along with `wrap` */
+  backlit: 0,
+  /**
+   * Sample the tile in world-planar space at this many repeats per metre
+   * instead of per-box uv. 0 = off (use vMapUv). Must match level.js's
+   * TEX_PER_METRE when on, or the material changes texel density.
+   */
+  worldUv: 0,
 }
 
 /**
@@ -580,11 +767,13 @@ export function extendSurfaceMaterial(material, params = {}) {
       value: new THREE.Vector4(p.macroScale, p.macroAlbedo, p.macroRough, p.macroHue),
     },
     scBigP: { value: new THREE.Vector4(p.contrast, p.bigAlbedo, p.bigScale, p.bigRough) },
-    scReliefP: { value: new THREE.Vector4(p.relief, p.reliefAlbedo, p.detile, 0) },
+    scReliefP: { value: new THREE.Vector4(p.relief, p.reliefAlbedo, p.detile, p.worldUv) },
     scWeatherP: {
       value: new THREE.Vector4(p.wedge, p.topDust, p.wedgeHeight, p.topRough),
     },
     scSpecP: { value: new THREE.Vector4(p.sunLobe, p.cavity, p.shadeTint, 0) },
+    scGlintP: { value: new THREE.Vector4(p.glint, p.specAo, 0, 0) },
+    scWrapP: { value: new THREE.Vector4(p.wrapWidth, p.wrap, p.backlit, 0) },
     // THREE.Color converts the sRGB hex into the renderer's working space.
     scWedgeCol: { value: new THREE.Color(p.wedgeColor) },
     scTopCol: { value: new THREE.Color(p.topColor) },
@@ -599,6 +788,9 @@ export function extendSurfaceMaterial(material, params = {}) {
   // Cavity rides in the normal map's alpha, so it cannot be enabled without one.
   if (p.cavity > 0 && material.normalMap) defines.SC_CAVITY = ''
   if (p.shadeTint > 0) defines.SC_SHADETINT = ''
+  if (p.glint > 0) defines.SC_GLINT = ''
+  if (p.wrap > 0 || p.backlit > 0) defines.SC_WRAP = ''
+  if (p.worldUv > 0) defines.SC_WORLDUV = ''
 
   Object.assign(material.defines ?? (material.defines = {}), defines)
   material.userData.scUniforms = own

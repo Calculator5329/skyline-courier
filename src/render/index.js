@@ -177,6 +177,12 @@ export class RenderPipeline {
     }
     this._contactEnabled = options.contactShadows ?? true
 
+    /**
+     * How much a SKY texel votes in the exposure meter, relative to a texel
+     * with geometry in it. See the coverage block in exposure.js.
+     */
+    this._meterSkyWeight = options.meterSkyWeight ?? 0.30
+
     /** Analytic sunset sky through PMREM -> scene.environment. */
     this.skyEnv = this.hdrSupported ? new SkyEnvironment(renderer, options.sky) : null
 
@@ -418,6 +424,13 @@ export class RenderPipeline {
 
   // ---------------------------------------------------------------- tunables
 
+  /**
+   * Relative vote of a sky texel in the exposure meter, 0..1. Lower = the
+   * frame is exposed for its geometry and the sky is allowed to be bright.
+   */
+  get meterSkyWeight() { return this._meterSkyWeight }
+  set meterSkyWeight(v) { this._meterSkyWeight = v }
+
   /** Stops of brightness on top of the meter. +1 = one stop brighter. */
   get exposureCompensation() {
     return this.exposure ? this.exposure.exposureCompensation : 0
@@ -612,6 +625,25 @@ export class RenderPipeline {
   get aerialRim() { return this.patcher.aerialRim }
   set aerialRim(v) { this.patcher.aerialRim = v }
 
+  /** Chroma restored at full haze — the counterweight to AgX's inset. */
+  get aerialChroma() { return this.patcher.aerialChroma }
+  set aerialChroma(v) { this.patcher.aerialChroma = v }
+
+  // --- the warm/cool split -------------------------------------------------
+
+  /**
+   * Strength of the orientation-driven ambient tint: cool green-cyan on
+   * sky-facing normals, warm cloud bounce on down-facing ones. 0 disables it.
+   */
+  get ambientSplit() { return this.patcher.ambientSplit }
+  set ambientSplit(v) { this.patcher.ambientSplit = v }
+
+  /** @param {number} hex sky-facing ambient tint, sRGB. Luminance-normalised. */
+  setAmbientUpColor(hex) { this.patcher.setAmbientUpColor(hex) }
+
+  /** @param {number} hex down-facing ambient tint, sRGB. Luminance-normalised. */
+  setAmbientDownColor(hex) { this.patcher.setAmbientDownColor(hex) }
+
   /** Haze colour looking AWAY from the sun (hex, sRGB). Cool, and darker. */
   setAerialCoolColor(hex, scale = 0.7) {
     this.patcher.uniforms.scHazeCool.value.set(hex).multiplyScalar(scale)
@@ -758,6 +790,17 @@ export class RenderPipeline {
       this.composite.uniforms.tDebugNormal.value = this.gbuffer.normalTexture
     } else {
       this.patcher.setContactEnabled(false)
+    }
+
+    // The meter's sky mask, from the prepass we just drew. Set every frame
+    // rather than once, because `wantContact` can be toggled at runtime and a
+    // meter still holding a stale coverage texture would reject the wrong
+    // texels for as long as it stayed off.
+    if (this.exposure) {
+      this.exposure.setCoverage(
+        wantContact ? this.gbuffer.normalTexture : null,
+        this._meterSkyWeight
+      )
     }
 
     // --- 1. scene -> HDR ---------------------------------------------------

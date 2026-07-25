@@ -36,11 +36,33 @@ const BOOST_SPEED = 24
 const WALLRUN_FOV = 3
 const MAX_PITCH = Math.PI / 2 - 0.02
 
-// Vertical smoothing spring. ~critically damped at omega 16 rad/s: no
-// overshoot (an overshooting camera on a staircase is nausea), and it is done
-// inside about 0.25 s so the view never feels detached from the body.
-const STEP_K = 256
-const STEP_C = 32
+// --- turn lean ---------------------------------------------------------
+// Banking into a carve is how a racing game says "you are carrying speed
+// through this corner", and it is the one physical cue a bodiless first-person
+// camera has for a turn — the strafe lean below only fires on A/D, so a player
+// steering with the mouse, which is how anyone actually corners here, got
+// nothing at all. Deliberately near the threshold of perception: the cap is
+// 1.5°, roughly a tenth of the wall-run roll, and it is low-passed so a flick
+// of the wrist cannot snap the horizon. Motion sickness is a failure state
+// (docs/taste.md), and a camera that rolls on every mouse movement is the
+// classic way to induce it.
+const TURN_LEAN = 0.009      // radians of roll per rad/s of yaw
+const TURN_LEAN_MAX = 0.026
+const TURN_SMOOTH = 11       // rad/s low-pass on the measured yaw rate
+
+// Vertical smoothing spring, kept critically damped (c = 2ω) at every
+// amplitude: no overshoot, because an overshooting camera on a staircase is
+// nausea. At the base 16 rad/s it settles in about 0.25 s, so a single mantle
+// is absorbed softly and the view never feels detached from the body.
+const STEP_OMEGA = 16
+// ...but the frequency rises with how far the eye is trailing. A staircase
+// taken at sprint injects a step every ~0.05 s, far faster than a 0.25 s
+// settle, so the offsets stack: an eight-step flight measured 0.80 m of trail
+// against a 0.90 m clamp, and anything longer pins the view at chest height
+// until the stairs run out. Scaling ω up to 2.1x as the offset approaches the
+// clamp pulls a deep trail back inside ~0.12 s while leaving small step-ups
+// exactly as soft as they were.
+const STEP_OMEGA_GAIN = 1.1
 // Bail-out for absurd accumulations. A respawn does not reach here at all —
 // it moves the body without changing stance or reporting a step-up, so nothing
 // is injected and the view simply cuts with it, which is what a respawn should
@@ -71,6 +93,8 @@ export class CameraRig {
     this.prevEyeHeight = null
     this.bobPhase = 0
     this.bobAmp = 0
+    this.prevYaw = null
+    this.turnRate = 0
     this.footParity = 1
     this.bob = new THREE.Vector3()
 
@@ -141,7 +165,17 @@ export class CameraRig {
     } else if (this.stepOffset < -STEP_MAX) this.stepOffset = -STEP_MAX
     else if (this.stepOffset > STEP_MAX) this.stepOffset = STEP_MAX
 
-    this.stepVel += (-this.stepOffset * STEP_K - this.stepVel * STEP_C) * h
+    // Squared so the stiffening stays out of the way until the trail is
+    // genuinely deep — a lone 0.2 m kerb barely moves it.
+    const trail = Math.min(1, Math.abs(this.stepOffset) / STEP_MAX)
+    const omega = STEP_OMEGA * (1 + STEP_OMEGA_GAIN * trail * trail)
+    // Damping solved implicitly. Explicit Euler on a spring is only stable
+    // while 2ωh < 2, and at the stiff end this one reaches ω = 33.6 against the
+    // h = 1/30 s ceiling — 2ωh = 2.24, which diverges. That is a bug you would
+    // never see on the machine you tuned it on and which throws the view around
+    // on a 30 fps machine, so it gets the unconditionally-stable form rather
+    // than a comment promising nobody will stiffen it further.
+    this.stepVel = (this.stepVel - this.stepOffset * omega * omega * h) / (1 + 2 * omega * h)
     this.stepOffset += this.stepVel * h
 
     // --- slide: the camera tilts and leans into the direction -------------
@@ -150,18 +184,48 @@ export class CameraRig {
     const slideT = player.sliding ? 1 : 0
     this.slideEase += (slideT - this.slideEase) * (1 - Math.exp(-(slideT > this.slideEase ? 16 : 7) * h))
 
-    // --- roll: wall-run lean, plus a whisper of strafe lean --------------
+    // --- how fast, as a 0..1 across the walk→sprint band ------------------
+    // Shared by the turn lean and the field of view so the two cues agree
+    // about when the player counts as "moving fast".
+    const speedT = clamp01((player.speed - TUNING.walkSpeed) / (TUNING.sprintSpeed - TUNING.walkSpeed))
+
+    // --- turn rate, measured from the yaw the player actually produced -----
+    // Differentiated here rather than accumulated in `look()` because look()
+    // fires per mouse event, several times a frame or not at all, and a rate
+    // built from that is a rate built from the mouse's polling interval.
+    //
+    // The `h > 0` guard is not defensive padding. main.js reads the clock
+    // immediately before its first frame, so that frame's dt is 0 — and
+    // performance.now() is coarse enough in a hardened browser that it recurs.
+    // `0 / 0` is NaN, NaN poisons turnRate, turnRate poisons rollTarget, and
+    // roll is a spring, so it never recovers: measured, one zero-length frame
+    // at boot silently killed the wall-run lean, the strafe lean and the slide
+    // bank for the entire session. A zero-length frame contains no turn.
+    if (this.prevYaw === null) {
+      this.prevYaw = this.yaw
+    } else if (h > 1e-6) {
+      let dYaw = this.yaw - this.prevYaw
+      // A respawn assigns yaw outright. That is a cut, not a turn; leaning into
+      // it would bank the camera on every reset.
+      if (Math.abs(dYaw) > 0.5) dYaw = 0
+      this.prevYaw = this.yaw
+      this.turnRate += (dYaw / h - this.turnRate) * (1 - Math.exp(-TURN_SMOOTH * h))
+    }
+
+    // --- roll: wall-run lean, plus a whisper of strafe and turn lean ------
     let rollTarget = player.wallRunning ? player.wallSide * 0.155 : 0
     rollTarget += -input.right * 0.018
+    // Same sign convention as the strafe lean: steering right banks right.
+    // Scaled by speed, so walking around a corner does not tilt the world.
+    rollTarget += clampAbs(this.turnRate * TURN_LEAN, TURN_LEAN_MAX) * speedT
     rollTarget += this.slideEase * (0.055 + input.right * -0.05)
     if (player.climbTimer > 0) rollTarget *= 0.2
     this.rollVel += ((rollTarget - this.roll) * 120 - this.rollVel * 16) * h
     this.roll += this.rollVel * h
 
     // --- field of view: the primary speed cue ----------------------------
-    const t = clamp01((player.speed - TUNING.walkSpeed) / (TUNING.sprintSpeed - TUNING.walkSpeed))
     const boost = clamp01((player.speed - TUNING.sprintSpeed) / (BOOST_SPEED - TUNING.sprintSpeed))
-    let fovTarget = BASE_FOV + t * SPEED_FOV + boost * BOOST_FOV
+    let fovTarget = BASE_FOV + speedT * SPEED_FOV + boost * BOOST_FOV
     if (player.wallRunning) fovTarget += WALLRUN_FOV
     if (player.sliding) fovTarget += 2
     if (player.climbTimer > 0) fovTarget += 3
@@ -229,4 +293,8 @@ export class CameraRig {
 
 function clamp01(v) {
   return v < 0 ? 0 : v > 1 ? 1 : v
+}
+
+function clampAbs(v, limit) {
+  return v < -limit ? -limit : v > limit ? limit : v
 }

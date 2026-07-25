@@ -55,6 +55,20 @@ function isLit(m) {
   return !!(m && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial))
 }
 
+/**
+ * A hex colour in LINEAR light, scaled so its Rec.709 luminance is exactly 1.
+ *
+ * This is what makes the ambient split a pure hue rotation. A tint that changes
+ * luminance is an exposure change wearing a colour costume, and it would put
+ * the carefully measured 20% ambient budget upstream out by however saturated
+ * the tint happens to be.
+ */
+function lumNormalized(hex) {
+  const c = new THREE.Color(hex)
+  const l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
+  return c.multiplyScalar(l > 1e-6 ? 1 / l : 1)
+}
+
 const PARS = /* glsl */ `
 uniform sampler2D scContactTex;
 uniform vec2 scScreenTexel;
@@ -77,6 +91,43 @@ uniform vec3 scAerialBeta;
 uniform vec3 scHaze;
 uniform vec3 scHazeSun;
 uniform vec3 scHazeCool;
+// x: warm/cool ambient split strength, y/z/w: unused
+uniform vec4 scAmbSplit;
+uniform vec3 scAmbUp;
+uniform vec3 scAmbDown;
+
+/**
+ * The warm/cool split, applied to the AMBIENT terms by surface orientation.
+ *
+ * docs/art-direction.md calls cool green-tinted shadows against a warm key
+ * "the single most defining characteristic" of the reference, and a shadow is
+ * by definition a surface receiving no key — so the entire split has to be
+ * carried by the ambient or it does not exist. What a shadowed up-facing deck
+ * receives is sky; what a shadowed soffit receives is the sunlit cloud deck
+ * below. Those are different colours by 40-odd degrees of hue and that
+ * difference IS the effect.
+ *
+ * A HemisphereLight cannot express this at the strength required (it is one
+ * lerp with no saturation control and it is 12% of the ambient budget here),
+ * and the sky IBL — which does express it, correctly, and does most of the work
+ * — is not available at all on a context without float render targets. This
+ * term is what makes the split survive that fallback, and it is the one knob
+ * that can be pointed at directly when the measurement says the hue separation
+ * is short.
+ *
+ * BOTH tints are normalised to luminance 1 in the constructor, so this rotates
+ * hue and changes nothing about the light budget: the 20% rule upstream stays
+ * exactly as measured.
+ */
+vec3 scAmbientTint( vec3 N ) {
+  if ( scAmbSplit.x <= 0.0 ) return vec3( 1.0 );
+  vec3 wN = inverseTransformDirection( N, viewMatrix );
+  // Hemispherical weight, not a step: a vertical wall lands at exactly 0.5 and
+  // reads as the average of sky and cloud, which is what a vertical wall
+  // actually receives.
+  float up = clamp( wN.y * 0.5 + 0.5, 0.0, 1.0 );
+  return mix( vec3( 1.0 ), mix( scAmbDown, scAmbUp, up ), scAmbSplit.x );
+}
 
 /**
  * Screen-space contact shadow, valid for the SUN and nothing else.
@@ -195,6 +246,24 @@ vec3 scAerialPerspective( vec3 color, vec3 N ) {
 
   vec3 result = color * T + inscatter * ( 1.0 - T );
 
+  // --- distance-aware chroma restore --------------------------------------
+  // AgX's inset is a desaturating transform by construction, and it takes its
+  // biggest bite exactly where this pipeline can least afford it: a low-contrast
+  // warm haze covering a distant island is pushed toward the achromatic axis
+  // until the far, mid and near bands are the same brown. A global saturation
+  // lift in the LUT cannot fix that without over-saturating the foreground,
+  // which is already fine.
+  //
+  // So the restore is keyed on how much haze the ray actually crossed. Near
+  // geometry is untouched; a speck at 600 m gets its hue back, which is what
+  // keeps four distance bands legible as four distance bands rather than as one
+  // flat card at four scales.
+  if ( scAerial2.z > 0.0 ) {
+    float hazed = clamp( 1.0 - dot( T, vec3( 0.3333 ) ), 0.0, 1.0 );
+    float lr = dot( result, vec3( 0.2126, 0.7152, 0.0722 ) );
+    result = lr + ( result - lr ) * ( 1.0 + scAerial2.z * hazed );
+  }
+
   // --- backlit silhouette rim ---------------------------------------------
   // A low sun behind an object lights the sliver of surface that turns away
   // from the camera, and that bright edge is what separates a distant island
@@ -275,8 +344,9 @@ const AMBIENT = /* glsl */ `
   // running at full strength is 40%, and at 40% the key light stops drawing
   // the forms.
   float scAO = scAmbientVisibility();
-  irradiance *= scFeat.z * scAO;
-  iblIrradiance *= scFeat.y * scAO;
+  vec3 scTint = scAmbientTint( normal );
+  irradiance *= scFeat.z * scAO * scTint;
+  iblIrradiance *= scFeat.y * scAO * scTint;
 }
 #endif
 #if defined( RE_IndirectSpecular )
@@ -332,9 +402,14 @@ export class MaterialPatcher {
           // regionSpread on the vista shot was 39.8, the flattest frame in the
           // set, for the shot that is supposed to BE the art direction.
           //
-          // 0.0019/m keeps ~62% of a 250 m island and ~35% of a 500 m one, so
-          // near/mid/far/speck stay four distinguishable bands instead of one.
-          0.0019,
+          // 0.0014/m, down again from 0.0019. Measured on the vista shot after
+          // the metering fix below let it be exposed properly: it came back at
+          // 0.312 mean saturation, the lowest in the set, because once the
+          // frame was bright the haze was simply the brightest thing in it and
+          // every island past the near band was more inscatter than surface.
+          // Depth has to be carried by four legible bands, not by one veil, and
+          // a veil that thick cannot produce bands at any exposure.
+          0.0014,
           // scale height 70 m. The play space itself spans tens of metres of
           // height, so a short scale height would make the haze visibly switch
           // off as the player climbs one tower. 70 m fades it by about a third
@@ -357,15 +432,24 @@ export class MaterialPatcher {
       },
       scAerial2: {
         value: new THREE.Vector4(
-          // Transmittance floor 0.12: a far speck keeps at least an eighth of
+          // Transmittance floor 0.20, up from 0.12: a far speck keeps a fifth of
           // its own colour no matter how much air is in front of it. See the
-          // note in scAerialPerspective on why this cheat earns its place.
-          0.12,
+          // note in scAerialPerspective on why this cheat earns its place — and
+          // note that it is the ONLY thing standing between the far archipelago
+          // and a single flat value, because extinction is exponential and every
+          // band past the second is deep in its tail.
+          0.20,
           // Rim strength 0.16, in linear light against a scHazeSun that is
           // already above 1. Enough to draw a lit edge on a backlit silhouette;
           // well under the point where it reads as an outline shader.
           0.16,
-          0,
+          // Distance chroma restore, 0.55 at full haze. Measured against the
+          // vista shot, which came back at 0.338 mean saturation — the LOWEST
+          // of the eight harness frames, for the one image whose stated job is
+          // to sell the art direction. Sized so the far bands come back to
+          // roughly the foreground's chroma rather than exceeding it; above
+          // ~0.8 the horizon starts to read as a poster.
+          0.55,
           0
         ),
       },
@@ -391,6 +475,19 @@ export class MaterialPatcher {
       // it is what puts value separation back between a sun-side island and one
       // on the shadow side. Matched to skyenv's zenith so the two agree.
       scHazeCool: { value: new THREE.Color(0x9fb4b0).multiplyScalar(0.7) },
+      // Ambient split strength. 0.30, measured rather than chosen: at 0.42 the
+      // terrace deck came back at hue 45 lit / 57-69 shadowed, which clears the
+      // +20-degree separation target but drags the LIT sandstone from ochre to
+      // olive on the way — the deck is an up-facing surface, so it takes the
+      // full cool tint whether the sun is on it or not. 0.30 keeps the
+      // separation and hands the ochre back. See scAmbientTint.
+      scAmbSplit: { value: new THREE.Vector4(0.30, 0, 0, 0) },
+      // Sky-facing: the green-cyan of the zenith band, matched to skyenv's
+      // zenith so the two ambient systems agree instead of fighting.
+      scAmbUp: { value: lumNormalized(0x8fd8c4) },
+      // Down-facing: the sunlit cloud deck. Warm, and the reason island
+      // undersides are lit rather than black.
+      scAmbDown: { value: lumNormalized(0xffcf96) },
     }
 
     this._patched = new WeakSet()
@@ -512,6 +609,20 @@ export class MaterialPatcher {
   /** Backlit silhouette rim strength. */
   get aerialRim() { return this.uniforms.scAerial2.value.y }
   set aerialRim(v) { this.uniforms.scAerial2.value.y = v }
+
+  /** Chroma restored at full haze, to undo AgX's desaturation at distance. */
+  get aerialChroma() { return this.uniforms.scAerial2.value.z }
+  set aerialChroma(v) { this.uniforms.scAerial2.value.z = v }
+
+  /** Warm/cool ambient split strength. 0 = off. See scAmbientTint. */
+  get ambientSplit() { return this.uniforms.scAmbSplit.value.x }
+  set ambientSplit(v) { this.uniforms.scAmbSplit.value.x = v }
+
+  /** Sky-facing ambient tint (hex, sRGB). Normalised to luminance 1. */
+  setAmbientUpColor(hex) { this.uniforms.scAmbUp.value.copy(lumNormalized(hex)) }
+
+  /** Down-facing ambient tint (hex, sRGB). Normalised to luminance 1. */
+  setAmbientDownColor(hex) { this.uniforms.scAmbDown.value.copy(lumNormalized(hex)) }
 
   get aerialDensity() { return this.uniforms.scAerial.value.x }
   set aerialDensity(v) { this.uniforms.scAerial.value.x = v }

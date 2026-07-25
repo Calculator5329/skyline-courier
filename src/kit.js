@@ -1,10 +1,27 @@
+import * as THREE from 'three'
+
 /**
  * kit.js — architectural prefabs for the sky-garden archipelago.
  *
- * Everything here is built from exactly two primitives, `L.solid()` and
- * `L.decor()` from `level.js`, so geometry and collision can never drift
- * (CLAUDE.md #2). Nothing in this file imports three, touches the DOM, or
- * calls `Math.random()` — the world is identical on every reload.
+ * Collision comes from exactly two primitives, `L.solid()` and `L.decor()` in
+ * `level.js`, so geometry and collision can never drift (CLAUDE.md #2). This
+ * file touches no DOM and calls no `Math.random()` — the world is identical on
+ * every reload.
+ *
+ * WHAT CHANGED, AND WHY IT DID NOT BREAK THE INVARIANT (2026-07-25 art review):
+ * this file used to draw every curve as a staircase of axis-aligned boxes.
+ * That is the single most recognisable amateur-3D tell there is, and the
+ * review named it three times over: a gear rim rasterised into a pixel-art
+ * disc, an arch with a sawtooth intrados instead of radiating voussoirs, and
+ * a row of cubes where turned balusters belong.
+ *
+ * The fix is docs/geometry-unlock.md's: keep the invariant, break the
+ * representation link. Curves are now real generated geometry handed to
+ * `L.mesh()`, which is VISUAL-ONLY and can never create a collider. Where a
+ * curve sits at a height a player can reach, the prefab still declares an
+ * honest AABB with `L.solid(..., { hidden: true })` and keeps the drawn curve
+ * inside it. Where it does not — gear ornament, orrery rings, foliage — there
+ * is no collider to reconcile in the first place.
  *
  * THE RULE, restated because it is the bug that killed the predecessor:
  * a surface the player can see and could plausibly stand on is `solid`.
@@ -53,10 +70,210 @@ function pick(opts) {
  * `S` is solid unless the caller declared the whole prefab unreachable.
  */
 function emit(L, opts) {
-  const D = (cx, cy, cz, sx, sy, sz, k) => { L.decor(cx, cy, cz, sx, sy, sz, k); return 1 }
+  // Far scenery gets no chamfer. A 4.5 cm arris at 300 m is a fraction of a
+  // pixel, so it is 32 triangles per box buying nothing; `detail: 0` is
+  // already this kit's word for "silhouette only".
+  const flat = opts.detail === 0 ? { bevel: 0 } : undefined
+  const merge = (o) => (flat && !o ? flat : (flat && o ? { ...o, bevel: 0 } : o))
+  const D = (cx, cy, cz, sx, sy, sz, k, o) => {
+    L.decor(cx, cy, cz, sx, sy, sz, k, merge(o)); return 1
+  }
   if (opts.ghost) return { S: D, D }
-  const S = (cx, cy, cz, sx, sy, sz, k) => { L.solid(cx, cy, cz, sx, sy, sz, k); return 1 }
+  const S = (cx, cy, cz, sx, sy, sz, k, o) => {
+    L.solid(cx, cy, cz, sx, sy, sz, k, merge(o)); return 1
+  }
   return { S, D }
+}
+
+// ------------------------------------------------- generated curve geometry
+//
+// Everything below produces a THREE.BufferGeometry for `L.mesh()`. None of it
+// can create a collider, by construction — see this file's header.
+
+const _q = new THREE.Quaternion()
+const _e = new THREE.Euler()
+const _pos = new THREE.Vector3()
+const _one = new THREE.Vector3(1, 1, 1)
+
+/**
+ * A shape authored in XY and extruded along +Z, turned to face out of one of
+ * the three axis planes: 'xy' faces +Z (a gear on a wall), 'zy' faces +X,
+ * 'xz' lies flat like a turntable.
+ */
+function planeQuat(plane, spin = 0) {
+  if (plane === 'zy') _e.set(0, -Math.PI / 2, spin, 'YXZ')
+  else if (plane === 'xz') _e.set(-Math.PI / 2, 0, spin, 'YXZ')
+  else _e.set(0, 0, spin, 'YXZ')
+  return new THREE.Quaternion().setFromEuler(_e)
+}
+
+function place(x, y, z, quat, scale = _one) {
+  return new THREE.Matrix4().compose(_pos.set(x, y, z), quat, scale)
+}
+
+/** Bevelled extrusion of a closed profile — every extruded arris chamfered. */
+function extrude(shape, depth, bevel) {
+  const b = Math.max(0.004, Math.min(bevel, depth * 0.32))
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: depth - b * 2,
+    bevelEnabled: true,
+    bevelThickness: b,
+    bevelSize: b,
+    bevelOffset: 0,
+    bevelSegments: 1,
+    steps: 1,
+    curveSegments: 3,
+  })
+  geo.translate(0, 0, -depth / 2)
+  return geo
+}
+
+/**
+ * A real gear: a toothed outline with a trapezoid tooth profile and a
+ * chamfered crown, spoke windows cut as holes, extruded in one piece.
+ *
+ * This replaces a ring of axis-aligned cubes placed at angles. The review's
+ * words were "a jagged pixel-art disc extruded into 3D, and it is the single
+ * most amateur read in the set", and it was right: teeth are radial, and
+ * approximating them with cubes announces that the engine cannot rotate.
+ */
+function gearGeometry(radius, thickness, teeth, spokes) {
+  const rTip = radius
+  const rRoot = radius * 0.845
+  const p = (2 * Math.PI) / teeth
+  const shape = new THREE.Shape()
+  for (let i = 0; i < teeth; i++) {
+    const a0 = i * p
+    // root · rising flank · tip land · falling flank — a trapezoid tooth, not
+    // a square one, so the crown catches the sun along a taper.
+    const prof = [[rRoot, 0.0], [rRoot, 0.23], [rTip, 0.35], [rTip, 0.65], [rRoot, 0.77]]
+    for (const [r, f] of prof) {
+      const a = a0 + p * f
+      const x = Math.cos(a) * r, y = Math.sin(a) * r
+      if (i === 0 && f === 0.0) shape.moveTo(x, y)
+      else shape.lineTo(x, y)
+    }
+  }
+  shape.closePath()
+
+  if (spokes >= 3) {
+    const rIn = radius * 0.32, rOut = radius * 0.70
+    const w = (2 * Math.PI) / spokes
+    const gap = w * 0.17           // half the angular width of one spoke
+    for (let i = 0; i < spokes; i++) {
+      const a0 = i * w + gap, a1 = (i + 1) * w - gap
+      const hole = new THREE.Path()
+      const STEPS = 5
+      for (let k = 0; k <= STEPS; k++) {
+        const a = a0 + (a1 - a0) * (k / STEPS)
+        const x = Math.cos(a) * rOut, y = Math.sin(a) * rOut
+        if (k === 0) hole.moveTo(x, y); else hole.lineTo(x, y)
+      }
+      for (let k = STEPS; k >= 0; k--) {
+        const a = a0 + (a1 - a0) * (k / STEPS)
+        hole.lineTo(Math.cos(a) * rIn, Math.sin(a) * rIn)
+      }
+      hole.closePath()
+      shape.holes.push(hole)
+    }
+  }
+  return extrude(shape, thickness, Math.min(0.05, radius * 0.035))
+}
+
+/**
+ * One voussoir: a trapezoid narrow at the intrados and wide at the extrados,
+ * chamfered on every arris. Swept to its own tangent angle by the caller.
+ */
+function voussoirGeometry(wIn, wOut, radial, depth) {
+  const s = new THREE.Shape()
+  s.moveTo(-wIn / 2, -radial / 2)
+  s.lineTo(wIn / 2, -radial / 2)
+  s.lineTo(wOut / 2, radial / 2)
+  s.lineTo(-wOut / 2, radial / 2)
+  s.closePath()
+  return extrude(s, depth, Math.min(0.035, radial * 0.14))
+}
+
+/**
+ * A lathe from a (radius, height) profile. The honest way to draw anything
+ * turned: balusters, finials, column drums, domes.
+ */
+function latheGeometry(profile, segments) {
+  const pts = profile.map(([r, h]) => new THREE.Vector2(Math.max(1e-4, r), h))
+  const geo = new THREE.LatheGeometry(pts, segments)
+  geo.computeVertexNormals()
+  return geo
+}
+
+/**
+ * The union radius of a faceted disc at one azimuth, in circular space (the
+ * caller has already divided the squash out of `hz`).
+ */
+function unionRadiusAt(rects, theta) {
+  const c = Math.abs(Math.cos(theta)), s = Math.abs(Math.sin(theta))
+  let best = 0
+  for (const q of rects) {
+    const t = Math.min(c > 1e-6 ? q.hx / c : Infinity, s > 1e-6 ? q.hz / s : Infinity)
+    if (t > best) best = t
+  }
+  return best
+}
+
+/**
+ * THE MOSS LIP — the skirt that hangs off the edge of every island cap.
+ *
+ * art-direction.md asks for moss caps with "a soft irregular overhanging lip";
+ * the review found square notches, because a cap built as a union of
+ * concentric rectangles has a stepped outline and nothing hides it.
+ *
+ * The skirt is a three-ring band swept round the cap. Its top ring hugs the
+ * union's ACTUAL stepped boundary, so it is always anchored on stone; its
+ * middle ring bulges out to a smoothed radius plus 10–22 cm of noise, which
+ * both rounds the notches off and casts the contact shadow that makes the cap
+ * read as a mat growing over a rock; its bottom ring tucks back underneath.
+ *
+ * It is decor, and it overhangs the collider, and that is legal for exactly
+ * one reason: its highest point is 2 cm BELOW the walkable surface and it
+ * slopes away downwards from there. There is no height at which it presents
+ * something to stand on — it is a lip under an edge, not a ledge beside one.
+ */
+function skirtGeometry(rects, across, squash, drop, rand, segs) {
+  const circ = rects.map((q) => ({ hx: q.hx, hz: q.hz / squash }))
+  const pos = [], uv = [], idx = []
+  for (let i = 0; i <= segs; i++) {
+    const th = (2 * Math.PI * i) / segs
+    const c = Math.cos(th), s = Math.sin(th)
+    const rU = unionRadiusAt(circ, th)
+    // 65% of the way from the stepped boundary to the across-flats radius:
+    // enough to fill the notches, never so much that the lip leaves the stone.
+    const over = 0.10 + rand() * 0.12
+    const rB = rU * 0.35 + across * 0.65 + over
+    const arc = th * across
+    // The bulge sits only 12% of the drop below the cap's top edge. High
+    // enough that the SMOOTH outline is what the eye reads from above — which
+    // is the whole point, since the stepped one underneath it is what the
+    // collider has to be — and still unambiguously under the walking surface.
+    const ring = [
+      [rU * 0.995, -0.015, 0],
+      [rB, -drop * 0.12, 1],
+      [rU * 0.88, -drop, 2],
+    ]
+    for (const [r, h, v] of ring) {
+      pos.push(r * c, h, r * s * squash)
+      uv.push(arc, v * drop)
+    }
+  }
+  for (let i = 0; i < segs; i++) {
+    const a = i * 3, b = (i + 1) * 3
+    idx.push(a, b, b + 1, a, b + 1, a + 1)
+    idx.push(a + 1, b + 1, b + 2, a + 1, b + 2, a + 2)
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+  geo.setIndex(idx)
+  geo.computeVertexNormals()
+  return geo
 }
 
 // ----------------------------------------------------------- shape helpers
@@ -82,11 +299,27 @@ function discRects(r, facets = 3, squash = 1) {
   return out
 }
 
+// Vertical tie-break between the rectangles that make up one faceted disc.
+//
+// Every rect in a disc shares a centre AND a height, so their top faces are
+// exactly coplanar and heavily overlapping. Two coplanar surfaces give the
+// depth test no winner, and which one survives changes per pixel and per
+// camera position — so the ground visibly flickers between moss and stone as
+// you walk. (Playtest, Ethan 2026-07-25: "the ground was like switching
+// between green and the cobblestone".)
+//
+// 0.6 mm per rect breaks the tie deterministically. It is comfortably larger
+// than depth precision at our near/far range, and far below anything a player
+// can see or stand on differently — the whole stack of six spans 3 mm.
+const DISC_EPSILON = 6e-4
+
 /** A faceted disc/drum course. Returns the number of boxes emitted. */
-function disc(put, cx, cy, cz, r, h, kind, facets = 3, squash = 1) {
+function disc(put, cx, cy, cz, r, h, kind, facets = 3, squash = 1, o) {
   let n = 0
+  let i = 0
   for (const q of discRects(r, facets, squash)) {
-    n += put(cx, cy, cz, q.hx * 2, h, q.hz * 2, kind)
+    n += put(cx, cy - i * DISC_EPSILON, cz, q.hx * 2, h, q.hz * 2, kind, o)
+    i++
   }
   return n
 }
@@ -188,6 +421,15 @@ export function drumPlatform(L, x, y, z, opts = {}) {
   n += disc(S, x, y - capThickness - 0.53 - bodyDepth / 2, z,
     radius * 0.9, bodyDepth, kind, facets, squash)
 
+  // The moss lip. See skirtGeometry for what it is and why it may overhang.
+  if (L.mesh && detail >= 1) {
+    L.mesh(capKind,
+      skirtGeometry(discRects(radius, facets, squash), radius, squash,
+        capThickness * 1.25, rand, detail >= 2 ? 28 : 16),
+      place(x, y, z, _q.identity()), { shade: 0.97 })
+    n += 1
+  }
+
   // Boulder underside: descending, progressively inset tiers.
   let ty = y - capThickness - 0.53 - bodyDepth
   let tr = radius * 0.9
@@ -195,6 +437,24 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     const h = 2.2 + rand() * 1.6 + i * 0.5
     tr *= 0.68 + rand() * 0.1
     n += disc(S, x, ty - h / 2, z, tr, h, boulderKind, Math.max(1, facets - 1), squash)
+    // Boulder lumps: rotated, irregular masses hung off each tier so the
+    // underside reads as a chunky rounded rock rather than as the hard stepped
+    // terrace the review found in crossing.png and chain.png. They are decor,
+    // and they are legal because every one of them lives UNDER an overhang
+    // wider than itself — nothing here is reachable from above, which is the
+    // escape route art-direction.md's collision caveat explicitly grants for
+    // island undersides.
+    if (detail >= 1) {
+      const lumps = detail >= 2 ? 7 : 4
+      for (let k = 0; k < lumps; k++) {
+        const a = (2 * Math.PI * (k + rand() * 0.7)) / lumps
+        const lr = tr * (0.62 + rand() * 0.46)
+        const ly = ty - h * (0.10 + rand() * 0.66)
+        n += D(x + Math.cos(a) * tr * 0.80, ly, z + Math.sin(a) * tr * 0.80 * squash,
+          lr, h * (0.46 + rand() * 0.44), lr * squash * (0.7 + rand() * 0.5),
+          boulderKind, { rot: { axis: 'y', angle: a }, fit: false })
+      }
+    }
     ty -= h * 0.92
   }
 
@@ -256,27 +516,62 @@ export function archway(L, x, y, z, opts = {}) {
     n += S(bx, y + springHeight + 0.22, bz, bsx, 0.44, bsz, kind)
   }
 
-  // Voussoir arc, intrados on the circle of radius R centred at the springing.
+  // --- the voussoir arc -------------------------------------------------
+  //
+  // This used to be axis-aligned boxes stepped along the arc, which gave every
+  // arch in the game a notched, sawtooth intrados. Real voussoirs are
+  // trapezoids radiating from the arc centre, so that is what these are: the
+  // tangential width is computed at the intrados AND at the extrados from the
+  // same circle, and each block is swept to its own tangent angle.
+  //
+  // The collider stays an axis-aligned box — it is the AABB of the rotated
+  // wedge, computed exactly, so it always contains what is drawn. An extrados
+  // a player mantles onto from a wall-run is still a real ledge; it is just no
+  // longer a staircase.
   const cy0 = y + springHeight + 0.44
-  const arcLen = (Math.PI * R) / segs * 1.3
+  const rr = R + vt / 2
+  // For a z-spanning arch the wedge's local +X (its tangential axis) has to
+  // land on world +Z, which is a -90 degree turn about Y. The sign matters:
+  // +90 lands it on -Z and every voussoir tilts the wrong way round the arc.
+  const archQuat = axis === 'z'
+    ? new THREE.Quaternion().setFromEuler(_e.set(0, -Math.PI / 2, 0))
+    : new THREE.Quaternion()
+  const wIn = (Math.PI * R) / segs * 1.03
+  const wOut = (Math.PI * (R + vt)) / segs * 1.03
+  const wMax = Math.max(wIn, wOut)
   for (let i = 0; i < segs; i++) {
     const t = Math.PI * ((i + 0.5) / segs)
     const c = Math.cos(t), s = Math.sin(t)
-    const rr = R + vt / 2
+    // The wedge's radial axis points along (-c, s); tilting the upright block
+    // by phi = pi/2 - t about the arch-plane normal puts it there.
+    const phi = Math.PI / 2 - t
     const [cx, cz] = F.at(x, z, -c * rr, 0)
-    const [sx, sz] = F.sz(Math.max(vt, Math.abs(s) * arcLen), depth)
-    n += S(cx, cy0 + s * rr, cz, sx, Math.max(vt, Math.abs(c) * arcLen), sz, kind)
+    const cyv = cy0 + s * rr
+    // Exact AABB of the rotated trapezoid. |cos phi| = |sin t| = s, |sin phi| = |c|.
+    const aAlong = wMax * s + vt * Math.abs(c)
+    const aUp = wMax * Math.abs(c) + vt * s
+    const [sx, sz] = F.sz(aAlong, depth)
+    n += S(cx, cyv, cz, sx, aUp, sz, kind, { hidden: !!L.mesh })
+    if (L.mesh) {
+      const q = archQuat.clone()
+        .multiply(new THREE.Quaternion().setFromEuler(_e.set(0, 0, phi)))
+      L.mesh(kind, voussoirGeometry(wIn, wOut, vt, depth), place(cx, cyv, cz, q))
+    }
   }
 
   const crownY = cy0 + R + vt / 2
   if (keystone) {
     const [kx, kz] = F.at(x, z, 0, 0)
     const [ksx, ksz] = F.sz(vt * 1.4, depth * 1.15)
-    n += S(kx, crownY - vt * 0.2, kz, ksx, vt * 1.5, ksz, kind)
+    // Base flush with the INTRADOS at the crown (crownY - vt/2), projecting
+    // 0.8 vt above the extrados. Centred any lower and the keystone dangles
+    // below the soffit as a block floating in the opening, which is what the
+    // old numbers did once the voussoirs around it became real wedges.
+    n += S(kx, crownY + vt * 0.15, kz, ksx, vt * 1.3, ksz, kind)
     // Brass boss on the keystone — brass is the signature material and should
     // appear at every scale. Overhead ornament, so decor.
     const [bx2, bz2] = F.at(x, z, 0, 0)
-    n += D(bx2, crownY + vt * 0.55, bz2, 0.5, 0.5, depth * 1.2, 'brass')
+    n += D(bx2, crownY + vt * 1.0, bz2, 0.5, 0.4, depth * 1.2, 'brass')
   }
 
   return {
@@ -305,7 +600,10 @@ export function colonnade(L, x, y, z, opts = {}) {
   const {
     count = 5, spacing = 4.0, height = 5.0, radius = 0.55,
     kind = 'porcelain', axis = 'x', detail = 2, entablature = true,
-    capKind = 'terracotta',
+    // NOT terracotta. A cornice is the least interactive surface in the game
+    // and it used to carry the palette's only saturated hue; that hue is now
+    // reserved for route-critical surfaces (see level.js's BUILT/WILD note).
+    capKind = 'porcelain',
   } = opts
   const F = frame(axis)
   const { S, D } = emit(L, opts)
@@ -392,25 +690,43 @@ export function balustrade(L, x, y, z, opts = {}) {
   const railY = y + height
   const gap = height - plinthHeight - 0.2
 
-  // Balusters: a turned profile is three stacked boxes (foot, belly, neck).
+  // Balusters, genuinely turned: base · swell · neck · cap, revolved.
+  //
+  // These were three stacked cubes, which the art review called out as "a row
+  // of literal cubes where turned balusters belong" — and it is the one piece
+  // of ornament the player stands right next to on the opening terrace, so it
+  // sets the standard for everything behind it. A 10-segment lathe over a
+  // 5-point profile is ~90 triangles; at a 58 cm pitch that is affordable.
   const pitch = detail >= 2 ? 0.58 : detail === 1 ? 0.95 : 1.8
   const bw = thickness * 0.42
   for (let a = pitch * 0.6; a < length - pitch * 0.4; a += pitch) {
     const [bx, bz] = F.at(x, z, a, 0)
-    if (detail >= 1) {
-      n += D(bx, plinthTopY + gap * 0.14, bz, bw, gap * 0.28, bw, kind)
-      n += D(bx, plinthTopY + gap * 0.48, bz, bw * 1.5, gap * 0.4, bw * 1.5, kind)
-      n += D(bx, plinthTopY + gap * 0.84, bz, bw * 0.8, gap * 0.32, bw * 0.8, kind)
+    if (L.mesh && detail >= 1) {
+      const g = gap
+      L.mesh(kind, latheGeometry([
+        [bw * 0.62, 0],            // base fillet
+        [bw * 0.62, g * 0.08],
+        [bw * 0.34, g * 0.20],     // waist above the base
+        [bw * 0.78, g * 0.44],     // the swell
+        [bw * 0.70, g * 0.60],
+        [bw * 0.30, g * 0.78],     // neck
+        [bw * 0.44, g * 0.90],
+        [bw * 0.60, g * 0.97],     // cap
+        [0, g],
+      ], detail >= 2 ? 10 : 7), place(bx, plinthTopY, bz, _q.identity()))
+      n += 1
     } else {
       n += D(bx, plinthTopY + gap * 0.5, bz, bw, gap, bw, kind)
     }
   }
 
-  // Top rail: solid, two courses.
+  // Top rail: solid, two courses. NOT terracotta any more — the coping is the
+  // one thing on a balustrade a player never interacts with, and spending the
+  // route hue on it is what emptied the accent of meaning (see level.js).
   ;[sx, sz] = F.sz(length, thickness * 0.78)
   n += S(px, railY - 0.11, pz, sx, 0.22, sz, kind)
   ;[sx, sz] = F.sz(length, thickness * 0.94)
-  n += S(px, railY + 0.05, pz, sx, 0.14, sz, 'terracotta')
+  n += S(px, railY + 0.05, pz, sx, 0.14, sz, kind, { shade: 0.88 })
 
   if (posts) {
     for (const a of [0, length]) {
@@ -418,8 +734,18 @@ export function balustrade(L, x, y, z, opts = {}) {
       const [esx, esz] = F.sz(thickness * 1.2, thickness * 1.2)
       n += S(ex, y + (height + 0.24) / 2, ez, esx, height + 0.24, esz, kind)
       const [csx, csz] = F.sz(thickness * 1.5, thickness * 1.5)
-      n += S(ex, y + height + 0.34, ez, csx, 0.2, csz, 'terracotta')
-      if (detail >= 1) n += D(ex, y + height + 0.58, ez, 0.26, 0.3, 0.26, 'brass')
+      n += S(ex, y + height + 0.34, ez, csx, 0.2, csz, kind)
+      // Newel finial: a turned brass pineapple, the reference's favourite way
+      // of ending a run of stonework.
+      if (L.mesh) {
+        L.mesh('brass', latheGeometry([
+          [0.03, 0], [0.15, 0.03], [0.11, 0.10], [0.17, 0.20],
+          [0.10, 0.30], [0.05, 0.36], [0, 0.40],
+        ], detail >= 2 ? 10 : 6), place(ex, y + height + 0.44, ez, _q.identity()))
+        n += 1
+      } else if (detail >= 1) {
+        n += D(ex, y + height + 0.58, ez, 0.26, 0.3, 0.26, 'brass')
+      }
     }
   }
 
@@ -450,9 +776,7 @@ export function gearWheel(L, x, y, z, opts = {}) {
     kind = 'brass', detail = 2, solidRim = false,
   } = opts
   const { S, D } = emit(L, opts)
-  const put = solidRim ? S : D
-  const teeth = opts.teeth ?? (detail >= 2 ? 24 : detail === 1 ? 14 : 8)
-  const rimSegs = detail >= 2 ? 26 : detail === 1 ? 16 : 8
+  const teeth = opts.teeth ?? (detail >= 2 ? 26 : detail === 1 ? 18 : 12)
   const hubR = radius * 0.22
   let n = 0
 
@@ -463,53 +787,50 @@ export function gearWheel(L, x, y, z, opts = {}) {
   const boxAt = (u, v, kk, put_) => put_(x + u[0], y + u[1], z + u[2], v[0], v[1], v[2], kk)
   const flat = (t) => (XY ? [t, t, thickness] : ZY ? [thickness, t, t] : [t, thickness, t])
 
-  // Hub: a faceted boss, deeper than the web so it reads as turned.
-  const hd = thickness * 1.9
-  for (let i = 0; i < (detail >= 1 ? 3 : 1); i++) {
-    const a = (Math.PI / 2) * ((i + 0.5) / (detail >= 1 ? 3 : 1))
-    const hx = hubR * Math.cos(a) * 2, hz = hubR * Math.sin(a) * 2
-    const size = XY ? [hx, hz, hd] : ZY ? [hd, hz, hx] : [hx, hd, hz]
-    boxAt([0, 0, 0], size, kind, put)
-  }
-  n += detail >= 1 ? 3 : 1
-
-  // Spokes, stepped out from the hub to just inside the rim.
-  const rimIn = radius * 0.7
-  // Spoke step count drives how a diagonal bar reads. Five boxes over a 2.7 m
-  // spoke is a visible staircase at arm's length — these wheels get mounted
-  // where the player runs past them, so pay for the extra segments.
-  const steps = detail >= 2 ? 9 : detail === 1 ? 5 : 2
-  const st = Math.max(0.15, radius * 0.06)
-  for (let i = 0; i < spokes; i++) {
-    const a = (2 * Math.PI * i) / spokes + Math.PI / spokes
-    const c = Math.cos(a), s = Math.sin(a)
-    const A = dirs(c * hubR * 0.9, s * hubR * 0.9)
-    const B = dirs(c * rimIn, s * rimIn)
-    n += strut((cx, cy, cz, bx, by, bz, k) => put(x + cx, y + cy, z + cz, bx, by, bz, k),
-      A[0], A[1], A[2], B[0], B[1], B[2], st, steps, kind)
-    // Ship's-wheel handle poking past the rim.
-    if (detail >= 2 && spokes <= 8) {
-      const H = dirs(c * radius * 1.14, s * radius * 1.14)
-      boxAt(H, flat(st * 1.1), kind, D)
+  // THE COLLIDER, when this wheel is one. A gear at climbing height that you
+  // can see and fall through is the forbidden bug at architectural scale, so
+  // `solidRim` still declares an honest faceted disc — but hidden, because the
+  // real wheel below is what gets drawn. The disc stops at 0.9 R, inside the
+  // tooth tips: art-direction.md's caveat prefers a small non-walkable
+  // overhang (here, one 25 cm tooth) to a ledge that is not there.
+  if (solidRim) {
+    const cf = detail >= 2 ? 3 : 2
+    for (const q of discRects(radius * 0.9, cf, 1)) {
+      const a = q.hx * 2, b = q.hz * 2
+      const size = XY ? [a, b, thickness] : ZY ? [thickness, b, a] : [a, thickness, b]
+      S(x, y, z, size[0], size[1], size[2], kind, { hidden: true })
       n += 1
     }
   }
 
-  // Rim: a continuous web annulus, then teeth standing on it.
-  //
-  // The web has to be a genuine ring — deep enough radially and dense enough
-  // tangentially that its boxes overlap — or the wheel reads as a snowflake:
-  // a thin hoop with detached cubes floating around it. Teeth sit at ONE
-  // radius rather than alternating in and out, because alternating teeth at a
-  // thin web just make the hoop look broken.
-  n += ringOfBoxes((cx, cy, cz, bx, by, bz, k) => put(cx, cy, cz, bx, by, bz, k),
-    x, y, z, radius * 0.82, radius * 0.28, rimSegs, plane, kind, thickness)
-  const tw = Math.max(0.16, (2 * Math.PI * radius) / teeth * 0.45)
-  for (let i = 0; i < teeth; i++) {
-    const a = (2 * Math.PI * i) / teeth
-    const P = dirs(Math.cos(a) * radius, Math.sin(a) * radius)
-    boxAt(P, flat(tw), kind, put)
+  // THE WHEEL. One extrusion: toothed rim, chamfered crowns, spoke windows.
+  if (L.mesh) {
+    L.mesh(kind, gearGeometry(radius, thickness, teeth, detail >= 1 ? spokes : 0),
+      place(x, y, z, planeQuat(plane, (radius * 7.3) % 1)), { shade: 1.0 })
     n += 1
+    // Hub boss, turned: a stepped cylinder standing proud of the web on both
+    // sides. Without it the wheel reads as a flat cut-out.
+    const hd = thickness * 1.9
+    L.mesh(kind, latheGeometry([
+      [0, -hd / 2], [hubR * 1.15, -hd / 2], [hubR * 1.15, -hd * 0.18],
+      [hubR * 0.82, -hd * 0.1], [hubR * 0.82, hd * 0.1],
+      [hubR * 1.15, hd * 0.18], [hubR * 1.15, hd / 2], [0, hd / 2],
+    ], detail >= 2 ? 16 : 10), place(x, y, z, planeQuat(plane, 0)
+      .multiply(new THREE.Quaternion().setFromEuler(_e.set(Math.PI / 2, 0, 0)))))
+    n += 1
+  }
+
+  // Ship's-wheel handles poking past the rim: still boxes, because a 16 cm
+  // stub at 2 m is a stub whatever it is made of, and they are the one part of
+  // the wheel that breaks its circle.
+  const st = Math.max(0.15, radius * 0.06)
+  if (detail >= 2 && spokes <= 8) {
+    for (let i = 0; i < spokes; i++) {
+      const a = (2 * Math.PI * i) / spokes + Math.PI / spokes
+      const H = dirs(Math.cos(a) * radius * 1.12, Math.sin(a) * radius * 1.12)
+      boxAt(H, flat(st * 1.1), kind, D)
+      n += 1
+    }
   }
 
   return { radius, hubRadius: hubR, teeth, boxes: n }
@@ -546,24 +867,38 @@ export function armillary(L, x, y, z, opts = {}) {
   n += disc(S, x, y + 0.36 + standHeight, z, radius * 0.28, 0.2, kind, detail >= 1 ? 2 : 1)
 
   const cy = y + 0.46 + standHeight + radius
-  const ring = (r, plane, tt) => ringOfBoxes(
-    (cx, cyy, cz, bx, by, bz, k) => D(cx, cyy, cz, bx, by, bz, k),
-    x, cy, z, r, tt, segs, plane, kind, tt)
+  // Orrery rings are real tori now. A ring is the one shape a box union can
+  // never fake — the reference's armillaries are 15 cm brass bar bent round a
+  // circle, and a bar has no flats in it anywhere.
+  const ring = (r, plane, tt, lift = 0) => {
+    if (!L.mesh) {
+      return ringOfBoxes((cx, cyy, cz, bx, by, bz, k) => D(cx, cyy, cz, bx, by, bz, k),
+        x, cy + lift, z, r, tt, segs, plane, kind, tt)
+    }
+    const geo = new THREE.TorusGeometry(r, tt / 2, detail >= 2 ? 6 : 4, segs)
+    L.mesh(kind, geo, place(x, cy + lift, z, planeQuat(plane)))
+    return 1
+  }
 
   n += ring(radius, 'xy', t)                 // meridian
   n += ring(radius * 0.99, 'zy', t)          // second meridian
   n += ring(radius * 0.82, 'xz', t * 1.4)    // equator, heavier band
   if (detail >= 1) n += ring(radius * 0.6, 'xz', t)   // inner tropic
   if (detail >= 2) {
-    // A tilted band, faked as a squashed horizontal ring lifted off centre —
-    // enough to break the perfect concentricity that reads as CAD.
-    n += ringOfBoxes((cx, cyy, cz, bx, by, bz, k) => D(cx, cyy, cz, bx, by, bz, k),
-      x, cy + radius * 0.34, z, radius * 0.72, t, segs, 'xz', kind, t)
+    // A tilted band lifted off centre — enough to break the perfect
+    // concentricity that reads as CAD.
+    n += ring(radius * 0.72, 'xz', t, radius * 0.34)
     // Polar axis through the whole assembly.
     n += D(x, cy, z, t, radius * 2.3, t, kind)
   }
   // The little sun at the centre.
-  n += D(x, cy, z, radius * 0.2, radius * 0.2, radius * 0.2, 'terracotta')
+  if (L.mesh) {
+    L.mesh('terracotta', new THREE.IcosahedronGeometry(radius * 0.13, 1),
+      place(x, cy, z, _q.identity()))
+    n += 1
+  } else {
+    n += D(x, cy, z, radius * 0.2, radius * 0.2, radius * 0.2, 'terracotta')
+  }
 
   return { topY: cy + radius, centreY: cy, radius, boxes: n }
 }
@@ -622,11 +957,15 @@ export function observatoryDome(L, x, y, z, opts = {}) {
   // Cornice: the dome's landing shelf.
   n += disc(S, x, roofY + 0.22, z, radius * 1.16, 0.44, 'terracotta', facets)
 
-  // Dome: stepped courses on a hemisphere, so the profile is a true curve
-  // approximated in stone rather than a cone.
+  // Dome: stepped stone courses carry the COLLISION, because a dome the player
+  // runs up has to behave the same way every time. The visible dome is a real
+  // revolved shell drawn just inside those courses — a hemisphere is the one
+  // form where a stepped approximation is unmistakable at any distance, and
+  // this is the building the whole last section is an approach to.
   const domeR = radius * 0.98
   const steps = detail >= 2 ? 6 : detail === 1 ? 4 : 2
   let apex = roofY + 0.44
+  const shell = L.mesh ? [] : null
   for (let i = 0; i < steps; i++) {
     const t0 = (i / steps) * (Math.PI / 2)
     const t1 = ((i + 1) / steps) * (Math.PI / 2)
@@ -634,8 +973,23 @@ export function observatoryDome(L, x, y, z, opts = {}) {
     const y0 = roofY + 0.44 + domeR * 0.86 * Math.sin(t0)
     const y1 = roofY + 0.44 + domeR * 0.86 * Math.sin(t1)
     n += disc(S, x, (y0 + y1) / 2, z, rr, Math.max(0.2, y1 - y0), 'terracotta',
-      Math.max(1, facets - 1))
+      Math.max(1, facets - 1), 1, { hidden: !!shell })
     apex = y1
+  }
+  if (shell) {
+    // The shell is revolved at 0.93 of the stepped courses' half-width across
+    // flats. That keeps it inside the collider everywhere except eight narrow
+    // slivers at the facet corners, which is the direction art-direction.md
+    // explicitly sanctions: "accept a small non-walkable overhang at the
+    // corners rather than the reverse".
+    const SEG = detail >= 2 ? 12 : 7
+    for (let i = 0; i <= SEG; i++) {
+      const t = (i / SEG) * (Math.PI / 2)
+      shell.push([domeR * Math.cos(t * 0.94) * 0.93, domeR * 0.86 * Math.sin(t)])
+    }
+    L.mesh('terracotta', latheGeometry(shell, detail >= 2 ? 18 : 10),
+      place(x, roofY + 0.44, z, _q.identity()))
+    n += 1
   }
 
   if (ribs) {
@@ -703,20 +1057,36 @@ export function cypress(L, x, y, z, opts = {}) {
   }
   const base = y + height * (trunk ? 0.08 : 0)
   const span = height - (base - y)
-  for (let i = 0; i < layers; i++) {
-    const f = i / layers
-    const h = span / layers
-    // Cubic taper: fat and skirted low, needle-thin at the tip.
-    const w = height * 0.20 * (1 - f) * (1 - f * 0.45) + height * 0.02
-    const jx = (rand() - 0.5) * w * 0.22
-    const jz = (rand() - 0.5) * w * 0.22
-    L.decor(x + jx, base + h * (i + 0.5), z + jz, w, h * 1.05,
-      w * (0.82 + rand() * 0.34), kind)
+
+  if (L.mesh) {
+    // A revolved silhouette with a jagged profile: each layer's skirt flares
+    // out and pinches back in, so the outline is a stack of soft cones rather
+    // than a chimney of cubes. Revolving it is what buys the round read; the
+    // per-layer jitter is what stops a stand of them looking cloned.
+    const prof = [[height * 0.012, 0]]
+    for (let i = 0; i < layers; i++) {
+      const f = i / layers
+      const taper = (1 - f * 0.92) * (1 - f * 0.30)
+      const w = height * 0.115 * taper * (0.86 + rand() * 0.3)
+      prof.push([w, span * (f + 0.30 / layers)])
+      prof.push([w * (0.56 + rand() * 0.14), span * (f + 0.96 / layers)])
+    }
+    prof.push([height * 0.008, span])
+    L.mesh(kind, latheGeometry(prof, detail >= 2 ? 9 : 6),
+      place(x, base, z, _q.setFromEuler(_e.set(0, rand() * 6.283, 0))))
+    n += 1
+  } else {
+    for (let i = 0; i < layers; i++) {
+      const f = i / layers
+      const h = span / layers
+      const w = height * 0.20 * (1 - f) * (1 - f * 0.45) + height * 0.02
+      L.decor(x + (rand() - 0.5) * w * 0.22, base + h * (i + 0.5),
+        z + (rand() - 0.5) * w * 0.22, w, h * 1.05, w * (0.82 + rand() * 0.34), kind)
+      n += 1
+    }
+    L.decor(x, y + height * 0.99, z, height * 0.03, height * 0.1, height * 0.03, kind)
     n += 1
   }
-  // The tip.
-  L.decor(x, y + height * 0.99, z, height * 0.03, height * 0.1, height * 0.03, kind)
-  n += 1
 
   return { topY: y + height, height, boxes: n }
 }
@@ -852,12 +1222,21 @@ export function stairFlight(L, x, y, z, opts = {}) {
     // Each tread is a full-depth block down to the floor line minus a bit,
     // exactly like Level.stair() — the controller's step-up eats these.
     const [sx, sz] = F.sz(run, width)
-    n += S(cx, h - rise / 2 - 0.4, cz, sx, rise + 0.8, sz, kind)
-    // Nosing: a slightly proud lip on the front of the tread.
+    // Slightly under-lit against the nosing above it, so the pair reads as
+    // tread-then-riser at a glance instead of as one continuous ramp.
+    n += S(cx, h - rise / 2 - 0.4, cz, sx, rise + 0.8, sz, kind, { shade: 0.94 })
+    // Nosing: a proud lip on the front of the tread, deliberately over-lit.
+    //
+    // The art review measured a 15-luma spread across this entire staircase —
+    // the step edges were drawn at exactly the weight of the decorative block
+    // joints inside each face, so the ascent was a guess rather than a read.
+    // Tread-versus-riser is the load-bearing silhouette in a first-person
+    // parkour game, so this strip gets a flat +30% albedo that holds whatever
+    // the sun is doing, and the riser under it gets a matching darkening.
     if (detail >= 1) {
       const [nx, nz] = F.at(x, z, run * i + run * 0.08, 0)
       const [nsx, nsz] = F.sz(run * 0.16, width * 0.99)
-      n += S(nx, h - 0.06, nz, nsx, 0.12, nsz, kind)
+      n += S(nx, h - 0.06, nz, nsx, 0.12, nsz, kind, { shade: 1.32 })
     }
     // Moss crept over the shaded bottom steps.
     if (moss && i < 2) {
@@ -1023,6 +1402,19 @@ export function kitSelfTest(overrides = {}) {
       // lanternPost registers a grapple anchor; the recorder only needs to
       // count it, but it must exist or the prefab throws under test.
       lantern: (lx, ly, lz) => { rec.anchors = (rec.anchors || 0) + 1; return stub },
+      // The generated-curve channel. Present so the self-test walks the same
+      // branch the game does — a stub without it silently tests the fallback
+      // box path, which is the code nobody ships.
+      mesh: (kind, geo, matrix) => {
+        rec.meshes = (rec.meshes || 0) + 1
+        rec.meshTris = (rec.meshTris || 0)
+          + (geo.index ? geo.index.count : geo.attributes.position.count) / 3
+        geo.computeBoundingBox()
+        const bb = geo.boundingBox.clone().applyMatrix4(matrix)
+        push((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, (bb.min.z + bb.max.z) / 2,
+          bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z, kind)
+        return stub
+      },
     }
     const ret = fn(stub, 0, 0, 0, { seed: 0xC0FFEE, ...(overrides[name] || {}) })
     const min = [Infinity, Infinity, Infinity]

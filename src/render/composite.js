@@ -201,6 +201,11 @@ void main() {
   // chromatic aberration in a wide-angle lens (this camera is at 76 degrees,
   // where a real lens would show it). The centre of the frame — where the
   // player reads the route — is untouched by construction.
+  // Every fetch of the scene buffer is sanitised. It is the boundary between
+  // code this file owns and every material in the game, and a single NaN
+  // arriving from a shader upstream otherwise takes the entire frame with it —
+  // through the sharpen taps, through the clamp at the end, and through the
+  // exposure feedback loop. See scSanitize.
   vec3 hdr;
   float ca = uLens.x * r2;
   if ( ca > 0.000002 ) {
@@ -211,17 +216,17 @@ void main() {
   } else {
     hdr = texture2D( tColor, vUv ).rgb;
   }
-  hdr = max( hdr, vec3( 0.0 ) );
+  hdr = max( scSanitize( hdr ), vec3( 0.0 ) );
 
   // Un-aberrated centre + 4 neighbours, kept for the sharpen below. Taken
   // BEFORE the CA offset on purpose: sharpening the aberrated fetch against
   // unshifted neighbours makes the difference contain the CA offset itself and
   // the sharpen then amplifies it into coarse magenta/green fringes.
-  vec3 centre = max( texture2D( tColor, vUv ).rgb, vec3( 0.0 ) );
-  float lN1 = scLum( max( texture2D( tColor, vUv + vec2( uTexel.x, 0.0 ) ).rgb, vec3( 0.0 ) ) );
-  float lN2 = scLum( max( texture2D( tColor, vUv - vec2( uTexel.x, 0.0 ) ).rgb, vec3( 0.0 ) ) );
-  float lN3 = scLum( max( texture2D( tColor, vUv + vec2( 0.0, uTexel.y ) ).rgb, vec3( 0.0 ) ) );
-  float lN4 = scLum( max( texture2D( tColor, vUv - vec2( 0.0, uTexel.y ) ).rgb, vec3( 0.0 ) ) );
+  vec3 centre = max( scSanitize( texture2D( tColor, vUv ).rgb ), vec3( 0.0 ) );
+  float lN1 = scLum( max( scSanitize( texture2D( tColor, vUv + vec2( uTexel.x, 0.0 ) ).rgb ), vec3( 0.0 ) ) );
+  float lN2 = scLum( max( scSanitize( texture2D( tColor, vUv - vec2( uTexel.x, 0.0 ) ).rgb ), vec3( 0.0 ) ) );
+  float lN3 = scLum( max( scSanitize( texture2D( tColor, vUv + vec2( 0.0, uTexel.y ) ).rgb ), vec3( 0.0 ) ) );
+  float lN4 = scLum( max( scSanitize( texture2D( tColor, vUv - vec2( 0.0, uTexel.y ) ).rgb ), vec3( 0.0 ) ) );
 
   hdr *= exposure;
 
@@ -362,7 +367,15 @@ export function createComposite(lut) {
         // light source in it. 0.36, against the lowered threshold, is what puts
         // the aureole back and pushes the cores of the emissives over white so
         // they actually clip.
-        0.36,
+        //
+        // Trimmed to 0.30 once the grade's white point let highlights reach
+        // white on their own: with both at full strength the sun-raked brass
+        // balustrade in the underpass shot bloomed into a single white band and
+        // lost the baluster silhouettes, which on a runnable surface is a
+        // readability bug rather than a look. The aureole survives the cut; the
+        // blooming of things that were merely bright does not, which is the
+        // right half to lose.
+        0.30,
         // lutStrength: 1.0 — the grade is the look, not an option.
         1.0,
         // sharpen: 0.20. The scene has no TAA to compensate for; this is here

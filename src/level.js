@@ -75,7 +75,7 @@ const BEVEL_FRAC = 0.13
  * reads in a first-person parkour game, so they get a fixed offset that does
  * not depend on which way the sun happens to be pointing.
  */
-const TOP_EDGE_LIFT = 1.34
+const TOP_EDGE_LIFT = 1.26
 const BOT_EDGE_DROP = 0.52
 
 /** Reverse a polygon's winding if it does not face the way we said it does. */
@@ -122,16 +122,89 @@ export class Level {
     this._rand = rng(0x5C0117)
   }
 
-  /** A surface you can stand on, run along, or vault. Visible AND solid. */
-  solid(cx, cy, cz, sx, sy, sz, kind = 'porcelain') {
+  /**
+   * A surface you can stand on, run along, or vault. Visible AND solid.
+   *
+   * `opts` only ever changes the VISUAL. The collider is always the full
+   * (sx, sy, sz) box centred on (cx, cy, cz), whatever else is passed:
+   *
+   *   bevel  override the automatic chamfer (0 disables it, for far scenery)
+   *   size   visual box dimensions, defaulting to the collider's; combined
+   *          with `rot` this is how a rotated wedge declares an upright AABB
+   *   rot    `{ axis: 'x'|'y'|'z', angle }`; the visual box is shrunk if it
+   *          needs to be so the rotation cannot push it outside the collider
+   *   shade  flat multiplier on the baked vertex tint
+   *   hidden emit the collider only — for when a generated mesh (see `mesh()`)
+   *          is drawing this volume instead
+   */
+  solid(cx, cy, cz, sx, sy, sz, kind = 'porcelain', opts) {
     this.collision.addCenteredBox(cx, cy, cz, sx, sy, sz, kind)
-    this._emit(kind, cx, cy, cz, sx, sy, sz)
+    if (!opts || !opts.hidden) this._emit(kind, cx, cy, cz, sx, sy, sz, opts)
     return this
   }
 
   /** Scenery. Never solid, and never near enough to be mistaken for a route. */
-  decor(cx, cy, cz, sx, sy, sz, kind = 'stone') {
-    this._emit(kind, cx, cy, cz, sx, sy, sz)
+  decor(cx, cy, cz, sx, sy, sz, kind = 'stone', opts) {
+    if (!opts || !opts.hidden) this._emit(kind, cx, cy, cz, sx, sy, sz, opts)
+    return this
+  }
+
+  /**
+   * Attach a generated BufferGeometry to a material batch. VISUAL ONLY.
+   *
+   * This is docs/geometry-unlock.md's break in the representation link, and it
+   * is deliberately one-way: a mesh can never create a collider, so the only
+   * way to make something standable is still `solid()`. A prefab that wants a
+   * real curve where a player will put a foot declares the collider with
+   * `solid(..., { hidden: true })` and draws the curve here, and it is the
+   * prefab's job to keep the curve inside that collider.
+   *
+   * The geometry is merged into the same per-kind batch as the boxes, so real
+   * curves cost triangles but not draw calls.
+   */
+  mesh(kind, geo, matrix, opts = {}) {
+    const b = this._batches.get(kind) || this._newBatch(kind)
+    const pos = geo.attributes.position
+    const nAttr = geo.attributes.normal
+    const uvAttr = geo.attributes.uv
+    const index = geo.index
+    const count = pos.count
+    const base = b.count
+    const jitter = (0.93 + this._rand() * 0.13) * (opts.shade ?? 1)
+    const uvScale = opts.uvScale ?? TEX_PER_METRE
+
+    _nrm.getNormalMatrix(matrix)
+
+    // Two passes so the contact-shading ramp can be measured against the
+    // mesh's own base, exactly as the box path measures against `minY`.
+    const wp = new Float64Array(count * 3)
+    let minY = Infinity
+    for (let i = 0; i < count; i++) {
+      _v.fromBufferAttribute(pos, i).applyMatrix4(matrix)
+      wp[i * 3] = _v.x; wp[i * 3 + 1] = _v.y; wp[i * 3 + 2] = _v.z
+      if (_v.y < minY) minY = _v.y
+    }
+
+    for (let i = 0; i < count; i++) {
+      const y = wp[i * 3 + 1]
+      b.pos.push(wp[i * 3], y, wp[i * 3 + 2])
+      _v.fromBufferAttribute(nAttr, i).applyMatrix3(_nrm).normalize()
+      b.norm.push(_v.x, _v.y, _v.z)
+      b.uv.push(uvAttr ? uvAttr.getX(i) * uvScale : 0,
+                uvAttr ? uvAttr.getY(i) * uvScale : 0)
+      let shade = 0.70 + 0.30 * Math.min(1, (y - minY) / 1.0)
+      if (_v.y > 0.5) shade = Math.min(1.12, shade + 0.10)
+      else if (_v.y < -0.5) shade *= 0.72
+      const t = shade * jitter
+      b.col.push(t, t, t)
+    }
+
+    if (index) for (let i = 0; i < index.count; i++) b.idx.push(base + index.getX(i))
+    else for (let i = 0; i < count; i++) b.idx.push(base + i)
+    b.count += count
+    // These geometries exist only to be copied into the batch; nothing ever
+    // uploads them, so hand the buffers back at once rather than at load-end.
+    geo.dispose()
     return this
   }
 
@@ -191,47 +264,174 @@ export class Level {
 
   // ------------------------------------------------------------- geometry
 
-  _emit(kind, cx, cy, cz, sx, sy, sz) {
-    let b = this._batches.get(kind)
-    if (!b) {
-      b = { pos: [], norm: [], uv: [], col: [], idx: [], count: 0 }
-      this._batches.set(kind, b)
+  _newBatch(kind) {
+    const b = { pos: [], norm: [], uv: [], col: [], idx: [], count: 0 }
+    this._batches.set(kind, b)
+    return b
+  }
+
+  /**
+   * One chamfered box: 6 inset face quads, 12 edge quads, 8 corner triangles.
+   *
+   * 44 triangles instead of 12. That is the price of every arris in the world
+   * catching a highlight, and on a scene that renders in ~3 ms it is the best
+   * value purchase available — see BEVEL_MAX above for why a 90-degree edge is
+   * the specific thing that makes generated architecture read as programmer
+   * art. `bevel: 0` restores the old 12-triangle box and is used for the far
+   * scenery bands, where a 4 cm chamfer is well under a pixel.
+   */
+  _emit(kind, cx, cy, cz, sx, sy, sz, opts) {
+    const b = this._batches.get(kind) || this._newBatch(kind)
+
+    // The collider is (sx, sy, sz). The VISUAL box may be smaller and may be
+    // rotated; it may never be larger, so `hit` is the half-extent we test
+    // against and `h` is what we actually draw.
+    const hit = [sx / 2, sy / 2, sz / 2]
+    const vis = opts && opts.size ? opts.size : null
+    const h = vis ? [vis[0] / 2, vis[1] / 2, vis[2] / 2] : [hit[0], hit[1], hit[2]]
+
+    // Rotation, as a single-axis turn. A quaternion channel would be more
+    // general and would also let a solid escape its collider in three axes at
+    // once; one axis covers voussoirs, gear teeth and tilted boulders, and
+    // stays trivially provable against the AABB.
+    const rot = opts && opts.rot && opts.rot.angle ? opts.rot : null
+    let ra = -1, ca = 1, sa = 0, ri = 0, rj = 0
+    if (rot) {
+      ra = rot.axis === 'x' ? 0 : rot.axis === 'y' ? 1 : 2
+      ri = (ra + 1) % 3; rj = (ra + 2) % 3
+      ca = Math.cos(rot.angle); sa = Math.sin(rot.angle)
+      const C = Math.abs(ca), S = Math.abs(sa)
+      // Shrink until the rotated box fits back inside the collider. This is
+      // the whole safety argument for the rotation channel: a rotated solid
+      // can never present a face the collision world does not know about.
+      // `fit: false` opts out and is for decor only — there is no collider to
+      // escape from, and a shrunk decor lump is just a smaller lump.
+      if (opts.fit !== false) {
+        const p = h[ri], q = h[rj]
+        const k = Math.min(hit[ri] / (p * C + q * S), hit[rj] / (p * S + q * C), 1)
+        h[ri] = p * k; h[rj] = q * k
+      }
     }
 
-    const hx = sx / 2, hy = sy / 2, hz = sz / 2
-    const minY = cy - hy
+    let bev = opts && opts.bevel !== undefined
+      ? opts.bevel
+      : Math.min(BEVEL_MAX, BEVEL_FRAC * Math.min(h[0], h[1], h[2]) * 2)
+    // A bevel wider than the box itself inverts the face quads.
+    bev = Math.min(bev, Math.min(h[0], h[1], h[2]) * 0.49)
+
     // Per-box tint jitter so repeated shapes never read as clones.
-    const jitter = 0.93 + this._rand() * 0.13
+    const jitter = (0.93 + this._rand() * 0.13) * ((opts && opts.shade) || 1)
+    // The contact ramp measures from the box's world base, so it has to know
+    // the rotated extent rather than the drawn half-height.
+    const hyRot = ra === 1 || !rot
+      ? h[1]
+      : (ri === 1 ? h[1] * Math.abs(ca) + h[rj] * Math.abs(sa)
+                  : h[ri] * Math.abs(sa) + h[1] * Math.abs(ca))
+    const minY = cy - hyRot
 
-    for (const f of FACES) {
-      const [nx, ny, nz] = f.n
-      const eN = Math.abs(nx) * hx + Math.abs(ny) * hy + Math.abs(nz) * hz
-      const eU = Math.abs(f.u[0]) * hx + Math.abs(f.u[1]) * hy + Math.abs(f.u[2]) * hz
-      const eV = Math.abs(f.v[0]) * hx + Math.abs(f.v[1]) * hy + Math.abs(f.v[2]) * hz
+    const rotate = (p) => {
+      if (!rot) return p
+      const a = p[ri], c = p[rj]
+      p[ri] = a * ca - c * sa
+      p[rj] = a * sa + c * ca
+      return p
+    }
+
+    const push = (verts, n, fi, lift) => {
+      const f = FACES[fi]
+      const eU = Math.abs(f.u[0]) * h[0] + Math.abs(f.u[1]) * h[1] + Math.abs(f.u[2]) * h[2]
+      const eV = Math.abs(f.v[0]) * h[0] + Math.abs(f.v[1]) * h[1] + Math.abs(f.v[2]) * h[2]
+      const N = rotate([n[0], n[1], n[2]])
       const base = b.count
-
-      for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-        const x = cx + nx * eN + f.u[0] * su * eU + f.v[0] * sv * eV
-        const y = cy + ny * eN + f.u[1] * su * eU + f.v[1] * sv * eV
-        const z = cz + nz * eN + f.u[2] * su * eU + f.v[2] * sv * eV
-
-        b.pos.push(x, y, z)
-        b.norm.push(nx, ny, nz)
-        b.uv.push((su * 0.5 + 0.5) * eU * 2 * TEX_PER_METRE,
-                  (sv * 0.5 + 0.5) * eV * 2 * TEX_PER_METRE)
+      faceOut(verts, n)
+      for (const p0 of verts) {
+        // UVs come off the UNROTATED local point, so a rotated voussoir keeps
+        // its stone courses running along the block rather than through it.
+        const u = p0[0] * f.u[0] + p0[1] * f.u[1] + p0[2] * f.u[2]
+        const v = p0[0] * f.v[0] + p0[1] * f.v[1] + p0[2] * f.v[2]
+        const p = rotate([p0[0], p0[1], p0[2]])
+        const y = cy + p[1]
+        b.pos.push(cx + p[0], y, cz + p[2])
+        b.norm.push(N[0], N[1], N[2])
+        b.uv.push((u + eU) * TEX_PER_METRE, (v + eV) * TEX_PER_METRE)
 
         // Baked contact shading: darken the first metre above each box's base
         // so masses sit on each other instead of floating, and lift upward
         // faces so the sky reads as the light source.
         let shade = 0.70 + 0.30 * Math.min(1, (y - minY) / 1.0)
-        if (ny > 0.5) shade = Math.min(1.12, shade + 0.10)
-        else if (ny < -0.5) shade *= 0.72
-        const t = shade * jitter
+        if (N[1] > 0.5) shade = Math.min(1.12, shade + 0.10)
+        else if (N[1] < -0.5) shade *= 0.72
+        const t = shade * jitter * lift
         b.col.push(t, t, t)
       }
+      if (verts.length === 4) {
+        b.idx.push(base, base + 1, base + 2, base, base + 2, base + 3)
+      } else {
+        b.idx.push(base, base + 1, base + 2)
+      }
+      b.count += verts.length
+    }
 
-      b.idx.push(base, base + 1, base + 2, base, base + 2, base + 3)
-      b.count += 4
+    // --- the six faces, inset by the bevel in both tangent directions ------
+    for (let a = 0; a < 3; a++) {
+      for (const s of [1, -1]) {
+        const fi = a * 2 + (s > 0 ? 0 : 1)
+        const f = FACES[fi]
+        const eU = Math.abs(f.u[0]) * h[0] + Math.abs(f.u[1]) * h[1] + Math.abs(f.u[2]) * h[2]
+        const eV = Math.abs(f.v[0]) * h[0] + Math.abs(f.v[1]) * h[1] + Math.abs(f.v[2]) * h[2]
+        const n = [0, 0, 0]; n[a] = s
+        const verts = []
+        for (const [su, sv] of QUAD) {
+          const p = [0, 0, 0]
+          p[a] = s * h[a]
+          for (let k = 0; k < 3; k++) {
+            p[k] += f.u[k] * su * (eU - bev) + f.v[k] * sv * (eV - bev)
+          }
+          verts.push(p)
+        }
+        push(verts, n, fi, 1)
+      }
+    }
+
+    if (bev <= 0.0005) return
+
+    // --- twelve edge quads, normals at 45 degrees -------------------------
+    const R2 = Math.SQRT1_2
+    for (let a = 0; a < 3; a++) {
+      for (let e = a + 1; e < 3; e++) {
+        const c = 3 - a - e            // the axis the edge runs along
+        for (const sa2 of [1, -1]) {
+          for (const sb of [1, -1]) {
+            const n = [0, 0, 0]
+            n[a] = sa2 * R2; n[e] = sb * R2
+            const at = (onA, tc) => {
+              const p = [0, 0, 0]
+              p[a] = sa2 * (onA ? h[a] : h[a] - bev)
+              p[e] = sb * (onA ? h[e] - bev : h[e])
+              p[c] = tc * (h[c] - bev)
+              return p
+            }
+            const lift = n[1] > 0.3 ? TOP_EDGE_LIFT : n[1] < -0.3 ? BOT_EDGE_DROP : 1
+            push([at(true, -1), at(true, 1), at(false, 1), at(false, -1)],
+              n, a * 2 + (sa2 > 0 ? 0 : 1), lift)
+          }
+        }
+      }
+    }
+
+    // --- eight corner triangles -------------------------------------------
+    const R3 = 1 / Math.sqrt(3)
+    for (const s0 of [1, -1]) {
+      for (const s1 of [1, -1]) {
+        for (const s2 of [1, -1]) {
+          const n = [s0 * R3, s1 * R3, s2 * R3]
+          push([
+            [s0 * h[0], s1 * (h[1] - bev), s2 * (h[2] - bev)],
+            [s0 * (h[0] - bev), s1 * h[1], s2 * (h[2] - bev)],
+            [s0 * (h[0] - bev), s1 * (h[1] - bev), s2 * h[2]],
+          ], n, s0 > 0 ? 0 : 1, s1 > 0 ? TOP_EDGE_LIFT : BOT_EDGE_DROP)
+        }
+      }
     }
   }
 
@@ -268,7 +468,93 @@ export class Level {
       this.group.add(inst)
     }
 
+    if (this.beaconAt) this.group.add(this._beacon())
+
     return this.group
+  }
+
+  /**
+   * The goal beacon: a warm light shaft standing over the observatory.
+   *
+   * Twenty islands are visible from any long air phase and, until this, not
+   * one of them was marked. taste.md asks the player to "read the route
+   * without a tutorial", and every shipped game in the genre solves that with
+   * a single unmistakable horizon cue before it solves anything else.
+   *
+   * It is drawn, not lit: additive, no depth write, and faded out inside 55 m
+   * so it is a horizon marker and never a wall of glare in the last section.
+   * There is no collider and no possible reading as a surface — a column of
+   * light is not a ledge.
+   */
+  _beacon() {
+    const { x, y, z, height, radius } = this.beaconAt
+    // A VIEW-SPACE BILLBOARD, not a cylinder, and that is not a shortcut.
+    //
+    // The first version was an additive cylinder shell, and it came back from
+    // the harness with hard black outlines down both silhouettes. The cause is
+    // the composite's contrast-adaptive sharpen: a cylinder's alpha has an
+    // INFINITE screen-space derivative at its silhouette, however soft the
+    // shader makes the middle, and a step edge in a flat sky is the one input
+    // CAS undershoots into black on. A quad expanded along the view's X axis
+    // with a gaussian across it has a smooth profile with zero value AND zero
+    // slope at both edges, so there is no edge for a sharpen filter to find.
+    const geo = new THREE.PlaneGeometry(1, 1, 1, 1)
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uColor: { value: new THREE.Color(0xffd08a) },
+        uRadius: { value: radius },
+        uHeight: { value: height },
+      },
+      vertexShader: /* glsl */`
+        uniform float uRadius;
+        uniform float uHeight;
+        varying vec2 vUv;
+        varying float vDist;
+        void main() {
+          vUv = uv;
+          // The axis in view space, then a purely horizontal spread. View
+          // space is a rigid transform of world space, so uRadius is still
+          // metres after the offset.
+          vec4 mv = modelViewMatrix * vec4(0.0, uv.y * uHeight, 0.0, 1.0);
+          mv.x += (uv.x - 0.5) * 2.0 * uRadius * mix(1.0, 1.9, uv.y);
+          vDist = -mv.z;
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */`
+        uniform vec3 uColor;
+        varying vec2 vUv;
+        varying float vDist;
+        void main() {
+          // Vertical profile: grips the roof, dissolves into the sky.
+          float a = smoothstep(0.0, 0.04, vUv.y) * (1.0 - smoothstep(0.06, 1.0, vUv.y));
+          // Across: a gaussian core inside a quartic that reaches zero value
+          // and zero slope exactly at the quad's edge.
+          float ax = abs(vUv.x - 0.5) * 2.0;
+          float w = 1.0 - ax * ax;
+          a *= exp(-ax * ax * 2.4) * w * w;
+          // Match the scene's exponential haze, but keep a floor — a beacon
+          // that the fog eats at 300 m is not a beacon.
+          float fog = exp(-pow(vDist * 0.0052, 2.0));
+          a *= mix(0.45, 1.0, fog);
+          // And get out of the way once the player has actually arrived.
+          a *= smoothstep(20.0, 60.0, vDist);
+          gl_FragColor = vec4(uColor, a * 0.62);
+        }
+      `,
+    })
+    const m = new THREE.Mesh(geo, mat)
+    m.position.set(x, y, z)
+    m.name = 'goal-beacon'
+    m.renderOrder = 10
+    // One quad whose real extent is computed in the vertex shader, so three's
+    // bounding sphere would cull it the moment the camera looks slightly off.
+    m.frustumCulled = false
+    return m
   }
 }
 
@@ -283,8 +569,23 @@ export class Level {
  * the cap overhangs and shadows the rock instead of presenting a metre of
  * grass texture down a vertical face.
  */
-const BUILT = { capKind: 'porcelain', rimKind: 'porcelain', kind: 'stone', boulderKind: 'stone' }
-const WILD = { capKind: 'moss', rimKind: 'porcelain', kind: 'stone', boulderKind: 'stone' }
+/**
+ * TERRACOTTA IS RESERVED. It appears on route-critical surfaces and nowhere
+ * else, which is why both deck presets rim with it.
+ *
+ * The art review found the one saturated hue in the palette spent on
+ * balustrade coping, colonnade cornices and scenery-island rims — decoration
+ * that carries no information — while twenty islands were visible from the
+ * vista with nothing marking which one was the route. taste.md is explicit:
+ * "Surfaces you can use are legible by color and shape alone." So the rule is
+ * now mechanical: terracotta means *the route acts here*. Route decks wear a
+ * warm band directly under the cap, vault blocks are capped in it, and every
+ * scenery island rims in plain stone. From the air the route reads as a chain
+ * of warm-rimmed islands in a field of cool ones; on the ground the same band
+ * is the landing lip you aim a jump at.
+ */
+const BUILT = { capKind: 'porcelain', rimKind: 'terracotta', kind: 'stone', boulderKind: 'stone' }
+const WILD = { capKind: 'moss', rimKind: 'terracotta', kind: 'stone', boulderKind: 'stone' }
 
 /**
  * Facet count is chosen by aspect ratio, not by taste.
@@ -298,7 +599,11 @@ const WILD = { capKind: 'moss', rimKind: 'porcelain', kind: 'stone', boulderKind
  */
 function facetsFor(lengthX, lengthZ) {
   const aspect = Math.max(lengthX, lengthZ) / Math.min(lengthX, lengthZ)
-  return aspect > 2.0 ? 1 : aspect > 1.4 ? 2 : 4
+  // 5 rather than 4 on the near-square case: the moss skirt smooths the
+  // outline it hangs off, but it cannot smooth the CAP'S TOP FACE, and from
+  // any airborne shot the top face is most of what you see. Each extra facet
+  // halves the depth of the steps in it for one more box per course.
+  return aspect > 2.0 ? 1 : aspect > 1.4 ? 2 : 5
 }
 
 /**
@@ -344,13 +649,16 @@ export function buildCourse(collision) {
   // visible from the spawn on both sides.
   deck(14, 0, 0, 30, 10.4, BUILT, { bodyDepth: 3.2, capThickness: 0.5 })
   K.colonnade(L, 5, 0, 4.0, {
-    count: 6, spacing: 4.2, height: 4.2, radius: 0.5, capKind: 'terracotta',
+    count: 6, spacing: 4.2, height: 4.2, radius: 0.5,
   })
   K.balustrade(L, 0.5, 0, -4.7, { length: 13, height: 1.0, thickness: 0.45 })
 
-  // Low blocks to run over — the vault, before you know it is a vault.
-  L.massif(20, 0.35, -2.2, 2.4, 0.8, 3.0, 'terracotta', 'porcelain')
-  L.massif(24, 0.5, 2.4, 2.4, 1.1, 3.0, 'terracotta', 'porcelain')
+  // Low blocks to run over — the vault, before you know it is a vault. The
+  // CAP is terracotta and the body is sandstone, which is the reserved-hue
+  // rule applied literally: the accent goes on the face you put a hand or a
+  // foot on, not on the mass underneath it.
+  L.massif(20, 0.35, -2.2, 2.4, 0.8, 3.0, 'porcelain', 'terracotta')
+  L.massif(24, 0.5, 2.4, 2.4, 1.1, 3.0, 'porcelain', 'terracotta')
 
   // The premise, hung off the edge the player can now see: water falling out
   // of a garden into open sky.
@@ -401,9 +709,9 @@ export function buildCourse(collision) {
   }
   // The vault line itself: three carved ledges, 12 m across so there is no
   // running around them. Mantle heights 0.9 / 1.1 / 0.7 are unchanged.
-  L.massif(78, 0.45, 0, 1.6, 0.9, 12, 'terracotta', 'porcelain')
-  L.massif(84, 0.55, 0, 1.6, 1.1, 12, 'terracotta', 'porcelain')
-  L.massif(90, 0.35, 0, 1.6, 0.7, 12, 'terracotta', 'porcelain')
+  L.massif(78, 0.45, 0, 1.6, 0.9, 12, 'porcelain', 'terracotta')
+  L.massif(84, 0.55, 0, 1.6, 1.1, 12, 'porcelain', 'terracotta')
+  L.massif(90, 0.35, 0, 1.6, 0.7, 12, 'porcelain', 'terracotta')
   K.balustrade(L, 75, 0, 6.5, { length: 18, height: 1.05, thickness: 0.45 })
   K.vineCurtain(L, 76, -0.5, -6.9, { length: 16, drop: 5.5 })
   K.waterfall(L, 93.5, -0.45, -6.6, { height: 28, width: 2.2 })
@@ -422,13 +730,45 @@ export function buildCourse(collision) {
   // dead flat over the full 32 m. A wall-run does not survive a pilaster every
   // four metres, so every piece of ornament goes BEHIND the face, ABOVE the
   // cornice, or BELOW the plinth — never proud of the running plane.
-  L.solid(102, 4.0, -4.35, 32, 12, 0.7, 'brass')      // the run face, z = -4.0
+  //
+  // The plane is broken in three ways that all respect that constraint.
+  // (1) The run face is emitted as alternating 5.4 m bays and 0.6 m piers, all
+  //     coplanar and all brass, differing only in baked tint. The collider
+  //     union is bit-identical to the single 32 m box it replaces, and the
+  //     chamfer between neighbours draws a 9 cm reveal down the wall every
+  //     6 m — articulation the eye reads, and that a shoulder cannot.
+  // (2) A flush string course at y≈8, again a tint change and not a profile.
+  // (3) Everything with real depth is stacked ABOVE the cornice at y=10.8,
+  //     where a wall-runner has already left the wall.
+  // Field height 10.1 m (y -2.0 .. 8.1); the two flush courses above it carry
+  // the run face on up to y=10 so the collider union is unchanged.
+  const WALL_X0 = 86.0, WALL_JAMB = 1.2, WALL_BAYS = 5
+  const bayW = (32 - WALL_JAMB * 2) / WALL_BAYS       // 5.92 m
+  const pierW = 0.62
+  for (let i = 0; i < WALL_BAYS; i++) {
+    const x0 = WALL_X0 + WALL_JAMB + i * bayW
+    L.solid(x0 + (bayW - pierW) / 2, 3.05, -4.35, bayW - pierW, 10.1, 0.7, 'brass')
+    L.solid(x0 + bayW - pierW / 2, 3.05, -4.35, pierW, 10.1, 0.7, 'brass', { shade: 0.82 })
+  }
+  // Entry and exit jambs. Terracotta is the reserved route hue and this is the
+  // one place on a 32 m brass wall where it belongs: it names the door, at the
+  // two metres of wall that are approach and dismount rather than run.
+  L.solid(86.6, 3.05, -4.35, 1.2, 10.1, 0.7, 'terracotta')
+  L.solid(117.4, 3.05, -4.35, 1.2, 10.1, 0.7, 'terracotta')
+  L.solid(102, 8.55, -4.35, 32, 0.9, 0.7, 'brass', { shade: 1.12 })  // string course
+  L.solid(102, 9.5, -4.35, 32, 1.0, 0.7, 'brass')                    // frieze
   L.solid(102, 3.4, -5.3, 32, 13.2, 1.2, 'brass')     // back mass
   L.solid(102, -1.6, -5.0, 32.6, 1.4, 2.4, 'brass')   // plinth, below the void lip
-  L.solid(102, 10.4, -5.0, 33, 0.8, 2.6, 'terracotta') // cornice, 40 cm proud at y=10
-  L.solid(102, 6.4, -6.1, 32.4, 0.5, 0.6, 'terracotta') // back string course
+  L.solid(102, 10.4, -5.0, 33, 0.8, 2.6, 'porcelain')  // cornice, 40 cm proud at y=10
+  L.solid(102, 6.4, -6.1, 32.4, 0.5, 0.6, 'brass')     // back string course
   for (const bx of [88, 96, 104, 112]) {
     L.massif(bx, 3.0, -6.3, 1.8, 14, 1.0, 'porcelain') // back buttresses
+  }
+  // Pilaster caps on the skyline. These stand 0.35 m proud and are the only
+  // thing on this wall that breaks its profile — legal because their feet are
+  // at y=10.8, four metres above the highest reachable wall-run.
+  for (const px of [89.5, 96.5, 107.5, 114.5]) {
+    L.massif(px, 12.0, -5.0, 1.5, 2.6, 3.3, 'porcelain', 'brass')
   }
   // The machinery that supposedly drives the wall, mounted where a wall-runner
   // can never clip it: teeth start at y ≈ 10.8, above the cornice.
@@ -452,7 +792,16 @@ export function buildCourse(collision) {
   L.checkpoint(116, 1.4, -3.0, 'the crossing')
   // Anchor slung out over the void on a bracket, so the grapple line into the
   // crossing exists in space rather than inside the cornice.
-  K.lanternPost(L, 102, 10.8, -5.0, { post: false, reach: 1.6, axis: 'z', height: 0.9 })
+  // Three brackets rather than one, on the new pilaster rhythm. A 32 m
+  // crossing with a single mid-span anchor gives the grapple exactly one
+  // moment; three turn the wall into a line a confident player can swing the
+  // whole length of without ever touching the face. They hang 1.6 m out over
+  // the void on the -Z side, so the anchor volume is in the flight path
+  // instead of buried inside the cornice, and none of them has a floor
+  // footprint to trip a wall-runner on.
+  for (const ax of [91, 102, 113]) {
+    K.lanternPost(L, ax, 10.8, -5.0, { post: false, reach: 1.6, axis: 'z', height: 0.9 })
+  }
   K.lanternPost(L, 112, 0, -7.4, { height: 3.2 })
 
   // ---- Section 5: the slide. A ceiling too low to run under. ------------
@@ -499,8 +848,8 @@ export function buildCourse(collision) {
     L.solid(px, -1.5, zc, 9.6, 6.0, 1.4, 'brass')        // lower course
     L.solid(px, 4.0, zc, 9.2, 5.0, 1.4, 'brass')         // middle course
     L.solid(px, 8.5, zc, 8.6, 4.0, 1.4, 'brass')         // upper course
-    L.solid(px, 10.9, zc, 9.4, 0.8, 2.2, 'terracotta')   // capital, above the run
-    L.solid(px, 3.2, zc - dir * 0.85, 9.4, 0.4, 0.5, 'terracotta') // outboard band
+    L.solid(px, 10.9, zc, 9.4, 0.8, 2.2, 'porcelain')    // capital, above the run
+    L.solid(px, 3.2, zc - dir * 0.85, 9.4, 0.4, 0.5, 'brass') // outboard band
     K.gearWheel(L, px, 6.4, zc - dir * 0.95, {
       radius: 2.6, plane: 'xy', spokes: 6, solidRim: true, detail: 1,
     })
@@ -534,7 +883,7 @@ export function buildCourse(collision) {
   L.solid(222, 5.75, 0, 13.8, 0.4, 9.2, 'porcelain')
   for (const cz of [-4.2, 4.2]) {
     K.colonnade(L, 217.2, 6.4, cz, {
-      count: 4, spacing: 3.6, height: 3.6, radius: 0.48, capKind: 'terracotta',
+      count: 4, spacing: 3.6, height: 3.6, radius: 0.48,
     })
     K.lanternPost(L, 220.8, 11.86, cz, {
       post: false, reach: cz < 0 ? 2.4 : -2.4, axis: 'z', height: 0.8,
@@ -628,6 +977,11 @@ export function buildCourse(collision) {
   K.lanternPost(L, 327.5, OBS_Y, 5.4, { height: 3.4 })
 
   L.finish = new THREE.Vector3(329.5, OBS_Y + 0.8, 0)
+  // The goal beacon stands on the dome, not on the finish trigger 8 m short of
+  // it: the shaft has to name the LANDMARK a player picks out of a horizon of
+  // twenty islands, and it must not stand in the middle of the last run-up.
+  // 3.2 m across reads about 28 px wide at 200 m — findable, not dominant.
+  L.beaconAt = { x: 338, y: OBS_Y + 6, z: 0, height: 108, radius: 3.6 }
 
   // ---- Scenery: a floating archipelago, per docs/art-direction.md -------
   // The reference has no ground plane and no city — islands drift in open sky
@@ -645,7 +999,11 @@ export function buildCourse(collision) {
 
   const isle = (x, y, z, w, detail) => {
     const d = w * (0.78 + rand() * 0.44)
-    const stone = rand() > 0.45 ? 'stone' : 'terracotta'
+    // NO TERRACOTTA OUT HERE. Scenery islands used to rim in it at random,
+    // which is precisely what emptied the accent of meaning: if half the
+    // horizon wears the route colour, the route colour is just a colour.
+    // Sandstone-vs-rock is enough variation for something 40 m off the line.
+    const stone = rand() > 0.45 ? 'stone' : 'porcelain'
     K.drumPlatform(L, x, y, z, {
       radius: w / 2,
       squash: d / w,
@@ -724,10 +1082,12 @@ export function buildCourse(collision) {
     const y = 30 - rand() * 150
     const w = 22 + rand() * 46
     isle(x, y, z, w, 0)
-    // The occasional distant spire, like the reference's far towers.
+    // The occasional distant spire, like the reference's far towers. `bevel: 0`
+    // across the far band: a 4 cm chamfer at 400 m is a fraction of a pixel,
+    // so it is 32 wasted triangles per box and nothing else.
     if (rand() > 0.66) {
       L.decor(x + (rand() - 0.5) * w * 0.4, y + 12 + rand() * 8, z,
-        w * 0.16, 22 + rand() * 26, w * 0.16, 'terracotta')
+        w * 0.16, 22 + rand() * 26, w * 0.16, 'porcelain', { bevel: 0 })
     }
   }
 

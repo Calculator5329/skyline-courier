@@ -124,6 +124,13 @@ export function selftest(renderer = null, opts = {}) {
       aerialDensity: pipeline.aerialDensity,
       aerialFloor: pipeline.aerialFloor,
       aerialRim: pipeline.aerialRim,
+      aerialChroma: pipeline.aerialChroma,
+      // The warm/cool split, which is what art-direction.md calls the single
+      // most defining characteristic of the look. Reported next to the budget
+      // because the two are the same argument: the split only exists in the
+      // ambient, so how much ambient there is decides how much split there is.
+      ambientSplit: pipeline.ambientSplit,
+      meterSkyWeight: pipeline.meterSkyWeight,
       skyEnvOk: pipeline.skyEnv ? pipeline.skyEnv.ok : false,
     },
     targets,

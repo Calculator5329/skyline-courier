@@ -89,7 +89,16 @@ float scAmbientOcclusion( vec3 P, vec3 N, float depth, float jitter ) {
   // footprint is most of the screen, which is both slow (cache misses on every
   // tap) and wrong (it stops being *ambient* occlusion and becomes shading).
   vec2 uvR = vec2( uProj[0][0], uProj[1][1] ) * ( radius / ( 2.0 * max( depth, 0.05 ) ) );
-  uvR = min( uvR, vec2( uAO.z ) );
+  // Clamp by the LARGER axis and scale both, rather than min()ing each
+  // independently. Those two are not the same operation: uv is anisotropic on a
+  // 16:9 frame, so an independent min turns the sampling disc — which the
+  // projection terms above went to the trouble of making circular in WORLD
+  // space — into an ellipse whose short axis is vertical. Every horizontal
+  // crease then gets sampled twice as far as every vertical one, which is
+  // exactly the sort of bug that reads as "the AO is weak" rather than as "the
+  // AO is wrong".
+  float over = max( uvR.x, uvR.y ) / max( uAO.z, 1e-4 );
+  if ( over > 1.0 ) uvR /= over;
 
   float occ = 0.0;
   for ( int i = 0; i < SC_AO_TAPS; i ++ ) {
@@ -261,29 +270,44 @@ export class ContactShadows {
       },
       uAO: {
         value: new THREE.Vector4(
-          // intensity 1.55. Above 1 because the estimator is a single-bounce
-          // visibility sum over 8 taps and systematically UNDER-reports a real
-          // cosine-weighted integral; 1.55 lands a right-angled wall/floor
-          // junction at roughly 0.5 occlusion, which is what the analytic answer
-          // for a quarter-space is. Deliberately the last knob turned to deepen
-          // the frame, rather than another cut to the ambient budget: AO darkens
-          // CREASES, which adds form, whereas cutting ambient darkens whole
-          // faces, which at some point stops being contrast and starts being an
-          // unreadable route.
-          1.55,
-          // radius 0.7 m. Sized to the architecture, not to the screen: the
-          // features this has to draw are the 0.3-0.6 m offsets of a moss lip,
-          // a balustrade base and a stair nosing. A 2 m radius would turn the
-          // whole scene into soft dirt in the corners and stop describing
-          // anything.
-          0.7,
-          // max screen radius, 0.055 uv. See the clamp in the shader.
-          0.055,
-          // bias 0.12, i.e. discard occluders within ~7 degrees of the tangent
-          // plane. That is the band where depth quantisation on a flat floor
-          // impersonates an occluder, and without it large flat surfaces come
-          // back with a faint grey wash instead of white.
-          0.12
+          // intensity 2.6, up from 1.55, because 1.55 did not do what its own
+          // comment claimed. MEASURED off the debug view (pipeline.debugView =
+          // 2) on the closeup shot: the sandstone/brass wall-floor junction came
+          // back at 0.75-0.78 visibility, not the 0.5 a quarter-space analytically
+          // subtends. A quarter of a stop of darkening at a right-angled
+          // junction is invisible once it has been through a 15%-of-key ambient
+          // term, an AgX shoulder and a grade — which is precisely the "stacked
+          // masses read as decals" note the art director filed.
+          //
+          // Still the right knob to turn rather than another cut to the ambient
+          // budget: AO darkens CREASES, which adds form, whereas cutting ambient
+          // darkens whole faces, which at some point stops being contrast and
+          // starts being an unreadable route.
+          2.6,
+          // radius 0.9 m, up from 0.7. Sized to the architecture, not to the
+          // screen: the features this has to draw are the 0.3-0.6 m offsets of a
+          // moss lip, a balustrade base and a stair nosing, and a radius equal to
+          // the feature size only ever catches half of it. A 2 m radius would
+          // turn the whole scene into soft dirt in the corners and stop
+          // describing anything; 0.9 covers the feature and its shoulder.
+          0.9,
+          // max screen radius, 0.10 uv, up from 0.055.
+          //
+          // This clamp, not the radius above, was the binding constraint in the
+          // near field: at 2 m the 0.7 m radius wanted 0.12 uv horizontally and
+          // was cut to 0.055, i.e. an effective world radius of ~0.3 m — a third
+          // of what the tuning above says it is, exactly where the player is
+          // looking. 0.10 restores it without letting a pixel 30 cm from a wall
+          // sample a quarter of the screen.
+          0.10,
+          // bias 0.16, up from 0.12: discard occluders within ~9 degrees of the
+          // tangent plane rather than ~7. Raised in step with the intensity
+          // above, and for the same measurement: half the frame was sitting in
+          // the 0.80-0.90 band, which is not crease occlusion, it is a grey
+          // wash over flat surfaces from depth quantisation. Intensity alone
+          // would have deepened the wash along with the creases; this is what
+          // keeps an open deck white so that a corner reads as a corner.
+          0.16
         ),
       },
     })

@@ -40,7 +40,10 @@ uniform vec4 uParams;     // x prefilter(0/1), y threshold, z knee, w fireflyCla
 
 varying vec2 vUv;
 
-vec3 fetch( vec2 uv ) { return max( texture2D( tSrc, uv ).rgb, vec3( 0.0 ) ); }
+// Sanitised: this is the prefilter, the first thing that reads the scene
+// buffer, and a NaN that gets into the pyramid here is smeared over a sixth of
+// the frame by the time it comes back out of the upsample. See scSanitize.
+vec3 fetch( vec2 uv ) { return max( scSanitize( texture2D( tSrc, uv ).rgb ), vec3( 0.0 ) ); }
 
 // Karis weight: average in 1/(1+L) space so a single 100x pixel contributes
 // like a 1x one. Without it, one specular sparkle on a brass rail pumps an

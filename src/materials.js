@@ -31,25 +31,50 @@ import { surfaceTextures } from './materials/textures.js'
  */
 
 export const PALETTE = {
-  // Warm carved sandstone. The neutral ground you run along — sandy/peach, and
-  // deliberately NOT a pale cream: at golden hour a cream surface goes white.
-  porcelain: 0xe7d3ac,
+  // Warm carved sandstone. Sandy/peach and deliberately NOT a pale cream: at
+  // golden hour a cream surface goes white. Desaturated from 0xe7d3ac at the
+  // same value — sandstone is the largest area in almost every frame, so it is
+  // the biggest single contributor to the measured "84% of pixels inside one
+  // 20-degree hue bin", and the cheapest thing it can do is shout less.
+  porcelain: 0xe8d2b0,
   /**
-   * The signature material, and the wall-run affordance. Hue ~45 degrees: a
-   * true yellow-gold. It used to be 39 and terracotta was 21, which is inside
-   * the range a warm grade can close entirely — the art review found brass and
-   * terracotta indistinguishable in-frame, and that is a legibility bug, not a
-   * taste note.
+   * The signature material, and the wall-run affordance.
+   *
+   * A GREEN-gold, not a red-gold: green channel essentially equal to red. This
+   * is not the colour real brass is, it is the colour an F0 has to be for the
+   * REFLECTION to land in the gold band, because the sun and sky arrive with
+   * green at ~0.6 of red and blue at ~0.2 and multiply every surface down
+   * toward orange. The measured failure was brass and sandstone both landing at
+   * hue 30 in closeup.png — the shot whose entire job is to argue one against
+   * the other. See materials/textures.js `brass` for the arithmetic.
    */
-  brass: 0xd9b23f,
-  // Lush and saturated. Vegetation is a major element here, not an accent.
-  moss: 0x4a7a36,
-  // Fired orange, pushed to hue ~15 so it is unmistakably red-orange next to
-  // brass rather than a slightly darker version of it.
-  terracotta: 0xc4552f,
-  // The boulder rock under the islands: green-grey. The one built surface
-  // allowed to be genuinely cool, and the counterweight to the warm masonry.
-  stone: 0x8f9280,
+  brass: 0xd7bf44,
+  /**
+   * Lush and saturated, and a full hue wedge greener than the old 0x4a7a36.
+   * The review measured the moss deck at value 0.17 / hue 62 (khaki) against
+   * sandstone at 0.44 two metres below it. Half the fix is here — linear green
+   * up from 0.19 to 0.40 — and half is the wrapped-diffuse term in
+   * materials/shader.js, because a horizontal surface under a sun at 10 degrees
+   * elevation gets almost no direct light by cosine law no matter how bright
+   * its albedo is.
+   */
+  moss: 0x67ad55,
+  // Fired orange at hue ~14, saturated hard: this must be unmistakably
+  // RED-orange next to brass's gold, not a slightly darker version of it.
+  terracotta: 0xc34a26,
+  /**
+   * The boulder rock under the islands, and — via level.js — a good deal of the
+   * paving. The one surface allowed to be genuinely cool, and the counterweight
+   * to the warm masonry.
+   *
+   * Re-pitched from 0x8f9280: that sat at hue 70 with saturation 0.12, and the
+   * grade multiplies saturation hard enough (measured 0.12 in, 0.69 out) that
+   * it came back as OLIVE — a yellow-green paving deck reading as a third
+   * substance rather than as cool rock. 0x8e968b is hue 96 at saturation 0.07:
+   * greener in hue so the amplification lands on green rather than yellow, and
+   * flatter in saturation so the amplification has less to work with.
+   */
+  stone: 0x8e968b,
   // Golden-hour haze rather than a clear blue zenith.
   sky: 0xe9b57a,
   ink: 0x2b2622,
@@ -67,10 +92,14 @@ export const PALETTE = {
  * `depth` is the metres of relief the height field spans, so it is checkable:
  * brass at 0.014 means the tallest gear tooth stands 14 mm off the plate.
  *
- * `relief`, `detile`, `wedge`, `topDust`, `sunLobe` and `cavity` are the knobs
- * that decide how much of the macro layer a material pays for; 0 compiles the
- * feature out entirely. Everything else is documented in materials/shader.js.
+ * `relief`, `detile`, `wedge`, `topDust`, `sunLobe`, `cavity`, `glint`, `wrap`
+ * and `worldUv` are the knobs that decide how much of the macro layer a
+ * material pays for; 0 compiles the feature out entirely. Everything else is
+ * documented in materials/shader.js.
  */
+/** level.js's TEX_PER_METRE. The world-planar uv path must match it exactly or
+ *  the material silently changes texel density relative to every other one. */
+const TEX_PER_METRE = 0.42
 const SURFACE = {
   porcelain: {
     /**
@@ -84,7 +113,12 @@ const SURFACE = {
     // Carved ashlar: bevelled arrises and chisel tooling over ~4 cm of relief.
     depth: 0.04,
     cavityRadius: 14,
-    cavityGain: 3.4,
+    // 2.8, down from 3.4: the course table widened the joints and deepened the
+    // arris chamfers, and cavity is measured against the local mean — so more
+    // of the tile now counts as "in a pocket" and the cool-zenith tint that
+    // rides on it took the whole deck green. The gain compensates for the
+    // geometry change; the tint per unit of pocket is unchanged.
+    cavityGain: 2.8,
     // Sandstone is carved and slumped: the strongest relief of the built set,
     // so a 30 m terrace reads as tooled masses rather than one flat plane.
     relief: 1.1,
@@ -118,6 +152,11 @@ const SURFACE = {
     // and the arrises light up. That skim is most of what "carved" looks like.
     sunLobe: 0.30,
     cavity: 0.72,
+    // Dielectric: F0 is 4%, so the horizon band comes back as a faint sheen on
+    // a wet-looking arris rather than as a bright sweep. Deliberately an order
+    // of magnitude under brass — that GAP is the material separation.
+    glint: 0.10,
+    specAo: 0.60,
     shadeTint: 0.55,
   },
   brass: {
@@ -157,7 +196,23 @@ const SURFACE = {
     // The whole point. Brass is the only material here whose appearance is
     // ~100% reflection, so it takes the strongest sun lobe by a wide margin.
     sunLobe: 0.85,
+    /**
+     * The horizon glint, and the single biggest change to this material.
+     *
+     * The sun lobe above only fires on faces that mirror the sun; every other
+     * brass face had nothing sharp in the environment to reflect, which is why
+     * a 200x200 patch of "polished brass" in crossing.png spanned 24 luma. 1.5
+     * is high on purpose: this is the term that has to carry a metal wall from
+     * every angle the sun lobe does not, and a wall-run's directional parallax
+     * comes entirely out of watching this band sweep along the plate.
+     */
+    glint: 1.5,
     cavity: 0.55,
+    // Strong: on a material whose diffuse term is zero by construction, killing
+    // reflected radiance in the pockets is the ONLY way to get a dark end, and
+    // without a dark end there is no "polished golden highs with darker
+    // recesses" — just an evenly bright orange plane.
+    specAo: 0.80,
     // Brass in shadow goes green-gold, not red — that is the classic look of
     // the alloy and it is also what keeps a sun-away brass wall from landing on
     // top of terracotta's hue, which is the legibility failure the review named.
@@ -177,6 +232,31 @@ const SURFACE = {
     // Kept: moss has no registered detail, only soft organic clumps, so an
     // offset albedo sample reads as more clumping rather than as a misprint.
     detile: 0.95,
+    /**
+     * WORLD-PLANAR UV. A moss cap is assembled from several boxes and each one
+     * brings its own uv origin, so the mat stepped at every box join — the
+     * review found exactly that seam across the top of the gaps deck. Sampling
+     * off the world position makes the whole cap one continuous mat.
+     *
+     * Moss is the only material that takes this: everything else has registered
+     * detail (ashlar courses, roof laps, brass bands) that must stay keyed to
+     * the box it was laid out on.
+     */
+    worldUv: TEX_PER_METRE,
+    /**
+     * WRAPPED DIFFUSE. See WRAP in materials/shader.js. The sun sits at 9.8
+     * degrees elevation, so a flat moss deck facing straight up collects
+     * cos(80) = 0.17 of the key by Lambert and the review measured the result
+     * at value 0.17 against sandstone's 0.44. At w = 0.4 that direct term goes
+     * to 0.41 — foliage is translucent and genuinely does pick up light well
+     * past its terminator, so this is a correction, not a cheat.
+     */
+    wrapWidth: 0.40,
+    wrap: 0.85,
+    // Back-lit transmission on the overhanging lip. A cap edge against the void
+    // with the sun behind it glows, and it is the most recognisable vegetation
+    // cue in the reference art.
+    backlit: 0.55,
     macroAlbedo: 0.34,
     macroRough: 0.12,
     macroHue: 0.50,
@@ -217,6 +297,9 @@ const SURFACE = {
     topRough: 0.18,
     // A fired glaze is the second-shiniest thing in the world after brass.
     sunLobe: 0.34,
+    // A glaze is still a dielectric, so the band comes back as a wet sheen on
+    // the tile crowns rather than as brass's sweep.
+    glint: 0.22,
     cavity: 0.80,
     // The warmest albedo in the set takes the strongest cool bias: a red-orange
     // wall whose shadow side stays red-orange is the whole "one hue" problem.

@@ -59,6 +59,25 @@ export const TUNING = {
   airAccel: 42,
   airWishSpeed: 2.6,       // the strafe-gain cap — small on purpose
 
+  // --- air steering -------------------------------------------------------
+  // `airWishSpeed` alone gives Quake air control: it can only ADD speed along
+  // the wish direction, up to a 2.6 m/s projection. That is a fine skill
+  // ceiling and a terrible steering wheel — at 20 m/s it can barely bend the
+  // arc, so a jump feels committed the instant you leave the ground.
+  // (Ethan: "you're like forced into whatever direction you're jumping and
+  // you can't redirect like mid jump".)
+  //
+  // So steering is a separate mechanism: rotate the existing horizontal
+  // velocity toward where the player is steering, at a bounded turn rate,
+  // WITHOUT changing its magnitude. It cannot create or destroy speed, so the
+  // strafe-gain ceiling above is untouched — it only decides which way the
+  // speed you already earned is pointing.
+  airSteerRate: 4.2,       // radians/second at sprint speed
+  // Faster travel turns a wider arc, which is both physically right and what
+  // stops a 34 m/s grapple exit from hairpinning. Floored so that even at top
+  // speed the player is never a passenger.
+  airSteerMinScale: 0.45,
+
   jumpSpeed: 8.6,
   coyoteTime: 0.12,
   jumpBuffer: 0.14,
@@ -68,6 +87,15 @@ export const TUNING = {
   // a fast run feeling committed instead of cautious.
   airJumps: 1,
   airJumpSpeed: 7.6,
+  // How far a double jump may swing your heading, in radians. This used to be
+  // unbounded: the air jump ASSIGNED your full current speed to the steering
+  // direction, so tapping A at 20 m/s fired you sideways at 20 m/s. (Ethan:
+  // "when you jump off to one side it like transfers your speed all the way to
+  // that one side and you just get launched off to the side".) ~50 degrees is
+  // enough to feel like a genuine course correction and far short of a
+  // right-angle catapult. Expressed as a blend fraction toward the wish
+  // heading: 0 keeps your current line exactly, 1 is the old catapult.
+  airJumpSteer: 0.5,
 
   slideMinSpeed: 5.0,
   slideBoost: 2.4,
@@ -118,6 +146,17 @@ export const TUNING = {
   climbTime: 0.5,
   climbMinSpeed: 5.5,
   climbCooldown: 0.5,
+  // A wall you could simply step onto is a vault, not a climb. This must stay
+  // above `vaultMaxHeight` (1.45) or the two systems fight over the same lip.
+  //
+  // Without the gate the climb won that fight every single time, because the
+  // climb *probe* reaches `wallReach` + radius = 0.89 m ahead of the body while
+  // the vault only sees contacts the capsule is actually touching — so at
+  // 11 m/s the climb fires ~0.05 s before the vault can even be considered.
+  // Measured: sprinting into a 0.60 m ledge played a vertical wall-run and
+  // threw the player 1.75 m into the air. Every kerb, planter, stair nosing and
+  // parapet in the course did that.
+  climbMinWallHeight: 1.55,
 
   // --- air dash (Mirror's Edge "shift" / Forspoken flow) ----------------
   // Punchier and longer-reaching, paid for with a longer cooldown: a dash you
@@ -143,6 +182,18 @@ export const TUNING = {
   grappleReleaseBoost: 1.14,
   grappleCooldown: 0.7,
   grappleArriveDist: 3.2,
+  // Grace before "I have landed, drop the line" can fire.
+  //
+  // The overwhelmingly common way to use the cuff is to fire it while running
+  // along a roof — and the release test includes `this.grounded`, so the shot
+  // was cancelled on the very next frame, before the pull had moved anyone. The
+  // player saw the reticle light up, pressed F, and nothing happened. 0.25 s is
+  // long enough for the pull to get the courier off their feet and far too
+  // short to keep the line attached after a genuine landing.
+  grappleArmTime: 0.25,
+  // Upward pop the moment the line bites, so the pull starts from the air
+  // rather than dragging the capsule along the roof it was just standing on.
+  grappleLaunch: 2.6,
 
   maxSpeed: 34,
 }
@@ -172,6 +223,7 @@ export class Player {
     this.dashReady = true
     this.grappling = false
     this.grappleTimer = 0
+    this.grappleArm = 0
     this.grappleCooldown = 0
     this.grappleAnchor = new THREE.Vector3()
     /** Populated by the level: brass anchor points the cuff can latch onto. */
@@ -214,7 +266,7 @@ export class Player {
     this._probe = new THREE.Vector3()
     this._hitWall = false
     this._wallTop = 0
-    this._wallHit = { found: false, nx: 0, ny: 0, nz: 0, side: 0 }
+    this._wallHit = { found: false, nx: 0, ny: 0, nz: 0, side: 0, top: -Infinity }
   }
 
   /**
@@ -227,6 +279,10 @@ export class Player {
     const T = TUNING
     const hit = this._wallHit
     hit.found = false
+    // Highest surface among everything the probe touched. The climb gate needs
+    // it to tell a wall from a lip, so the scan can no longer bail on the first
+    // match — but it still allocates nothing and still ends after one resolve.
+    hit.top = -Infinity
 
     this._probe.copy(this.position)
     this._probe.x += dx * T.wallReach
@@ -234,13 +290,16 @@ export class Player {
 
     const contacts = this.world.resolve(this._probe, T.radius, this.height, this._scratch)
     for (let i = 0; i < contacts.length; i++) {
-      const n = contacts[i].normal
+      const c = contacts[i]
+      const n = c.normal
       if (Math.abs(n.y) >= 0.45) continue
       // A genuine wall in that direction faces back toward us.
       if (n.x * dx + n.z * dz >= 0) continue
-      hit.found = true
-      hit.nx = n.x; hit.ny = n.y; hit.nz = n.z; hit.side = side
-      return hit
+      if (!hit.found) {
+        hit.found = true
+        hit.nx = n.x; hit.ny = n.y; hit.nz = n.z; hit.side = side
+      }
+      if (c.top > hit.top) hit.top = c.top
     }
     return hit
   }
@@ -294,6 +353,21 @@ export class Player {
     this.height = TUNING.standHeight
     this.wallTimer = TUNING.wallRunTime
     this.slideGrace = 0
+    // Every in-flight ability dies with the body. A respawn used to carry the
+    // grapple, dash and climb across the cut: fall off the world mid-grapple
+    // and you reappeared at the checkpoint still on the line, and were promptly
+    // yanked back toward the anchor you had just died under. Cheap to clear,
+    // and the alternative is a bug that only shows up on the worst run.
+    this.grappling = false
+    this.grappleTimer = 0
+    this.grappleArm = 0
+    this.dashTimer = 0
+    this.climbTimer = 0
+    this.airJumpsLeft = TUNING.airJumps
+    this.dashReady = true
+    this.coyote = 0
+    this.jumpBuffered = 0
+    this.footDistance = 0
   }
 
   update(dt, input, yaw, pitch = 0) {
@@ -328,12 +402,15 @@ export class Player {
     this._updateStance(input)
     this._updateAbilities(dt, input, wishing)
 
-    if (this.dashTimer > 0) {
-      // A dash owns the player's velocity outright for its duration. Letting
-      // ground friction and the normal accelerate() run during it immediately
-      // drags the burst back down to sprint speed, so the dash "fires" but
-      // nothing visibly happens — which is exactly what a broken dash looks
-      // like from the outside.
+    if (this.dashTimer > 0 || this.grappling) {
+      // A dash — and a live grapple line — owns the player's velocity outright.
+      // Letting ground friction and the normal accelerate() run during one
+      // immediately drags the burst back down to sprint speed, so the ability
+      // "fires" but nothing visibly happens, which is exactly what a broken
+      // ability looks like from the outside. The grapple belongs here for the
+      // same reason plus one of its own: a line fired from a rooftop grazes the
+      // roof for a frame or two, and routing those frames to `_groundMove` skips
+      // the pull entirely.
       this.coyote = T.coyoteTime
       this._airMove(dt, input, wishing)
     } else if (this.grounded) {
@@ -505,7 +582,30 @@ export class Player {
       if (this.wallTimer <= 0) this._detachWall()
     }
 
-    if (wishing) accelerate(vel, this._wish, T.airWishSpeed, T.airAccel, dt)
+    if (wishing) {
+      // Two independent mechanisms, deliberately kept separate:
+      //
+      //   accelerate() can only ADD speed along the wish direction, capped at
+      //   airWishSpeed. That is the strafe-gain skill ceiling.
+      //
+      //   steerHorizontal() only ROTATES the speed already there. That is the
+      //   steering wheel, and it is what makes a jump feel controllable rather
+      //   than committed.
+      //
+      // Keeping them apart means adding steering cannot accidentally become a
+      // speed exploit: no amount of wiggling the stick creates velocity.
+      accelerate(vel, this._wish, T.airWishSpeed, T.airAccel, dt)
+
+      // Wall-running has its own along-wall steering and must not be fought.
+      if (!this.wallRunning) {
+        const speed = Math.hypot(vel.x, vel.z)
+        const scale = Math.max(
+          T.airSteerMinScale,
+          Math.min(1, T.sprintSpeed / Math.max(speed, 1)),
+        )
+        steerHorizontal(vel, this._wish, T.airSteerRate * scale, dt)
+      }
+    }
   }
 
   /**
@@ -553,18 +653,33 @@ export class Player {
 
     if (this.grappling) {
       this.grappleTimer -= dt
+      this.grappleArm = Math.max(0, this.grappleArm - dt)
       const reached = this.position.distanceTo(this.grappleAnchor) < T.grappleArriveDist
       // Release on: letting go, running out of line, arriving, or landing.
-      if (!input.grappleHeld || this.grappleTimer <= 0 || reached || this.grounded) {
+      // The landing test only counts once the line has had `grappleArmTime` to
+      // pull the courier off their feet — otherwise firing from a rooftop, the
+      // normal case, cancelled itself on the next frame.
+      const landed = this.grounded && this.grappleArm <= 0
+      if (!input.grappleHeld || this.grappleTimer <= 0 || reached || landed) {
         this._releaseGrapple(reached)
       }
     } else if (input.grapplePressed && this.aimedAnchor) {
       this.grappling = true
       this.grappleTimer = T.grappleMaxTime
+      this.grappleArm = T.grappleArmTime
       this.grappleAnchor.copy(this.aimedAnchor)
       this.grappleCooldown = T.grappleCooldown
       this.dashReady = true          // latching on refreshes the dash
       this.airJumpsLeft = T.airJumps
+      // The cuff yanks you off the roof. Without this the capsule stayed in
+      // ground contact, took `_groundMove` instead of the pull, and the shot
+      // read as a dead button.
+      this.grounded = false
+      if (this.velocity.y < T.grappleLaunch) this.velocity.y = T.grappleLaunch
+      // The climb branch in `_airMove` runs ahead of the grapple branch and
+      // returns, so a line fired off a wall you are already running up would
+      // otherwise be swallowed until the climb timed out.
+      this.climbTimer = 0
       this._detachWall()
       this.events.push({ type: 'grapple', speed: this.speed })
     }
@@ -677,12 +792,22 @@ export class Player {
       // velocity gives wildly different heights depending on when you tapped,
       // which makes it unreadable. A flat reset is always the same jump.
       this.velocity.y = T.airJumpSpeed
-      // Steering into the second jump redirects it — this is the bit that
-      // makes it feel like an ability rather than a second Space press.
+      // Steering into the second jump redirects it — but only PART of the way.
+      //
+      // This used to assign the full current speed to the wish direction,
+      // which meant a double jump was a right-angle catapult: carrying 20 m/s
+      // forward and tapping A launched you sideways at 20 m/s, off the course.
+      // Now it swings the heading by at most `airJumpSteer` and preserves the
+      // magnitude, so it reads as a course correction rather than a slingshot.
       if (this._wish.lengthSq() > 1e-6) {
-        const s = Math.max(this.speed, TUNING.walkSpeed)
-        this.velocity.x = this._wish.x * s
-        this.velocity.z = this._wish.z * s
+        steerFraction(this.velocity, this._wish, T.airJumpSteer)
+        // Standing starts still get a nudge, so a double jump from rest is not
+        // a purely vertical hop.
+        const s = this.speed
+        if (s < T.walkSpeed) {
+          this.velocity.x = this._wish.x * T.walkSpeed
+          this.velocity.z = this._wish.z * T.walkSpeed
+        }
       }
       this.events.push({ type: 'airjump', speed: this.speed })
     }
@@ -693,21 +818,44 @@ export class Player {
    * `time` seconds at the current fall rate?
    *
    * Only called on the handful of frames where a jump is buffered mid-air, and
-   * it borrows the shared probe/scratch, so it allocates nothing. The 0.75
-   * factor is deliberate pessimism: a player drifting sideways off the ledge
-   * we just probed must fall through to the air jump rather than sit on a
-   * buffered press that never gets honoured. Because it re-runs every frame
-   * with the shrinking remainder of the buffer, that fallback happens on its
-   * own while there is still buffer left to spend.
+   * it borrows the shared probe/scratch, so it allocates nothing.
+   *
+   * The prediction is the real ballistic one — `-vy·t + ½g·t²` — and it probes
+   * where the player will *be*, carrying their horizontal velocity across the
+   * interval. The previous version used `-vy·t·0.75` at the current x/z: a flat
+   * pessimism factor standing in for the "player drifts off the ledge we just
+   * probed" case. It got that case wrong in both directions. Measured: pressing
+   * jump 0.133 s before touchdown from a 4 m fall under-predicted the remaining
+   * drop by 0.5 m, found no floor, and spent the air jump at knee height for a
+   * *weaker* hop (7.6 vs 8.6) — the precise failure this guard exists to
+   * prevent. Advancing the probe horizontally answers the drift case properly
+   * rather than by fudge, so the pessimism is gone.
+   *
+   * It walks down the arc instead of probing only its end, because a single
+   * deep probe punches clean through a thick slab: the capsule axis lands
+   * *inside* the box, the minimum-translation escape comes back pointing down,
+   * and the floor the player is a hand's breadth above reads as no floor at
+   * all. That regression cost the air jump on a press 0.03 s before touchdown —
+   * the opposite end of the same window the ballistic fix was widening.
    */
   _floorWithinFall(time) {
-    const fall = -this.velocity.y * time * 0.75
+    const T = TUNING
+    const fall = -this.velocity.y * time + 0.5 * T.gravity * time * time
     if (fall < 0.02) return false
-    this._probe.copy(this.position)
-    this._probe.y -= fall
-    const below = this.world.resolve(this._probe, TUNING.radius, this.height, this._scratch)
-    for (let i = 0; i < below.length; i++) {
-      if (below[i].normal.y > 0.7) return true
+    // One sample per half metre. The probe capsule is 1.75 m tall, so this is
+    // heavily redundant on purpose — it runs on the handful of frames where a
+    // jump is buffered mid-fall, and being sure beats being cheap there.
+    const steps = fall < 0.5 ? 1 : Math.min(6, Math.ceil(fall / 0.5))
+    for (let s = 1; s <= steps; s++) {
+      const f = s / steps
+      this._probe.copy(this.position)
+      this._probe.x += this.velocity.x * time * f
+      this._probe.z += this.velocity.z * time * f
+      this._probe.y -= fall * f
+      const below = this.world.resolve(this._probe, T.radius, this.height, this._scratch)
+      for (let i = 0; i < below.length; i++) {
+        if (below[i].normal.y > 0.7) return true
+      }
     }
     return false
   }
@@ -738,8 +886,32 @@ export class Player {
           const n = c.normal
           this.position.addScaledVector(n, c.depth)
 
+          const vyBefore = vel.y
           const vn = vel.dot(n)
           if (vn < 0) vel.addScaledVector(n, -vn)
+
+          // A step-up edge must never *manufacture* upward velocity.
+          //
+          // The capsule's bottom hemisphere does not meet a low ledge's
+          // vertical face; it meets the top edge, and the normal from the
+          // capsule axis to that edge comes back tilted around n.y ≈ 0.5.
+          // Cancelling velocity along that tilted normal converts horizontal
+          // momentum straight into vertical: measured, an 11 m/s sprint into a
+          // 0.20 m kerb came out at +4.7 m/s upward and 0.67 m off the deck,
+          // and an eight-step staircase launched the player at 10.6 m/s —
+          // harder than the jump button (8.6). The player never pressed
+          // anything, which makes it a bug by the rule at the top of this file,
+          // and because it flings them airborne the vault path never runs, so
+          // the camera gets no `stepUp` to smooth and the move reads as
+          // tripping rather than as a mantle.
+          //
+          // The clamp is deliberately one-sided: the impulse may still *arrest*
+          // a fall (that is a real landing), it may not turn one into a climb.
+          // Same shape as the grounded step-up rule in `_resolveTransitions`.
+          if (n.y > 0.05 && n.y <= 0.7) {
+            const ceiling = vyBefore > 0 ? vyBefore : 0
+            if (vel.y > ceiling) vel.y = ceiling
+          }
 
           if (n.y > 0.7) {
             this.grounded = true
@@ -894,6 +1066,11 @@ export class Player {
     const hit = this._probeDir(this._wish.x, this._wish.z, 0)
     if (!hit.found) return false
 
+    // A lip you could simply step onto is a vault. See `climbMinWallHeight`:
+    // the climb probe outranges the vault, so without this gate the vertical
+    // wall-run stole every kerb and ledge in the course.
+    if (hit.top - this.position.y < T.climbMinWallHeight) return false
+
     // Steering must be squarely into the wall, not sliding along it — that
     // case is a lateral wall-run and is handled separately.
     if (-(this._wish.x * hit.nx + this._wish.z * hit.nz) < 0.5) return false
@@ -1004,6 +1181,23 @@ function steerHorizontal(vel, dir, rate, dt) {
   const l = Math.hypot(nx, nz)
   // Degenerate only when the wish is exactly opposite to the current heading;
   // the full-brake friction regime is already handling that case.
+  if (l < 1e-3) return
+  vel.x = (nx / l) * sp
+  vel.z = (nz / l) * sp
+}
+
+/**
+ * Blend horizontal heading toward `dir` by an explicit fraction, preserving
+ * magnitude. Used where the turn is a single discrete event rather than a
+ * continuous rate — a double jump's course correction, specifically.
+ */
+function steerFraction(vel, dir, k) {
+  const sp = Math.hypot(vel.x, vel.z)
+  if (sp < 1e-4) return
+  const cx = vel.x / sp, cz = vel.z / sp
+  const nx = cx + (dir.x - cx) * k
+  const nz = cz + (dir.z - cz) * k
+  const l = Math.hypot(nx, nz)
   if (l < 1e-3) return
   vel.x = (nx / l) * sp
   vel.z = (nz / l) * sp
