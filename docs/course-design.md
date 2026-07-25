@@ -55,6 +55,57 @@ Derivation for the single jump: airtime `2 × 8.6 / 26 = 0.662 s`, times
   design lever.
 - **>34 m — impassable.** Genuine boundary. Use to define the play space.
 
+## Connect the horizon (Ethan, 2026-07-25, after playing the live build)
+
+*"making all the islands and stuff in the horizon connected to the parkour
+core. so it's a much bigger course because now the actions are so that we need
+a lot more to explore."*
+
+Right now the archipelago is a lie. Every island past the route is `decor()` —
+visible, unreachable, and non-solid. The player can see a world they cannot
+enter, which is the *inverse* of Clockwork Garden's bug and just as damaging:
+it makes the whole space read as a painted backdrop the moment you try to go
+there.
+
+**The near and mid distance bands become real.** Solid, landable, and wired
+into the route graph. Only the far band stays scenery, and it should be pushed
+far enough out that no player ever gets close enough to test it.
+
+### Grapple range is the connectivity graph
+
+With `grappleRange 34`, an anchor defines a 34 m sphere of reachable space.
+That makes lantern placement the literal topology of the level:
+
+- Two islands within **~19 m** are connected by dash alone.
+- Two islands within **34 m of a shared anchor** are connected by grapple.
+- Anything further needs a stepping stone, and a stepping stone is a design
+  decision about which way you want the player to travel.
+
+Build the archipelago as a **graph first, geometry second**: place islands,
+decide which pairs should connect, then place the lantern that makes each edge
+exist. An island with no inbound edge is scenery whether you meant it or not.
+
+### The fiction already solves the structure problem
+
+An open archipelago needs a reason to go anywhere. **You are a courier** — so
+deliveries are the structure. Drop points scattered across islands give the
+space objectives without turning it into a collectathon, and they let the
+player choose their own order and route, which is exactly what an overpowered
+movement set wants.
+
+That keeps the existing time-trial intact as *one* line through the world
+rather than the only content.
+
+### Rules for reachability
+
+- Every solid island must be **reachable and escapable**. An island you can
+  land on but not leave is a soft-lock, and with this much mobility players
+  will find them.
+- Verify reachability mechanically, not by eye: a script that walks the anchor
+  graph and reports unreachable or dead-end islands should ship with this.
+- Falling stays survivable — the cloud deck is below everything, so a fall
+  returns you to the last checkpoint rather than ending anything.
+
 ## What "bigger" means concretely
 
 The current course is ~230 m along a single straight +X axis, seven
