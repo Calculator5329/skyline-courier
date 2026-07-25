@@ -161,10 +161,13 @@
     gap: 40px;
     text-align: center;
     padding: 40px 24px 72px;
+    /* Warm rather than blue-black, so the menu belongs to the same world as
+       the brass-and-porcelain game behind it, and light enough that the
+       blurred skyline still reads as a place. */
     background:
-      radial-gradient(ellipse 90% 70% at 50% 45%, rgba(20, 28, 36, .58), rgba(8, 12, 16, .88)),
-      linear-gradient(rgba(10, 16, 22, .35), rgba(10, 16, 22, .35));
-    backdrop-filter: blur(6px) saturate(.9);
+      radial-gradient(ellipse 95% 75% at 50% 46%, rgba(38, 34, 30, .42), rgba(16, 14, 13, .80)),
+      linear-gradient(rgba(24, 20, 17, .22), rgba(24, 20, 17, .22));
+    backdrop-filter: blur(7px) saturate(1.05) brightness(1.1);
     cursor: pointer;
     z-index: 10;
   }
@@ -260,15 +263,16 @@
 </div>
 
 <div id="overlay">
-  <div>
+  <div class="title">
     <h1>Skyline <span>Courier</span></h1>
     <div class="tag">carry the speed</div>
+    <div class="rule"></div>
   </div>
   <div id="keys">
     <b>WASD</b><span>run</span>
     <b>SHIFT</b><span>sprint</span>
     <b>SPACE</b><span>jump &middot; double jump &middot; wall-jump</span>
-    <b>CTRL</b><span>slide &mdash; jump out of it to keep the speed</span>
+    <b>CTRL</b><span>slide &mdash; jump out to keep the speed</span>
     <b>Q / RIGHT-CLICK</b><span>air dash &mdash; recharges on landing</span>
     <b>MOUSE</b><span>look</span>
     <b>R</b><span>restart from checkpoint</span>
