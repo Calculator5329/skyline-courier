@@ -205,8 +205,13 @@ const SURFACE = {
      * is high on purpose: this is the term that has to carry a metal wall from
      * every angle the sun lobe does not, and a wall-run's directional parallax
      * comes entirely out of watching this band sweep along the plate.
+     *
+     * 1.15 rather than the 1.5 it was first tuned at: at 1.5 the brass
+     * balustrades in underpass.png took the frame's clipped-high fraction from
+     * 0.2% to 2.8%, and a blown highlight carries no shape. The sweep is
+     * unchanged in kind, only in peak.
      */
-    glint: 1.5,
+    glint: 1.15,
     cavity: 0.55,
     // Strong: on a material whose diffuse term is zero by construction, killing
     // reflected radiance in the pockets is the ONLY way to get a dark end, and
