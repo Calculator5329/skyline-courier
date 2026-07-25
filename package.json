@@ -9,7 +9,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "vite build && firebase deploy --only hosting"
+    "deploy": "vite build && firebase deploy --only hosting",
+    "ship": "bash scripts/ship.sh"
   },
   "homepage": "https://skyline-courier-5329.web.app",
   "type": "module",
