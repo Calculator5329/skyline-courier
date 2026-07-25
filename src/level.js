@@ -268,25 +268,77 @@ export function buildCourse(collision) {
 
   L.finish = new THREE.Vector3(226, 7.0, 0)
 
-  // ---- Scenery. Off-route by construction, per docs/taste.md. -----------
+  // ---- Scenery: a floating archipelago, per docs/art-direction.md -------
+  // The reference has no ground plane and no city — islands drift in open sky
+  // above a cloud deck, at every distance from near to specks. Depth is the
+  // headline effect, so these are seeded across four distance bands rather
+  // than scattered uniformly: the eye reads scale from having near, mid, far
+  // and tiny all present at once.
   const rand = rng(0xA11CE)
+
+  const island = (x, y, z, w, kind = 'stone') => {
+    const d = w * (0.78 + rand() * 0.44)
+    // Built top with a moss cap, then a chunky boulder underside that tapers.
+    // Three descending tiers is the cheapest silhouette that reads as a
+    // rock mass rather than as a slab.
+    L.decor(x, y, z, w, 2.2, d, kind)
+    L.decor(x, y + 1.5, z, w * 0.96, 0.7, d * 0.96, 'moss')
+    L.decor(x, y - 2.6, z, w * 0.82, 3.4, d * 0.82, kind)
+    L.decor(x, y - 6.0, z, w * 0.54, 3.6, d * 0.54, kind)
+    L.decor(x, y - 9.0, z, w * 0.26, 2.6, d * 0.26, kind)
+    return { x, y, z, w, d }
+  }
+
+  // Cypress: the reference's vertical punctuation. Dark, narrow, always in
+  // small stands rather than singly.
+  const cypress = (x, y, z, h) => {
+    L.decor(x, y + h * 0.5, z, h * 0.20, h, h * 0.20, 'moss')
+    L.decor(x, y + h * 0.86, z, h * 0.12, h * 0.3, h * 0.12, 'moss')
+  }
+
+  // Near band — big, detailed, clearly off to the sides of the route.
+  for (let i = 0; i < 14; i++) {
+    const side = i % 2 === 0 ? -1 : 1
+    const x = -10 + rand() * 250
+    const z = side * (38 + rand() * 55)
+    const y = -10 - rand() * 22
+    const w = 14 + rand() * 20
+    const isle = island(x, y, z, w, rand() > 0.45 ? 'stone' : 'terracotta')
+    // A stand of cypress and a brass ornament on top, off the running line.
+    const n = 1 + ((rand() * 3) | 0)
+    for (let c = 0; c < n; c++) {
+      cypress(x + (rand() - 0.5) * isle.w * 0.6, y + 1.9,
+              z + (rand() - 0.5) * isle.d * 0.6, 5 + rand() * 7)
+    }
+    if (rand() > 0.5) {
+      // An orrery ring / ship's-wheel silhouette — brass is the signature
+      // material of this world and should be visible at every distance.
+      const r = 2.5 + rand() * 3
+      L.decor(x, y + 3.4 + r, z, r * 2, 0.5, 0.5, 'brass')
+      L.decor(x, y + 3.4 + r, z, 0.5, r * 2, 0.5, 'brass')
+      L.decor(x, y + 3.4, z, 0.8, 3.2, 0.8, 'brass')
+    }
+  }
+
+  // Mid band — reads as structure, not detail.
+  for (let i = 0; i < 20; i++) {
+    const side = i % 2 === 0 ? -1 : 1
+    const x = -60 + rand() * 380
+    const z = side * (95 + rand() * 90)
+    island(x, -6 - rand() * 60, z, 16 + rand() * 26, rand() > 0.5 ? 'stone' : 'terracotta')
+  }
+
+  // Far band — silhouette only, dissolving into the golden haze.
   for (let i = 0; i < 26; i++) {
     const side = i % 2 === 0 ? -1 : 1
-    const x = 5 + rand() * 230
-    const z = side * (34 + rand() * 90)
-    const y = -14 - rand() * 26
-    const w = 8 + rand() * 22
-    L.decor(x, y, z, w, 6 + rand() * 14, w * (0.7 + rand() * 0.6), 'stone')
-    L.decor(x, y + 4 + rand() * 3, z, w * 0.82, 1.4, w * 0.6, 'moss')
-  }
-  // Distant towers: real geometry with real silhouettes, never a painted card.
-  for (let i = 0; i < 18; i++) {
-    const side = i % 2 === 0 ? -1 : 1
-    const x = -40 + rand() * 330
-    const z = side * (120 + rand() * 190)
-    const h = 40 + rand() * 90
-    L.decor(x, h / 2 - 40, z, 12 + rand() * 16, h, 12 + rand() * 16, 'stone')
-    L.decor(x, h - 39, z, 6 + rand() * 6, 5, 6 + rand() * 6, 'terracotta')
+    const x = -180 + rand() * 620
+    const z = side * (200 + rand() * 320)
+    const y = 30 - rand() * 150
+    const w = 22 + rand() * 46
+    L.decor(x, y, z, w, 4 + rand() * 5, w * 0.85, 'stone')
+    L.decor(x, y - 5, z, w * 0.6, 7, w * 0.5, 'stone')
+    // The occasional distant spire, like the reference's far towers.
+    if (rand() > 0.68) L.decor(x, y + 12, z, w * 0.16, 22 + rand() * 26, w * 0.16, 'terracotta')
   }
 
   return L

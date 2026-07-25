@@ -12,8 +12,22 @@
  * rather than percussive-electronic.
  */
 
+/**
+ * Round-robin footstep timbres. Six is enough that a sprint never repeats
+ * audibly; fewer and the ear locks onto the cycle within a couple of seconds.
+ */
+const STEP_VARIANTS = [
+  { body: 0, tex: 1500, bright: 1.00 },
+  { body: 7, tex: 1880, bright: 0.86 },
+  { body: -5, tex: 1320, bright: 1.12 },
+  { body: 3, tex: 2140, bright: 0.94 },
+  { body: -9, tex: 1660, bright: 1.05 },
+  { body: 11, tex: 1180, bright: 0.80 },
+]
+
 export class Audio {
   constructor() {
+    this._stepRR = 0
     this.ctx = null
     this.ready = false
     this.master = null
@@ -155,18 +169,40 @@ export class Audio {
     this._tone({ freq: 190, to: 430, type: 'triangle', dur: 0.3, gain: 0.11 })
   }
 
-  /** A boot on porcelain: bright, short, slightly different every time. */
+  /**
+   * A boot on porcelain.
+   *
+   * Every impact in the game is built the same way — **transient, body,
+   * texture** — because that is how a real one arrives at the ear: the
+   * contact click, then the mass of the thing that was struck, then the
+   * surface it was struck against. Getting the envelope shapes right matters
+   * far more than getting the filter frequencies right.
+   *
+   * The round-robin table is what stops a sprint sounding like a looping
+   * sample. Six timbres cycled with an offset, plus per-step pitch and level
+   * jitter, means the same footfall never lands twice in a row.
+   */
   step(speed) {
     const v = Math.min(1, 0.24 + speed / 40)
+    const rr = STEP_VARIANTS[this._stepRR % STEP_VARIANTS.length]
+    this._stepRR += 1 + ((Math.random() * 2) | 0)   // advance 1-2 so it never cycles predictably
+    const jitter = 0.92 + Math.random() * 0.16
+
+    // 1. transient — the leading edge of boot on glaze
     this._noiseBurst({
-      dur: 0.075,
-      type: 'bandpass',
-      freq: 1500 + Math.random() * 900,
-      q: 1.5,
-      gain: v * 0.30,
-      decay: 0.055,
+      dur: 0.03, type: 'highpass', freq: 3800 * jitter,
+      gain: v * 0.16 * rr.bright, decay: 0.018,
     })
-    this._tone({ freq: 90 + Math.random() * 24, type: 'sine', dur: 0.06, gain: v * 0.16 })
+    // 2. body — the player's mass arriving
+    this._tone({
+      freq: (86 + rr.body) * jitter, to: (58 + rr.body) * jitter,
+      type: 'sine', dur: 0.075, gain: v * 0.17,
+    })
+    // 3. texture — the surface itself
+    this._noiseBurst({
+      dur: 0.075, type: 'bandpass', freq: rr.tex * jitter, q: 1.4,
+      gain: v * 0.22 * rr.bright, decay: 0.05,
+    })
   }
 
   jump() {
@@ -174,16 +210,33 @@ export class Audio {
     this._noiseBurst({ dur: 0.14, type: 'highpass', freq: 900, gain: 0.10, decay: 0.12 })
   }
 
+  /**
+   * Landing: the same transient/body/texture stack as a footstep, but the
+   * proportions invert with impact. A gentle landing is mostly texture; a
+   * hard one is mostly body, with a debris tail that only appears once the
+   * impact is genuinely heavy — that threshold is what makes a big drop feel
+   * different in kind rather than just louder.
+   */
   land(impact) {
     const g = 0.20 + impact * 0.42
-    this._tone({ freq: 130, to: 58, type: 'sine', dur: 0.22, gain: g })
-    this._noiseBurst({
-      dur: 0.17,
-      type: 'lowpass',
-      freq: 700 + impact * 900,
-      gain: g * 0.62,
-      decay: 0.13,
+    const jitter = 0.94 + Math.random() * 0.12
+
+    this._noiseBurst({ dur: 0.03, type: 'highpass', freq: 3000, gain: g * 0.22, decay: 0.02 })
+    this._tone({
+      freq: (150 - impact * 30) * jitter, to: (52 - impact * 8) * jitter,
+      type: 'sine', dur: 0.2 + impact * 0.18, gain: g,
     })
+    this._noiseBurst({
+      dur: 0.17, type: 'lowpass', freq: (700 + impact * 900) * jitter,
+      gain: g * 0.62, decay: 0.13,
+    })
+    if (impact > 0.45) {
+      // Debris: loose grit skittering after a hard arrival.
+      this._noiseBurst({
+        dur: 0.34, type: 'bandpass', freq: 2600, q: 1.1,
+        gain: (impact - 0.45) * 0.30, decay: 0.3, at: this.ctx.currentTime + 0.045,
+      })
+    }
   }
 
   /** Vault reads as a hand slapping stone then pushing off. */
