@@ -7,6 +7,7 @@ import { buildWorld } from './world.js'
 import { Audio } from './audio.js'
 import { Hud, formatTime } from './hud.js'
 import { SpeedFX } from './fx/speed.js'
+import { GrappleFX } from './fx/grapple.js'
 import { RenderPipeline } from './render/index.js'
 
 /**
@@ -43,11 +44,13 @@ const level = buildCourse(collision)
 scene.add(level.build())
 
 const player = new Player(collision, level.spawn)
+player.anchors = level.anchors
 const rig = new CameraRig(camera)
 const audio = new Audio()
 const hud = new Hud()
 const speedFX = new SpeedFX(scene)
 speedFX.setSize(window.innerWidth, window.innerHeight)
+const grappleFX = new GrappleFX(scene)
 
 // HDR pipeline: physical auto-exposure → Karis bloom → AgX + procedural
 // grade LUT. The scene never touches the default framebuffer directly.
@@ -73,6 +76,8 @@ const input = {
   jumpPressed: false,
   jumpHeld: false,
   dashPressed: false,
+  grapplePressed: false,
+  grappleHeld: false,
   sprint: false,
   slide: false,
 }
@@ -102,6 +107,12 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault()
     return
   }
+  if (e.code === 'KeyF') {
+    if (!e.repeat) input.grapplePressed = true
+    input.grappleHeld = true
+    e.preventDefault()
+    return
+  }
   if (e.code === 'KeyR') {
     respawn()
     return
@@ -112,6 +123,7 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('keyup', (e) => {
   if (e.code === 'Space') { input.jumpHeld = false; return }
+  if (e.code === 'KeyF') { input.grappleHeld = false; return }
   const k = KEY_MAP[e.code]
   if (k) keys.delete(k)
 })
@@ -120,6 +132,7 @@ window.addEventListener('keyup', (e) => {
 window.addEventListener('blur', () => {
   keys.clear()
   input.jumpHeld = false
+  input.grappleHeld = false
 })
 
 function readInput() {
@@ -261,7 +274,7 @@ function tick(dt) {
   accumulator += dt
   let steps = 0
   while (accumulator >= FIXED_STEP && steps < 16) {
-    player.update(FIXED_STEP, input, rig.yaw)
+    player.update(FIXED_STEP, input, rig.yaw, rig.pitch)
     // jumpPressed is an edge, consumed by the first sim step that sees it —
     // and ONLY by a sim step. Clearing it once per rendered frame instead
     // silently swallows the press whenever a frame is shorter than the fixed
@@ -269,10 +282,13 @@ function tick(dt) {
     // exactly the "jump sometimes does nothing" bug.
     input.jumpPressed = false
     input.dashPressed = false
+    input.grapplePressed = false
     audio.handle(player.events)
     for (const e of player.events) {
       if (e.type === 'dash') speedFX.impulse(1.0)
       else if (e.type === 'airjump') speedFX.impulse(0.7)
+      else if (e.type === 'grapple') speedFX.impulse(0.5)
+      else if (e.type === 'grapplerelease') speedFX.impulse(0.8)
       else if (e.type === 'walljump') speedFX.impulse(0.55)
       else if (e.type === 'climb') speedFX.impulse(0.45)
       else if (e.type === 'land') speedFX.impulse(e.impact * 0.5)
@@ -290,7 +306,12 @@ function tick(dt) {
   speedFX.update(dt, player, camera)
   rig.shake = speedFX.shake
   rig.update(dt, player, input)
-  audio.update(player, TUNING.sprintSpeed)
+  // After the rig, so the line originates from this frame's camera pose and
+  // does not lag a frame behind the view it is drawn into.
+  grappleFX.update(dt, player, camera)
+  // Reference speed for the wind bed: near the top of what is actually
+  // reachable, so the effect keeps climbing through the fast part of a run.
+  audio.update(player, TUNING.maxSpeed * 0.8)
   world.update(now, player.position)
   hud.update(run.time, {
     time: run.time,

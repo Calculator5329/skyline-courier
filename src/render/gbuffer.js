@@ -52,7 +52,7 @@ vec3 scDecodeNormal( vec2 f ) {
 
 // View-space position from a uv and a POSITIVE linear view depth. The inverse
 // projection gives a ray; normalising it so its z is -1 turns "somewhere along
-// the ray" into "exactly `depth` metres in front of the camera plane", which is
+// the ray" into "exactly depth metres in front of the camera plane", which is
 // the quantity the prepass stored.
 vec3 scViewPos( vec2 uv, float depth, mat4 projInv ) {
   vec4 h = projInv * vec4( uv * 2.0 - 1.0, 1.0, 1.0 );
@@ -82,6 +82,8 @@ export class GBuffer {
     this.width = 0
     this.height = 0
     this._depthType = floatDepth ? THREE.FloatType : THREE.HalfFloatType
+    // Preallocated so the clear-colour save/restore in render() costs nothing.
+    this._prevClear = new THREE.Color()
 
     this.material = new THREE.ShaderMaterial({
       name: 'sc-prepass',
@@ -199,13 +201,31 @@ export class GBuffer {
     }
 
     const prevOverride = scene.overrideMaterial
+    // The clear COLOUR is load-bearing here, not cosmetic: coverage lives in
+    // the blue channel of attachment 0, and "no geometry" has
+    // to clear to zero for the sky test to work. If the caller has set a clear
+    // colour for the canvas, inheriting it would write coverage 1 into every
+    // sky texel and the contact ray would march into a wall of phantom surface.
+    renderer.getClearColor(this._prevClear)
+    const prevAlpha = renderer.getClearAlpha()
+    renderer.setClearColor(0x000000, 0)
+
+    // renderer.render() re-renders every shadow map on entry. This is the
+    // SECOND render call of the frame, and the sun's 2048x2048 map does not
+    // change between the prepass and the beauty pass, so leaving this on would
+    // silently double the shadow cost of the whole game for nothing. The beauty
+    // pass immediately after restores it and draws the maps once.
+    const prevShadowAuto = renderer.shadowMap.autoUpdate
+    renderer.shadowMap.autoUpdate = false
+
     scene.overrideMaterial = this.material
     renderer.setRenderTarget(this.rt)
-    // Colour AND depth: the colour clear to zero is what makes coverage 0 mean
-    // "sky" (see the class note).
     renderer.clear(true, true, false)
     renderer.render(scene, camera)
     scene.overrideMaterial = prevOverride
+
+    renderer.shadowMap.autoUpdate = prevShadowAuto
+    renderer.setClearColor(this._prevClear, prevAlpha)
 
     for (let i = 0; i < hidden.length; i++) hidden[i].visible = hiddenVis[i]
   }

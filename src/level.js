@@ -44,6 +44,8 @@ export class Level {
     this.group = new THREE.Group()
     this.checkpoints = []
     this.lanterns = []
+    /** Grapple anchors, handed to the player at startup. */
+    this.anchors = []
     this.spawn = new THREE.Vector3(3, 1.2, 0)
     // The course runs along +X. Three's default forward is -Z, so without
     // this the player spawns facing ninety degrees off the route and runs
@@ -77,8 +79,17 @@ export class Level {
     return this
   }
 
+  /**
+   * A brass lantern. Every lantern is also a grapple anchor.
+   *
+   * That is deliberate rather than convenient: brass has meant "you can use
+   * this" since the first wall, so the anchors need no new visual language.
+   * A player who has learned to read brass already knows where they can grab.
+   */
   lantern(x, y, z, color = PALETTE.brass) {
-    this.lanterns.push({ position: new THREE.Vector3(x, y, z), color })
+    const position = new THREE.Vector3(x, y, z)
+    this.lanterns.push({ position, color })
+    this.anchors.push(position)
     return this
   }
 

@@ -26,11 +26,13 @@ export class Hud {
     this.overlay = $('overlay')
     this.chipDash = $('chip-dash')
     this.chipAir = $('chip-air')
+    this.chipHook = $('chip-hook')
 
     this._toastUntil = 0
     this._lastVerb = ''
     this._dashReady = null
     this._airLeft = null
+    this._hookReady = null
   }
 
   setOverlay(visible) {
@@ -53,7 +55,7 @@ export class Hud {
     // that you are now carrying momentum rather than merely running.
     const hot = player.speed > TUNING.sprintSpeed
     this.speedfill.style.background = hot ? '#f0e4cf' : '#d9a441'
-    this.reticle.classList.toggle('hot', player.wallRunning)
+    this.reticle.classList.toggle('hot', player.wallRunning || !!player.aimedAnchor)
 
     // Ability availability has to be *visible*. An air dash that silently
     // does nothing because the charge is spent is indistinguishable from an
@@ -67,6 +69,13 @@ export class Hud {
     if (airLeft !== this._airLeft) {
       this._airLeft = airLeft
       this.chipAir.classList.toggle('ready', airLeft)
+    }
+    // The hook chip lights only when there is actually something in range to
+    // grab, so it doubles as the targeting readout rather than just a cooldown.
+    const hookReady = player.grappleCooldown <= 0 && !!player.aimedAnchor
+    if (hookReady !== this._hookReady) {
+      this._hookReady = hookReady
+      this.chipHook.classList.toggle('ready', hookReady)
     }
 
     const verb = currentVerb(player)
@@ -98,6 +107,7 @@ export class Hud {
 }
 
 function currentVerb(p) {
+  if (p.grappling) return 'grapple'
   if (p.climbTimer > 0) return 'climb'
   if (p.dashTimer > 0) return 'dash'
   if (p.wallRunning) return 'wall-run'

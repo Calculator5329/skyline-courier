@@ -85,17 +85,52 @@ let _macro = null
 export function macroTexture(size = 128) {
   if (_macro) return _macro
 
-  const data = new Uint8Array(size * size * 4)
+  const n = size * size
+  const raw = new Float32Array(n * 4)
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       // Sample at texel centres so the periodicity lines up with the wrap.
       const u = (x + 0.5) / size
       const v = (y + 0.5) / size
       const i = (y * size + x) * 4
-      data[i + 0] = (fbm(u, v, 3, 3, 0x1a3) * 255) | 0
-      data[i + 1] = (fbm(u, v, 3, 3, 0x77f) * 255) | 0
-      data[i + 2] = (fbm(u, v, 2, 2, 0x2c9) * 255) | 0
-      data[i + 3] = (fbm(u, v, 6, 3, 0x5e1) * 255) | 0
+      raw[i + 0] = fbm(u, v, 3, 3, 0x1a3)
+      raw[i + 1] = fbm(u, v, 3, 3, 0x77f)
+      raw[i + 2] = fbm(u, v, 2, 2, 0x2c9)
+      raw[i + 3] = fbm(u, v, 6, 3, 0x5e1)
+    }
+  }
+
+  /**
+   * Centre every channel on exactly 0.5.
+   *
+   * A finite fbm sum lands wherever its lattice happens to land — these four
+   * bands came out with means from 0.47 to 0.75. Every consumer in shader.js
+   * reads the field as a SIGNED deviation (`mac.x - 0.5`), so an off-centre
+   * channel is a constant bias, not variation: the b band alone was darkening
+   * every relief surface by 4% and pinning the top-face dust mask near 1.
+   *
+   * The remap is a single symmetric scale about the mean, not a min/max stretch
+   * to 0..1 — a stretch re-skews the mean on any asymmetric distribution, and a
+   * piecewise fit would put a derivative kink at the midpoint that the relief
+   * gradient would trace out as a visible contour.
+   */
+  const data = new Uint8Array(n * 4)
+  for (let c = 0; c < 4; c++) {
+    let mean = 0
+    let lo = 1
+    let hi = 0
+    for (let i = c; i < raw.length; i += 4) {
+      mean += raw[i]
+      if (raw[i] < lo) lo = raw[i]
+      if (raw[i] > hi) hi = raw[i]
+    }
+    mean /= n
+    // 0.46 rather than 0.5: leaves a little headroom so rounding to 8 bits
+    // cannot push the extreme texel past the end of the range.
+    const k = 0.46 / Math.max(mean - lo, hi - mean, 1e-6)
+    for (let i = c; i < raw.length; i += 4) {
+      const v = 0.5 + (raw[i] - mean) * k
+      data[i] = Math.max(0, Math.min(255, Math.round(v * 255)))
     }
   }
 

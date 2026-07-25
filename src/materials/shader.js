@@ -218,9 +218,11 @@ const MAIN_FRAGMENT = /* glsl */ `
     const float E = 2.0 / ${MACRO_SIZE}.0;
     float hx = texture2D( scMacroTex, scMuv + vec2( E, 0.0 ) ).b;
     float hy = texture2D( scMacroTex, scMuv + vec2( 0.0, E ) ).b;
-    // 9.0 turns a per-2-texel delta (a few hundredths) into a tilt of the right
-    // order (~0.1 rad) at amount 1.0; per-material amounts scale from there.
-    vec2 g = ( vec2( hx, hy ) - mac.b ) * scReliefP.x * 9.0;
+    // Gain. Measured on the generated field: the mean 2-texel delta is 0.017
+    // and the max is 0.059, so 6.5 puts the tilt at ~6 degrees typical and
+    // ~22 degrees on the steepest flank at amount 1.0 — a slab that visibly
+    // catches raking light without ever looking like a broken normal map.
+    vec2 g = ( vec2( hx, hy ) - mac.b ) * scReliefP.x * 6.5;
     vec3 tilt = -( g.x * scTu + g.y * scTv );
     // Project onto the tangent plane: a tilt with a component along N would
     // just scale the normal, not turn it.

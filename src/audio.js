@@ -113,17 +113,33 @@ export class Audio {
     this._scrapeGain = gain
   }
 
-  /** Called every frame with the live player state. */
-  update(player, maxSpeed) {
+  /**
+   * Called every frame with the live player state.
+   *
+   * `refSpeed` is the speed at which wind reaches full volume, and it must be
+   * near the TOP of the achievable range, not at sprint speed. Normalising
+   * against sprint meant the wind pinned at maximum the instant you hit ~40
+   * km/h and then sounded identical at 60, 80 and 120 — the exact speeds
+   * where the player most wants to hear that they are going faster.
+   */
+  update(player, refSpeed) {
     if (!this.ready) return
     const t = this.ctx.currentTime
-    const s = Math.min(1, player.speed / maxSpeed)
 
-    const windTarget = Math.pow(s, 2.2) * 0.30 + (player.grounded ? 0 : 0.03)
+    // Below this there is no wind at all: walking around should be quiet.
+    const FLOOR = 7.0
+    const s = Math.min(1, Math.max(0, (player.speed3d - FLOOR) / (refSpeed - FLOOR)))
+
+    // Gentler curve and a much lower ceiling. Wind is a bed under the mix,
+    // not an event — it was drowning the footsteps and landings that actually
+    // carry information.
+    const windTarget = Math.pow(s, 1.7) * 0.15 + (player.grounded ? 0 : 0.012)
     this._windGain.gain.setTargetAtTime(windTarget, t, 0.14)
-    this._wind.frequency.setTargetAtTime(420 + s * 900, t, 0.2)
+    // Open the filter with speed too, so it brightens as well as swells —
+    // that spectral change is most of what the ear reads as "faster".
+    this._wind.frequency.setTargetAtTime(380 + s * 1900, t, 0.2)
 
-    const scrapeTarget = player.wallRunning ? 0.05 + s * 0.10 : 0
+    const scrapeTarget = player.wallRunning ? 0.04 + s * 0.07 : 0
     this._scrapeGain.gain.setTargetAtTime(scrapeTarget, t, 0.05)
     this._scrape.frequency.setTargetAtTime(1800 + s * 2200, t, 0.1)
   }
@@ -143,9 +159,34 @@ export class Audio {
         case 'slide': this.slide(); break
         case 'dash': this.dash(); break
         case 'airjump': this.airjump(); break
+        case 'grapple': this.grapple(); break
+        case 'grapplerelease': this.grappleRelease(); break
         case 'climb': this.climb(); break
       }
     }
+  }
+
+  /**
+   * Grapple fire: the cuff's spring releasing, the line paying out, then the
+   * hook biting. Three distinct moments, scheduled rather than stacked, so
+   * the ear hears a mechanism operate instead of one undifferentiated clank.
+   */
+  grapple() {
+    const t = this.ctx.currentTime
+    // Spring release.
+    this._tone({ freq: 1400, to: 700, type: 'square', dur: 0.05, gain: 0.05, at: t })
+    // Line paying out — a rising hiss.
+    this._noiseBurst({ dur: 0.16, type: 'bandpass', freq: 2200, q: 1.4, gain: 0.14, decay: 0.14, at: t + 0.01 })
+    // The bite: brass on brass.
+    this._noiseBurst({ dur: 0.1, type: 'bandpass', freq: 3600, q: 4.0, gain: 0.20, decay: 0.07, at: t + 0.1 })
+    this._tone({ freq: 620, type: 'sine', dur: 0.34, gain: 0.10, at: t + 0.1 })
+    this._tone({ freq: 1710, type: 'sine', dur: 0.22, gain: 0.05, at: t + 0.1 })
+  }
+
+  /** Release: the line detaching and whipping back into the cuff. */
+  grappleRelease() {
+    this._noiseBurst({ dur: 0.2, type: 'highpass', freq: 1800, gain: 0.14, decay: 0.16 })
+    this._tone({ freq: 900, to: 1500, type: 'triangle', dur: 0.12, gain: 0.06 })
   }
 
   /** Air jump: the clockwork cape snapping open, then catching air. */

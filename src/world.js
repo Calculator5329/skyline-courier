@@ -119,7 +119,10 @@ export function buildWorld(scene, renderer) {
       depthWrite: false,
       fog: false,
       uniforms: {
-        uZenith: { value: new THREE.Color(0x6f9fc8) },
+        // Cooler and greener than a midday blue, to agree with the IBL's
+        // zenith — that cool cast is what makes shadows read green rather
+        // than grey against the amber key.
+        uZenith: { value: new THREE.Color(0x5589a0) },
         uHorizon: { value: horizon },
         // "Ground" is the cloud deck, so it is BRIGHT. Everything below the
         // horizon in this world is luminous cloud, never dark earth.
@@ -140,11 +143,18 @@ export function buildWorld(scene, renderer) {
   scene.fog = new THREE.FogExp2(0xffdcae, 0.0052)
 
   // --- light ------------------------------------------------------------
-  // Warm key against cool green-tinted ambient. That split is the defining
-  // feature of the reference; a neutral-grey ambient kills it instantly.
-  // Sky term is a warm gold (bounce off cloud tops is unusually strong here,
-  // because the "ground" is a sunlit cloud deck), ground term a mossy green.
-  const hemi = new THREE.HemisphereLight(0xffd9ab, 0x5c7048, 1.15)
+  // Warm key against cool ambient — the split that defines the reference.
+  //
+  // Note the orientation, which is easy to get backwards: at golden hour the
+  // *sun* carries the warmth, so the sky term (light from above, minus the
+  // sun) is COOL green-blue, and the ground term is the BRIGHT WARM bounce
+  // off the sunlit cloud deck below. Warm-above/cool-below is the midday
+  // arrangement and it flattens the whole warm/cool read.
+  //
+  // Intensity is low because the render pipeline's analytic sky IBL is now
+  // the primary ambient source and budgets itself to ~20% of the key. This
+  // light is a floor under that, not a second full ambient system.
+  const hemi = new THREE.HemisphereLight(0x9fc0b0, 0xffd7a8, 0.25)
   scene.add(hemi)
 
   const sun = new THREE.DirectionalLight(0xffca7d, 3.1)
@@ -156,8 +166,12 @@ export function buildWorld(scene, renderer) {
   const cam = sun.shadow.camera
   // A single tight frustum that follows the player — effectively one cascade.
   // The full cascaded setup is a capability-phase item, not a slice blocker.
-  cam.left = -42; cam.right = 42; cam.top = 42; cam.bottom = -42
-  cam.near = 1; cam.far = 190
+  //
+  // Widened for the low golden-hour sun: shadows cast at ~10 degrees of
+  // elevation are several times longer than at noon, and a frustum sized for
+  // a high sun clips them off mid-length in a very obvious straight line.
+  cam.left = -70; cam.right = 70; cam.top = 70; cam.bottom = -70
+  cam.near = 1; cam.far = 320
   cam.updateProjectionMatrix()
   scene.add(sun)
   scene.add(sun.target)
@@ -165,13 +179,13 @@ export function buildWorld(scene, renderer) {
   // A cool fill from the opposite side keeps shadowed faces readable, which
   // matters more than realism when the player is reading a route at speed.
   // Tinted green-cyan so shadows land on the cool side of the split.
-  const fill = new THREE.DirectionalLight(0x8fb8b0, 0.55)
+  const fill = new THREE.DirectionalLight(0x9fc4b4, 0.45)
   fill.position.set(30, 18, -40)
   scene.add(fill)
 
   // Bounce from the cloud deck below. Undersides of floating islands are lit
   // in the reference, never black — this is the light that does that.
-  const bounce = new THREE.DirectionalLight(0xffe0b4, 0.35)
+  const bounce = new THREE.DirectionalLight(0xffe0b4, 0.3)
   bounce.position.set(0, -40, 0)
   scene.add(bounce)
 

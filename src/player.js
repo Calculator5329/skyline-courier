@@ -85,9 +85,26 @@ export const TUNING = {
   climbCooldown: 0.5,
 
   // --- air dash (Mirror's Edge "shift" / Forspoken flow) ----------------
-  dashSpeed: 15.5,
-  dashTime: 0.16,
-  dashCooldown: 0.55,
+  // Punchier and longer-reaching, paid for with a longer cooldown: a dash you
+  // can spam is a dash with no decision in it. Now it clears a gap outright,
+  // so choosing *when* to spend it is the interesting part.
+  dashSpeed: 21.0,
+  dashTime: 0.22,
+  dashCooldown: 0.9,
+  dashExitSpeed: 14.0,     // speed retained when the burst ends
+
+  // --- grapple: the courier's brass cuff ---------------------------------
+  // The fiction has called for this since docs/intent.md was written. It
+  // latches onto brass anchors, which doubles as level language: brass has
+  // always meant "you can use this", and now it means it at range too.
+  grappleRange: 34,
+  grappleMinRange: 5,
+  grappleAim: 0.965,       // cos of the max angle off the look axis
+  grapplePull: 30.0,       // acceleration toward the anchor
+  grappleMaxTime: 1.5,
+  grappleReleaseBoost: 1.14,
+  grappleCooldown: 0.7,
+  grappleArriveDist: 3.2,
 
   maxSpeed: 34,
 }
@@ -115,6 +132,14 @@ export class Player {
     this.dashTimer = 0
     this.dashCooldown = 0
     this.dashReady = true
+    this.grappling = false
+    this.grappleTimer = 0
+    this.grappleCooldown = 0
+    this.grappleAnchor = new THREE.Vector3()
+    /** Populated by the level: brass anchor points the cuff can latch onto. */
+    this.anchors = []
+    /** The anchor currently in range and on-axis, or null. Read by the HUD. */
+    this.aimedAnchor = null
     this.airJumpsLeft = TUNING.airJumps
     this.coyote = 0
     this.jumpBuffered = 0
@@ -130,6 +155,10 @@ export class Player {
     this._contacts = []
     this._scratch = []
     this._tangent = new THREE.Vector3()
+    this._look = new THREE.Vector3(0, 0, -1)
+    this._toAnchor = new THREE.Vector3()
+    this._yaw = 0
+    this._pitch = 0
     this._probe = new THREE.Vector3()
     this._hitWall = false
     this._wallTop = 0
@@ -214,10 +243,12 @@ export class Player {
     this.wallTimer = TUNING.wallRunTime
   }
 
-  update(dt, input, yaw) {
+  update(dt, input, yaw, pitch = 0) {
     const T = TUNING
     this.events.length = 0
     this.wasGrounded = this.grounded
+    this._yaw = yaw
+    this._pitch = pitch
 
     // --- wish direction, in the camera's yaw frame ----------------------
     this._forward.set(-Math.sin(yaw), 0, -Math.cos(yaw))
@@ -355,6 +386,18 @@ export class Player {
       return
     }
 
+    // --- grapple: accelerate along the line to the anchor -----------------
+    if (this.grappling) {
+      this._toAnchor.subVectors(this.grappleAnchor, this.position)
+      const dist = this._toAnchor.length()
+      if (dist > 0.001) this._toAnchor.divideScalar(dist)
+      // Gravity is reduced but not cancelled, so a long grapple still arcs.
+      // A perfectly straight pull reads as being on rails.
+      vel.y -= T.gravity * 0.28 * dt
+      vel.addScaledVector(this._toAnchor, T.grapplePull * dt)
+      return
+    }
+
     // --- air dash: also suspends gravity, for a clean readable burst -----
     if (this.dashTimer > 0) {
       vel.y *= 0.82
@@ -384,9 +427,67 @@ export class Player {
     if (wishing) accelerate(vel, this._wish, T.airWishSpeed, T.airAccel, dt)
   }
 
-  /** Dash and climb triggers. Both are airborne-flow tools. */
+  /**
+   * Find the best brass anchor the cuff could latch onto right now.
+   *
+   * Scored by how close the anchor is to the centre of the view rather than
+   * by raw distance: when two anchors are both valid the player almost always
+   * means the one they are looking straight at, not the nearer one off to the
+   * side. Runs every frame so the reticle can light up before you commit.
+   */
+  _findAnchor() {
+    const T = TUNING
+    let best = null
+    let bestScore = T.grappleAim
+
+    for (let i = 0; i < this.anchors.length; i++) {
+      const a = this.anchors[i]
+      this._toAnchor.subVectors(a, this.position)
+      const dist = this._toAnchor.length()
+      if (dist < T.grappleMinRange || dist > T.grappleRange) continue
+      this._toAnchor.divideScalar(dist)
+
+      const aim = this._toAnchor.x * this._look.x +
+                  this._toAnchor.y * this._look.y +
+                  this._toAnchor.z * this._look.z
+      if (aim > bestScore) { bestScore = aim; best = a }
+    }
+    return best
+  }
+
+  /** Dash, climb and grapple triggers. All three are airborne-flow tools. */
   _updateAbilities(dt, input, wishing) {
     const T = TUNING
+    this.grappleCooldown = Math.max(0, this.grappleCooldown - dt)
+
+    // The full 3D look axis, for aiming. Kept separate from `_forward`, which
+    // is the *horizontal* movement basis — overwriting that with a pitched
+    // vector silently shortens every wall probe when you look up or down.
+    const cp = Math.cos(this._pitch)
+    this._look.set(-Math.sin(this._yaw) * cp, Math.sin(this._pitch), -Math.cos(this._yaw) * cp)
+
+    this.aimedAnchor = (this.grappleCooldown <= 0 && !this.grappling)
+      ? this._findAnchor()
+      : null
+
+    if (this.grappling) {
+      this.grappleTimer -= dt
+      const reached = this.position.distanceTo(this.grappleAnchor) < T.grappleArriveDist
+      // Release on: letting go, running out of line, arriving, or landing.
+      if (!input.grappleHeld || this.grappleTimer <= 0 || reached || this.grounded) {
+        this._releaseGrapple(reached)
+      }
+    } else if (input.grapplePressed && this.aimedAnchor) {
+      this.grappling = true
+      this.grappleTimer = T.grappleMaxTime
+      this.grappleAnchor.copy(this.aimedAnchor)
+      this.grappleCooldown = T.grappleCooldown
+      this.dashReady = true          // latching on refreshes the dash
+      this.airJumpsLeft = T.airJumps
+      this._detachWall()
+      this.events.push({ type: 'grapple', speed: this.speed })
+    }
+
     this.dashCooldown = Math.max(0, this.dashCooldown - dt)
     this.climbCooldown = Math.max(0, this.climbCooldown - dt)
     this.dashTimer = Math.max(0, this.dashTimer - dt)
@@ -701,6 +802,26 @@ export class Player {
     }
     this.wallNormal.set(hit.nx, hit.ny, hit.nz).normalize()
     this.wallSide = hit.side
+  }
+
+  /**
+   * Let go of the line.
+   *
+   * Releasing multiplies speed rather than adding to it, so a fast approach
+   * is rewarded proportionally — the grapple amplifies a good line instead of
+   * normalising every arrival to the same exit velocity.
+   */
+  _releaseGrapple(reached) {
+    if (!this.grappling) return
+    this.grappling = false
+    this.grappleTimer = 0
+    if (reached) {
+      this.velocity.multiplyScalar(TUNING.grappleReleaseBoost)
+      // A little lift on arrival so you clear the anchor you just flew at
+      // instead of clipping its underside.
+      this.velocity.y = Math.max(this.velocity.y, 3.2)
+    }
+    this.events.push({ type: 'grapplerelease', speed: this.speed })
   }
 
   _detachWall() {
