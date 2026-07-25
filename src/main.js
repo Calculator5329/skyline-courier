@@ -149,10 +149,12 @@ document.addEventListener('mousemove', (e) => {
 })
 
 // Right mouse also dashes — reaching for Q mid-air while steering with the
-// mouse is exactly the kind of hand contortion that breaks flow.
+// mouse is exactly the kind of hand contortion that breaks flow. Left click
+// is deliberately NOT bound: it is the button used to enter pointer lock, so
+// binding it means the click that starts the game also burns a dash charge.
 document.addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== canvas) return
-  if (e.button === 2 || e.button === 0) input.dashPressed = true
+  if (e.button === 2) input.dashPressed = true
 })
 canvas.addEventListener('contextmenu', (e) => e.preventDefault())
 

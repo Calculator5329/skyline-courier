@@ -98,6 +98,28 @@
     transition: width .06s linear, background .2s;
   }
 
+  /* --- ability charges -------------------------------------------------- */
+  #charges { display: flex; gap: 12px; margin-top: 12px; }
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    letter-spacing: .16em;
+    opacity: .28;
+    transition: opacity .14s;
+  }
+  .chip i {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 rgba(217, 164, 65, 0);
+    transition: box-shadow .18s, transform .18s;
+  }
+  .chip.ready { opacity: .95; color: var(--brass); }
+  .chip.ready i { box-shadow: 0 0 9px rgba(217, 164, 65, .9); }
+  .chip.fired i { transform: scale(1.9); }
+
   /* --- state verb ------------------------------------------------------ */
   #verb {
     position: absolute;
@@ -228,6 +250,10 @@
   <div id="speedwrap">
     <div id="speedval">0<small>KM/H</small></div>
     <div id="speedbar"><div id="speedfill"></div></div>
+    <div id="charges">
+      <div class="chip" id="chip-dash"><i></i>DASH</div>
+      <div class="chip" id="chip-air"><i></i>AIR</div>
+    </div>
   </div>
   <div id="verb"></div>
   <div id="toast"><div class="big"></div><div class="sub"></div></div>
@@ -243,7 +269,7 @@
     <b>SHIFT</b><span>sprint</span>
     <b>SPACE</b><span>jump &middot; double jump &middot; wall-jump</span>
     <b>CTRL</b><span>slide &mdash; jump out of it to keep the speed</span>
-    <b>Q / CLICK</b><span>air dash</span>
+    <b>Q / RIGHT-CLICK</b><span>air dash &mdash; recharges on landing</span>
     <b>MOUSE</b><span>look</span>
     <b>R</b><span>restart from checkpoint</span>
   </div>

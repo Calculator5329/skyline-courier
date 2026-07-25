@@ -14,9 +14,13 @@ import { TUNING } from './player.js'
  * state, so every amplitude below is deliberately smaller than it wants to be.
  */
 
-const BASE_FOV = 76
-const SPEED_FOV = 15         // added across the walk→sprint band
-const WALLRUN_FOV = 5
+// FOV budget is deliberately tight. The earlier values peaked around 95°,
+// which fisheyes the frame, bends straight architecture at the edges, and
+// reads as the camera zooming rather than the player accelerating. Total
+// across every simultaneous modifier now tops out near 85°.
+const BASE_FOV = 74
+const SPEED_FOV = 8          // added across the walk→sprint band
+const WALLRUN_FOV = 3
 const MAX_PITCH = Math.PI / 2 - 0.02
 
 export class CameraRig {
@@ -31,7 +35,7 @@ export class CameraRig {
     this.dip = 0
     this.dipVel = 0
     this.fov = BASE_FOV
-    this.kick = 0
+    this.punch = 0
     this.shake = 0
     this.shakeTime = 0
     this.slideEase = 0
@@ -58,15 +62,22 @@ export class CameraRig {
       if (e.type === 'land') this.dipVel -= e.impact * 5.5
       else if (e.type === 'vault') this.dipVel -= 1.4
       else if (e.type === 'walljump') this.dipVel -= 0.8
-      else if (e.type === 'dash') this.kick = 1
+      else if (e.type === 'dash') this.punch = 1
       else if (e.type === 'climb') this.dipVel -= 0.9
       // The air jump gets an upward lift instead of a dip — the cape catches
       // and pulls you up, so the camera should rise into it, not compress.
-      else if (e.type === 'airjump') { this.dipVel += 2.6; this.kick = 0.55 }
+      else if (e.type === 'airjump') this.dipVel += 2.6
     }
-    // Dash punches the FOV out and lets it fall back — the burst has to be
-    // felt, not just measured on the speed readout.
-    this.kick *= Math.exp(-6 * h)
+    // NOTE: this is deliberately NOT a field-of-view change.
+    //
+    // Punching the FOV on an instantaneous event warps the entire frame for a
+    // tenth of a second, which reads as the view lurching rather than as the
+    // player accelerating — and it is genuinely unpleasant on a double jump,
+    // where nothing about the world has changed scale. FOV is reserved for
+    // sustained speed, where it ramps slowly enough to be felt but not seen.
+    // Impulse events express themselves through the dip spring and the
+    // peripheral streak burst instead.
+    this.punch *= Math.exp(-7 * h)
 
     // --- landing dip: critically-ish damped spring ----------------------
     this.dipVel += (-this.dip * 90 - this.dipVel * 13) * h
@@ -92,12 +103,10 @@ export class CameraRig {
     const t = clamp01((player.speed - TUNING.walkSpeed) / (TUNING.sprintSpeed - TUNING.walkSpeed))
     let fovTarget = BASE_FOV + t * SPEED_FOV
     if (player.wallRunning) fovTarget += WALLRUN_FOV
-    if (player.sliding) fovTarget += 4
-    if (player.climbTimer > 0) fovTarget += 6
+    if (player.sliding) fovTarget += 2
+    if (player.climbTimer > 0) fovTarget += 3
+    if (player.dashTimer > 0) fovTarget += 3   // sustained, for the dash's duration only
     this.fov += (fovTarget - this.fov) * (1 - Math.exp(-7 * h))
-    // The dash kick is added *after* the smoothing so it lands on the frame
-    // it happens rather than easing in a tenth of a second late.
-    this.fov += this.kick * 9
 
     // --- head bob: rhythm, not decoration --------------------------------
     if (player.grounded && !player.sliding && player.speed > 0.6) {

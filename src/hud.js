@@ -24,9 +24,13 @@ export class Hud {
     this.toastBig = this.toast.querySelector('.big')
     this.toastSub = this.toast.querySelector('.sub')
     this.overlay = $('overlay')
+    this.chipDash = $('chip-dash')
+    this.chipAir = $('chip-air')
 
     this._toastUntil = 0
     this._lastVerb = ''
+    this._dashReady = null
+    this._airLeft = null
   }
 
   setOverlay(visible) {
@@ -50,6 +54,20 @@ export class Hud {
     const hot = player.speed > TUNING.sprintSpeed
     this.speedfill.style.background = hot ? '#f0e4cf' : '#d9a441'
     this.reticle.classList.toggle('hot', player.wallRunning)
+
+    // Ability availability has to be *visible*. An air dash that silently
+    // does nothing because the charge is spent is indistinguishable from an
+    // air dash that is broken — which is exactly how it got reported.
+    const dashReady = player.dashReady && player.dashCooldown <= 0
+    if (dashReady !== this._dashReady) {
+      this._dashReady = dashReady
+      this.chipDash.classList.toggle('ready', dashReady)
+    }
+    const airLeft = player.airJumpsLeft > 0
+    if (airLeft !== this._airLeft) {
+      this._airLeft = airLeft
+      this.chipAir.classList.toggle('ready', airLeft)
+    }
 
     const verb = currentVerb(player)
     if (verb !== this._lastVerb) {

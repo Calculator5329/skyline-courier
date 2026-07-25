@@ -233,7 +233,19 @@ export class SpeedFX {
     if (vlen < 0.001) return
     this._dir.divideScalar(vlen)
 
-    this._smoothDir.lerp(this._dir, 1 - Math.exp(-6 * h))
+    // A dash can reverse the direction of travel in a single frame. Easing
+    // through that reversal sweeps every streak in the field through 180°,
+    // which reads as the whole screen flipping over. When the direction
+    // changes that hard, cut instead of sweeping: snap the frame of reference
+    // and recycle every streak so the new field simply *starts*, with no
+    // visible rotation at all. Cuts are invisible; arcs are not.
+    if (this._dir.dot(this._smoothDir) < 0.55) {
+      this._smoothDir.copy(this._dir)
+      for (let i = 0; i < this.STREAKS; i++) this._life[i] = 0
+    } else {
+      this._smoothDir.lerp(this._dir, 1 - Math.exp(-6 * h))
+    }
+
     const sl = this._smoothDir.length()
     if (sl < 0.001) return
     this._smoothDir.divideScalar(sl)
