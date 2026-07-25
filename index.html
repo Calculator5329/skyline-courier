@@ -1,0 +1,254 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Skyline Courier</title>
+
+<style>
+  :root {
+    --cream: #f4ead8;
+    --brass: #d9a441;
+    --moss: #6f8f5f;
+    --terracotta: #c8724c;
+    --ink: #2b2622;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: #0e1418;
+    color: var(--cream);
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  canvas { display: block; }
+
+  #hud {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* --- crosshair ------------------------------------------------------ */
+  #reticle {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 5px; height: 5px;
+    margin: -2.5px 0 0 -2.5px;
+    border-radius: 50%;
+    background: rgba(244, 234, 216, .75);
+    box-shadow: 0 0 6px rgba(0, 0, 0, .6);
+    transition: transform .12s ease-out, background .12s;
+  }
+  #reticle.hot { transform: scale(1.9); background: var(--brass); }
+
+  /* --- top-left run state --------------------------------------------- */
+  #run {
+    position: absolute;
+    top: 22px; left: 26px;
+    line-height: 1.35;
+  }
+  #timer {
+    font-size: 38px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, .55);
+  }
+  #splits {
+    font-size: 12px;
+    opacity: .62;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- bottom-left speed ---------------------------------------------- */
+  #speedwrap {
+    position: absolute;
+    left: 26px; bottom: 30px;
+    width: 190px;
+  }
+  #speedval {
+    font-size: 26px;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, .55);
+  }
+  #speedval small {
+    font-size: 11px;
+    opacity: .55;
+    letter-spacing: .14em;
+    margin-left: 4px;
+  }
+  #speedbar {
+    height: 3px;
+    margin-top: 7px;
+    background: rgba(244, 234, 216, .16);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  #speedfill {
+    height: 100%;
+    width: 0%;
+    background: var(--brass);
+    border-radius: 2px;
+    transition: width .06s linear, background .2s;
+  }
+
+  /* --- state verb ------------------------------------------------------ */
+  #verb {
+    position: absolute;
+    left: 50%; bottom: 84px;
+    transform: translateX(-50%);
+    font-size: 12px;
+    letter-spacing: .3em;
+    text-transform: uppercase;
+    opacity: 0;
+    transition: opacity .18s;
+    color: var(--brass);
+    text-shadow: 0 2px 12px rgba(0, 0, 0, .8);
+  }
+  #verb.on { opacity: .9; }
+
+  /* --- toast ----------------------------------------------------------- */
+  #toast {
+    position: absolute;
+    left: 50%; top: 26%;
+    transform: translateX(-50%);
+    text-align: center;
+    opacity: 0;
+    transition: opacity .3s;
+  }
+  #toast.on { opacity: 1; }
+  #toast .big { font-size: 24px; letter-spacing: .18em; text-transform: uppercase; }
+  #toast .sub { font-size: 13px; opacity: .7; margin-top: 5px; font-variant-numeric: tabular-nums; }
+
+  /* --- start / pause overlay ------------------------------------------- */
+  /* The overlay sits over a live 3D frame, so it stays translucent enough to
+     read as a pause over the world rather than a separate screen. */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 40px;
+    text-align: center;
+    padding: 40px 24px 72px;
+    background:
+      radial-gradient(ellipse 90% 70% at 50% 45%, rgba(20, 28, 36, .58), rgba(8, 12, 16, .88)),
+      linear-gradient(rgba(10, 16, 22, .35), rgba(10, 16, 22, .35));
+    backdrop-filter: blur(6px) saturate(.9);
+    cursor: pointer;
+    z-index: 10;
+  }
+  #overlay.hidden { display: none; }
+
+  .title { display: flex; flex-direction: column; align-items: center; }
+  #overlay h1 {
+    font-size: clamp(34px, 6.4vw, 76px);
+    font-weight: 600;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--cream);
+    line-height: 1;
+    /* letter-spacing adds a trailing gap; pull it back so the word is
+       optically centred rather than mathematically centred. */
+    text-indent: .22em;
+    text-shadow: 0 6px 40px rgba(0, 0, 0, .7);
+  }
+  #overlay h1 span { color: var(--brass); }
+  #overlay .tag {
+    font-size: clamp(10px, 1.1vw, 12px);
+    letter-spacing: .5em;
+    text-transform: uppercase;
+    color: var(--brass);
+    opacity: .75;
+    margin-top: 18px;
+    text-indent: .5em;
+  }
+  .rule {
+    width: min(340px, 60vw);
+    height: 1px;
+    margin-top: 22px;
+    background: linear-gradient(90deg, transparent, rgba(217, 164, 65, .55), transparent);
+  }
+
+  #keys {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 11px 26px;
+    font-size: 13px;
+    text-align: left;
+    max-width: 460px;
+  }
+  #keys b {
+    color: var(--brass);
+    font-weight: 600;
+    letter-spacing: .08em;
+    white-space: nowrap;
+  }
+  #keys span { opacity: .68; }
+
+  #cta {
+    font-size: 13px;
+    letter-spacing: .34em;
+    text-transform: uppercase;
+    color: var(--cream);
+    text-indent: .34em;
+    padding: 13px 30px;
+    border: 1px solid rgba(217, 164, 65, .45);
+    border-radius: 2px;
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: .62; border-color: rgba(217, 164, 65, .3); }
+    50% { opacity: 1; border-color: rgba(217, 164, 65, .75); }
+  }
+  #esc {
+    position: absolute;
+    bottom: 26px; left: 0; right: 0;
+    font-size: 11px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    opacity: .3;
+  }
+</style>
+
+<div id="hud">
+  <div id="reticle"></div>
+  <div id="run">
+    <div id="timer">0.00</div>
+    <div id="splits">checkpoint 0 / 0</div>
+  </div>
+  <div id="speedwrap">
+    <div id="speedval">0<small>KM/H</small></div>
+    <div id="speedbar"><div id="speedfill"></div></div>
+  </div>
+  <div id="verb"></div>
+  <div id="toast"><div class="big"></div><div class="sub"></div></div>
+</div>
+
+<div id="overlay">
+  <div>
+    <h1>Skyline <span>Courier</span></h1>
+    <div class="tag">carry the speed</div>
+  </div>
+  <div id="keys">
+    <b>WASD</b><span>run</span>
+    <b>SHIFT</b><span>sprint</span>
+    <b>SPACE</b><span>jump &middot; double jump &middot; wall-jump</span>
+    <b>CTRL</b><span>slide &mdash; jump out of it to keep the speed</span>
+    <b>Q / CLICK</b><span>air dash</span>
+    <b>MOUSE</b><span>look</span>
+    <b>R</b><span>restart from checkpoint</span>
+  </div>
+  <div id="cta">click to run</div>
+  <div id="esc">escape releases the cursor at any time</div>
+</div>
+
+<script type="module" src="/src/main.js"></script>

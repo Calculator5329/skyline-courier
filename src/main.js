@@ -1,0 +1,342 @@
+import * as THREE from 'three'
+import { CollisionWorld } from './collision.js'
+import { Player, TUNING } from './player.js'
+import { CameraRig } from './camera.js'
+import { buildCourse } from './level.js'
+import { buildWorld } from './world.js'
+import { Audio } from './audio.js'
+import { Hud, formatTime } from './hud.js'
+import { SpeedFX } from './fx/speed.js'
+import { RenderPipeline } from './render/index.js'
+
+/**
+ * Bootstrap and the game loop.
+ *
+ * The loop runs a fixed-step simulation with a render interpolation-free
+ * commit: movement at a variable step is how a parkour controller acquires
+ * frame-rate-dependent jump heights, which is the kind of bug that only shows
+ * up on someone else's machine.
+ */
+
+const FIXED_STEP = 1 / 120
+const MAX_FRAME = 0.1
+
+// ---------------------------------------------------------------- renderer
+
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance',
+})
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+renderer.setSize(window.innerWidth, window.innerHeight)
+document.body.appendChild(renderer.domElement)
+
+const scene = new THREE.Scene()
+const camera = new THREE.PerspectiveCamera(76, window.innerWidth / window.innerHeight, 0.1, 1200)
+
+const world = buildWorld(scene, renderer)
+
+// ------------------------------------------------------------------- level
+
+const collision = new CollisionWorld()
+const level = buildCourse(collision)
+scene.add(level.build())
+
+const player = new Player(collision, level.spawn)
+const rig = new CameraRig(camera)
+const audio = new Audio()
+const hud = new Hud()
+const speedFX = new SpeedFX(scene)
+speedFX.setSize(window.innerWidth, window.innerHeight)
+
+// HDR pipeline: physical auto-exposure → Karis bloom → AgX + procedural
+// grade LUT. The scene never touches the default framebuffer directly.
+const pipeline = new RenderPipeline(renderer, scene, camera)
+pipeline.setSize(window.innerWidth, window.innerHeight)
+
+// ------------------------------------------------------------------- state
+
+const run = {
+  time: 0,
+  started: false,
+  finished: false,
+  checkpointsHit: 0,
+  respawn: level.spawn.clone(),
+  respawnYaw: level.spawnYaw,
+  best: loadBest(),
+}
+rig.yaw = level.spawnYaw
+
+const input = {
+  forward: 0,
+  right: 0,
+  jumpPressed: false,
+  jumpHeld: false,
+  dashPressed: false,
+  sprint: false,
+  slide: false,
+}
+
+const keys = new Set()
+
+// ------------------------------------------------------------------ input
+
+const KEY_MAP = {
+  KeyW: 'fwd', ArrowUp: 'fwd',
+  KeyS: 'back', ArrowDown: 'back',
+  KeyA: 'left', ArrowLeft: 'left',
+  KeyD: 'right', ArrowRight: 'right',
+  ShiftLeft: 'sprint', ShiftRight: 'sprint',
+  ControlLeft: 'slide', ControlRight: 'slide', KeyC: 'slide',
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') {
+    if (!input.jumpHeld) input.jumpPressed = true
+    input.jumpHeld = true
+    e.preventDefault()
+    return
+  }
+  if (e.code === 'KeyQ' || e.code === 'KeyE') {
+    if (!e.repeat) input.dashPressed = true
+    e.preventDefault()
+    return
+  }
+  if (e.code === 'KeyR') {
+    respawn()
+    return
+  }
+  const k = KEY_MAP[e.code]
+  if (k) { keys.add(k); e.preventDefault() }
+})
+
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { input.jumpHeld = false; return }
+  const k = KEY_MAP[e.code]
+  if (k) keys.delete(k)
+})
+
+// Losing focus must not leave a key stuck down mid-run.
+window.addEventListener('blur', () => {
+  keys.clear()
+  input.jumpHeld = false
+})
+
+function readInput() {
+  input.forward = (keys.has('fwd') ? 1 : 0) - (keys.has('back') ? 1 : 0)
+  input.right = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0)
+  input.sprint = keys.has('sprint')
+  input.slide = keys.has('slide')
+}
+
+// --------------------------------------------------------------- pointer
+
+const canvas = renderer.domElement
+
+hud.overlay.addEventListener('click', () => {
+  audio.init()
+  canvas.requestPointerLock()
+})
+
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === canvas
+  hud.setOverlay(!locked)
+  if (!locked) { keys.clear(); input.jumpHeld = false }
+})
+
+document.addEventListener('mousemove', (e) => {
+  if (document.pointerLockElement === canvas) rig.look(e.movementX, e.movementY)
+})
+
+// Right mouse also dashes — reaching for Q mid-air while steering with the
+// mouse is exactly the kind of hand contortion that breaks flow.
+document.addEventListener('mousedown', (e) => {
+  if (document.pointerLockElement !== canvas) return
+  if (e.button === 2 || e.button === 0) input.dashPressed = true
+})
+canvas.addEventListener('contextmenu', (e) => e.preventDefault())
+
+// ---------------------------------------------------------------- respawn
+
+function respawn() {
+  player.teleport(run.respawn)
+  rig.yaw = run.respawnYaw
+  rig.pitch = 0
+  // Without this the auto-exposure meter smoothly adapts *across the cut*,
+  // so a respawn from a dark void into daylight fades in like a dream
+  // sequence instead of being instant.
+  pipeline.resetExposure()
+}
+
+function checkTriggers() {
+  // Checkpoints are generous spheres, not thin planes: a checkpoint you can
+  // miss at speed is a checkpoint that punishes the thing the game rewards.
+  for (let i = 0; i < level.checkpoints.length; i++) {
+    const cp = level.checkpoints[i]
+    if (cp.reached) continue
+    if (player.position.distanceTo(cp.position) > cp.radius) continue
+
+    cp.reached = true
+    run.checkpointsHit++
+    run.respawn.copy(cp.position).setY(cp.position.y + 0.2)
+    run.respawnYaw = rig.yaw
+    audio.checkpoint()
+    if (run.checkpointsHit > 1) {
+      hud.showToast(cp.label, `split ${formatTime(run.time)}`, run.time)
+    }
+  }
+
+  if (!run.finished && level.finish && player.position.distanceTo(level.finish) < 5.0) {
+    finishRun()
+  }
+
+  if (player.position.y < level.killY) respawn()
+}
+
+function finishRun() {
+  run.finished = true
+  audio.finish()
+  const isBest = run.best == null || run.time < run.best
+  if (isBest) {
+    run.best = run.time
+    saveBest(run.time)
+  }
+  hud.holdToast(
+    'route complete',
+    `${formatTime(run.time)}${isBest ? '  — new best' : `   best ${formatTime(run.best)}`}   ·   R to run it again`,
+  )
+}
+
+function resetRun() {
+  for (const cp of level.checkpoints) cp.reached = false
+  run.time = 0
+  run.started = false
+  run.finished = false
+  run.checkpointsHit = 0
+  run.respawn.copy(level.spawn)
+  run.respawnYaw = level.spawnYaw
+  player.teleport(level.spawn)
+  rig.yaw = level.spawnYaw
+  rig.pitch = 0
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyR' && run.finished) resetRun()
+})
+
+// ------------------------------------------------------------------- loop
+
+let last = performance.now() / 1000
+let accumulator = 0
+let clock = 0
+
+function frame() {
+  requestAnimationFrame(frame)
+
+  const now = performance.now() / 1000
+  let dt = now - last
+  last = now
+  if (dt > MAX_FRAME) dt = MAX_FRAME    // never let a tab-switch teleport anyone
+
+  tick(dt)
+}
+
+/**
+ * One simulation + render tick at an explicit dt.
+ *
+ * Split out from the rAF driver so the game can be stepped deterministically
+ * from outside — by the headless verification harness, or from the console
+ * when debugging a movement bug frame by frame. rAF is throttled to nothing in
+ * a backgrounded tab, so a harness that relied on it would silently measure
+ * a game that was never running.
+ */
+function tick(dt) {
+  clock += dt
+  const now = clock
+
+  readInput()
+
+  accumulator += dt
+  let steps = 0
+  while (accumulator >= FIXED_STEP && steps < 16) {
+    player.update(FIXED_STEP, input, rig.yaw)
+    // jumpPressed is an edge, consumed by the first sim step that sees it —
+    // and ONLY by a sim step. Clearing it once per rendered frame instead
+    // silently swallows the press whenever a frame is shorter than the fixed
+    // step (any display above 120Hz, or any spare-capacity frame), which is
+    // exactly the "jump sometimes does nothing" bug.
+    input.jumpPressed = false
+    input.dashPressed = false
+    audio.handle(player.events)
+    for (const e of player.events) {
+      if (e.type === 'dash') speedFX.impulse(1.0)
+      else if (e.type === 'airjump') speedFX.impulse(0.7)
+      else if (e.type === 'walljump') speedFX.impulse(0.55)
+      else if (e.type === 'climb') speedFX.impulse(0.45)
+      else if (e.type === 'land') speedFX.impulse(e.impact * 0.5)
+      else if (e.type === 'slide') speedFX.impulse(0.35)
+    }
+    if (!run.finished) {
+      if (!run.started && (player.speed > 0.5 || !player.grounded)) run.started = true
+      if (run.started) run.time += FIXED_STEP
+    }
+    checkTriggers()
+    accumulator -= FIXED_STEP
+    steps++
+  }
+
+  speedFX.update(dt, player, camera)
+  rig.shake = speedFX.shake
+  rig.update(dt, player, input)
+  audio.update(player, TUNING.sprintSpeed)
+  world.update(now, player.position)
+  hud.update(run.time, {
+    time: run.time,
+    player,
+    checkpointsHit: run.checkpointsHit,
+    checkpointsTotal: level.checkpoints.length,
+    finished: run.finished,
+  })
+
+  pipeline.render(dt)
+  speedFX.render(renderer)
+}
+
+// ------------------------------------------------------------------ resize
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight
+  camera.updateProjectionMatrix()
+  renderer.setSize(window.innerWidth, window.innerHeight)
+  speedFX.setSize(window.innerWidth, window.innerHeight)
+  pipeline.setSize(window.innerWidth, window.innerHeight)
+})
+
+// ------------------------------------------------------------- persistence
+
+function loadBest() {
+  const v = localStorage.getItem('skyline-courier:best')
+  return v == null ? null : parseFloat(v)
+}
+function saveBest(t) {
+  try { localStorage.setItem('skyline-courier:best', String(t)) } catch { /* private mode */ }
+}
+
+// --------------------------------------------------------------- debug API
+
+// Exposed for the headless verification harness (docs/roadmap.md, later phase)
+// and for driving the game from a browser console during development.
+window.__game = {
+  player, rig, run, level, camera, scene, renderer, input, keys, respawn, resetRun,
+  tick,
+  /** Advance `frames` fixed frames without waiting on rAF. */
+  drive(frames, dt = 1 / 60) {
+    for (let i = 0; i < frames; i++) tick(dt)
+  },
+  /** Press a key for the harness: hold('fwd'), hold('sprint'), release('fwd'). */
+  hold: (k) => keys.add(k),
+  release: (k) => keys.delete(k),
+  jump() { input.jumpPressed = true; input.jumpHeld = true },
+}
+
+frame()
