@@ -17,9 +17,21 @@ to art is verified by a screenshot from the actual gameplay camera.
 
 ## Hard rules
 
-1. **Zero external assets.** No image, model, font, or audio file enters this
-   repo. Every mesh is generated geometry, every texture is a canvas or shader,
-   every sound is Web Audio synthesis. `three` is the only runtime dependency.
+1. **Zero external art assets.** No image, model, or font file enters this repo.
+   Every mesh is generated geometry and every texture is a canvas or shader.
+   `three` is the only runtime dependency.
+
+   **The one exception is music** (Ethan, 2026-07-25): `public/audio/*.ogg` are
+   generated tracks and are allowed. All *sound effects* remain Web Audio
+   synthesis with no files — footsteps, landings, brass, wind, the lot.
+
+   The distinction is not arbitrary. The rule exists because generated-3D-asset
+   intake is what stalled the predecessor: it needed hands-on cleanup and
+   in-viewport judgement on every single item, so the loop could never verify
+   its own work. A music track has none of those properties — it is authored
+   once, judged once, and never needs to be reconciled against geometry,
+   rigging, or a camera. Do not read this exception as permission to reopen the
+   art-asset pipeline.
 2. **Geometry and collision come from one declaration.** Never add a visible
    surface without its collider, or a collider without its surface. See
    `src/level.js` — everything routes through `solid()` / `decor()`.

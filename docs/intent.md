@@ -30,6 +30,23 @@ those three share, and what this game is aiming at:
   construction, because the centre of the screen is where the player reads the
   ledge they are about to land on.
 
+## The movement is deliberately overpowered (Ethan, 2026-07-25)
+
+*"honestly they are so fun I want to keep them like that and just improve
+graphics and expand course."*
+
+Dash and grapple make the player far more mobile than a traditional parkour
+game would allow, and that is the point. The design response to "this trivialises
+the course" is **build a bigger course**, never "reduce the ability."
+
+Concretely, this means:
+- Do not nerf `dashSpeed`, `grappleRange`, `airJumps`, or the wall-run carry to
+  restore difficulty to an existing obstacle. Move the obstacle.
+- Difficulty comes from *distance, height, and route choice*, not from fighting
+  the controller.
+- The traversal envelope these abilities create is documented with real numbers
+  in [`course-design.md`](course-design.md). Build against that table.
+
 ## The movement vocabulary
 
 The whole game is these verbs and how cleanly they chain:
@@ -56,7 +73,9 @@ more speed than a bad one?* If not, it's decoration.
 - `src/camera.js` — springs and damping only. Reads player state, never writes.
 - `src/level.js` — the course, as data. Geometry and collision come from the
   same declarations, so a visible surface is always a solid one.
-- `src/audio.js` — Web Audio synthesis. No files, ever.
+- `src/audio.js` — sound effects, Web Audio synthesis. No files, ever.
+- `src/music.js` — the one asset exception: generated looping tracks under
+  `public/audio/`. See CLAUDE.md for why music is carved out and art is not.
 
 The hard separation that matters: **level geometry and level collision are
 generated from one source**. Clockwork Garden's recurring bug was a visible
