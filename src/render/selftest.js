@@ -72,6 +72,17 @@ export function selftest(renderer = null, opts = {}) {
 
   pipeline.bloom.mips.forEach((m, i) => targets.push(describe(`bloom/${i}`, m.rt)))
 
+  // The shading half of the chain. Reported because "are contact shadows and AO
+  // actually running?" is the first question anyone asks of a frame that looks
+  // flat, and the honest answer is a target listing, not a boolean somebody set.
+  if (pipeline.gbuffer && pipeline.gbuffer.rt) {
+    targets.push(describe('prepass', pipeline.gbuffer.rt))
+  }
+  if (pipeline.contact && pipeline.contact.rtA) {
+    targets.push(describe('contact+ao/a', pipeline.contact.rtA))
+    targets.push(describe('contact+ao/b', pipeline.contact.rtB))
+  }
+
   const report = {
     three: THREE.REVISION,
     hdrSupported: detectHdrSupport(r),
@@ -97,6 +108,23 @@ export function selftest(renderer = null, opts = {}) {
       chromaticAberration: pipeline.chromaticAberration,
       vignette: pipeline.vignette,
       grain: pipeline.grain,
+    },
+    shading: {
+      contactShadows: pipeline.contactShadows,
+      contactStrength: pipeline.contactStrength,
+      contactLength: pipeline.contactLength,
+      aoIntensity: pipeline.aoIntensity,
+      aoRadius: pipeline.aoRadius,
+      aoStrength: pipeline.aoStrength,
+      // The non-key light budget, as fractions of the key's irradiance. These
+      // three plus the key are the entire contrast story of the frame.
+      skyIrradianceRatio: pipeline.skyIrradianceRatio,
+      bounceIrradianceRatio: pipeline.bounceIrradianceRatio,
+      fillIrradianceRatio: pipeline.fillIrradianceRatio,
+      aerialDensity: pipeline.aerialDensity,
+      aerialFloor: pipeline.aerialFloor,
+      aerialRim: pipeline.aerialRim,
+      skyEnvOk: pipeline.skyEnv ? pipeline.skyEnv.ok : false,
     },
     targets,
     totalTargetBytes: targets.reduce((a, t) => a + t.bytes, 0),

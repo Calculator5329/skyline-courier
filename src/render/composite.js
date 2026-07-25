@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { COMMON, Pass } from './pass.js'
+import { GBUFFER_GLSL } from './gbuffer.js'
 
 /**
  * The final composite. One fragment shader, one read of the framebuffer, one
@@ -116,16 +117,23 @@ precision highp float;
 precision highp sampler3D;
 ${COMMON}
 ${AGX}
+${GBUFFER_GLSL}
 
 uniform sampler2D tColor;
 uniform sampler2D tBloom;
 uniform sampler2D tExposure;
 uniform sampler3D tLut;
+// The contact/AO buffer and the prepass normal buffer, bound ONLY for the debug
+// views below. They cost one sampler binding and nothing else when uDebug.x = 0.
+uniform sampler2D tDebugContact;
+uniform sampler2D tDebugNormal;
 
 uniform vec2 uTexel;
 uniform vec4 uLens;    // x chromatic, y vignette, z grain, w time
 uniform vec4 uGrade;   // x bloomStrength, y lutStrength, z sharpen, w lutSize
 uniform vec4 uLook;    // x agxSlope, y agxPower, z agxSat, w exposureScale
+// x: debug view id (0 = off), y: scale for the depth view, z/w spare.
+uniform vec4 uDebug;
 
 varying vec2 vUv;
 
@@ -139,7 +147,48 @@ vec3 sampleLut( vec3 c ) {
   return texture( tLut, uvw ).rgb;
 }
 
+/**
+ * Debug views.
+ *
+ * This exists because "are the contact shadows on?" was answered for months by
+ * reading a boolean somebody set rather than by looking at the buffer, and the
+ * boolean was true while the buffer was white. A view that puts the actual
+ * texels on screen is the only honest answer, and it makes the failure
+ * screenshot-testable: the harness can capture mode 1 and assert that the frame
+ * is NOT uniformly white.
+ *
+ * Written straight to the framebuffer with no tone map and no grade — the whole
+ * point is to see the raw signal, and a debug view that has been through AgX is
+ * a debug view of AgX.
+ */
+bool scDebugView( int mode, out vec3 outColor ) {
+  if ( mode == 1 ) {            // contact-shadow visibility: 1 = lit, 0 = occluded
+    outColor = vec3( texture2D( tDebugContact, vUv ).r );
+  } else if ( mode == 2 ) {     // ambient occlusion
+    outColor = vec3( texture2D( tDebugContact, vUv ).b );
+  } else if ( mode == 3 ) {     // linear view depth, metres / uDebug.y
+    outColor = vec3( texture2D( tDebugContact, vUv ).g / max( uDebug.y, 1e-3 ) );
+  } else if ( mode == 4 ) {     // prepass normals, remapped to 0..1
+    vec4 n = texture2D( tDebugNormal, vUv );
+    outColor = n.z < 0.5 ? vec3( 0.0 ) : scDecodeNormal( n.xy ) * 0.5 + 0.5;
+  } else {
+    return false;
+  }
+  return true;
+}
+
 void main() {
+  // Uniform branch: every fragment takes the same side, so on any GPU built
+  // this decade the untaken side costs nothing.
+  int dbg = int( uDebug.x + 0.5 );
+  if ( dbg > 0 ) {
+    vec3 dcol;
+    if ( scDebugView( dbg, dcol ) ) {
+      gl_FragColor = vec4( clamp( dcol, 0.0, 1.0 ), 1.0 );
+      return;
+    }
+  }
+
   float exposure = texture2D( tExposure, vec2( 0.5 ) ).r * uLook.w;
 
   vec2 d = vUv - 0.5;
@@ -277,6 +326,10 @@ export function createComposite(lut) {
     tBloom: { value: null },
     tExposure: { value: null },
     tLut: { value: lut.texture },
+    tDebugContact: { value: null },
+    tDebugNormal: { value: null },
+    // Debug view off, depth view normalised over 120 m (the far archipelago).
+    uDebug: { value: new THREE.Vector4(0, 120, 0, 0) },
     uTexel: { value: new THREE.Vector2() },
     uLens: {
       value: new THREE.Vector4(
@@ -296,10 +349,20 @@ export function createComposite(lut) {
     },
     uGrade: {
       value: new THREE.Vector4(
-        // bloomStrength: 0.05. The pyramid is energy-preserving and already
-        // thresholded, so this is a true "5% of the over-white energy is
-        // scattered". A sunny game wants a halo on the lanterns, not a haze.
-        0.05,
+        // bloomStrength: 0.36. The pyramid is energy-preserving and already
+        // thresholded, so this is a true "36% of the over-threshold energy is
+        // scattered" — it cannot veil the frame, because everything below the
+        // threshold contributes exactly zero to it.
+        //
+        // It was 0.05, which is the right number for a scene whose highlights
+        // are already at display white and only want a suggestion of a halo.
+        // Measured, nothing here reaches white at all: the sun renders as a flat
+        // lemon disc with a crisp edge and the lantern emissives as flat pale
+        // octagons. A golden-hour frame with no aureole around its sun has no
+        // light source in it. 0.36, against the lowered threshold, is what puts
+        // the aureole back and pushes the cores of the emissives over white so
+        // they actually clip.
+        0.36,
         // lutStrength: 1.0 — the grade is the look, not an option.
         1.0,
         // sharpen: 0.20. The scene has no TAA to compensate for; this is here

@@ -114,6 +114,22 @@ export class RenderPipeline {
 
     // --- bloom -------------------------------------------------------------
     this.bloom = new Bloom(this._type, options.bloomLevels ?? 6)
+    // Threshold 0.85 post-exposure, down from 1.05.
+    //
+    // 1.05 was correct for a scene that contained things above display white.
+    // Measured, this one does not: across all eight harness shots the 99th
+    // percentile never exceeded 185/255 and clipped-high was 0.0%, so the whole
+    // six-level pyramid ran every frame and contributed nothing. A golden-hour
+    // scene with no aureole on the sun and no glow on the lanterns has no light
+    // source in it — the light is asserted by the grade rather than seen.
+    //
+    // 0.78 with a 0.3 knee starts the ramp at 0.48, which is above sunlit
+    // sandstone (~0.35 exposed) and below the lantern globes, the sun-raked
+    // brass and the solar disc. The narrower knee is the other half of the fix:
+    // a 0.5 knee at a 1.05 threshold spread the ramp over a full stop that
+    // nothing ever crossed.
+    this.bloom.threshold = 0.78
+    this.bloom.knee = 0.3
     if (!this.hdrSupported) {
       // In an LDR buffer nothing can exceed 1.0, so a threshold at 1.05 would
       // never fire. 0.72 picks out the lanterns and the sun-facing brass, which
@@ -167,21 +183,57 @@ export class RenderPipeline {
     /**
      * THE 20% RULE, as a budget rather than a magic number.
      *
-     * Total indirect irradiance on an up-facing surface is held at
-     * `skyIrradianceRatio` of the sun's irradiance, and split between the sky
-     * IBL and the scene's existing HemisphereLight by `iblShare`. Both numbers
-     * are measured off the actual lights during the scene walk, so changing the
-     * sun's intensity in world.js moves the ambient with it automatically and
-     * the ratio holds.
+     * ======================= WHAT THE BUDGET COVERS ==========================
+     * It used to cover only the *ambient* terms, and that was the hole. The
+     * scene's non-key light is not just ambient: world.js also runs a shadowless
+     * side-fill DirectionalLight and a bounce DirectionalLight from below, and
+     * measured against the key those two spend more than the entire ambient
+     * budget over again. Total non-key came out at 43% of key — barely one stop
+     * of shadow depth — which is exactly why a 2.8 m balustrade at a 9.8-degree
+     * sun elevation threw no visible shadow across the terrace deck and every
+     * box read as an untextured primitive lit identically on all faces.
+     *
+     * So the budget is now three numbers that sum to the 20% total, and every
+     * one of them is enforced against a MEASURED irradiance rather than a hoped
+     * intensity:
+     *
+     *   skyIrradianceRatio     0.15   ambient (sky IBL + HemisphereLight)
+     *   bounceIrradianceRatio  0.04   DirectionalLights from below the horizon
+     *   fillIrradianceRatio    0.00   DirectionalLights from above it
+     *                          ----
+     *                          0.19   -> ~2.4 stops of shadow depth
+     *
+     * Golden hour is a HIGH-CONTRAST condition. Under one stop of shadow depth
+     * is not a stylistic choice, it is the absence of lighting.
+     * =========================================================================
      */
-    this.skyIrradianceRatio = options.skyIrradianceRatio ?? 0.2
+    this.skyIrradianceRatio = options.skyIrradianceRatio ?? 0.15
     /**
-     * 0.75 to the IBL. The IBL is the half that carries DIRECTION — gold on the
+     * 0.88 to the IBL. The IBL is the part that carries DIRECTION — gold on the
      * sun side, cool green at the zenith, bright cloud deck underneath — and
-     * that split is the look. The HemisphereLight keeps a quarter because it is
-     * the only ambient that reaches materials this pipeline has not patched.
+     * that split is the look. A HemisphereLight cannot know where the sun is, so
+     * every unit of budget it holds is a unit spent flattening the frame. It
+     * keeps a token eighth only because it is the sole ambient reaching any
+     * material this pipeline has not patched.
      */
-    this.iblShare = options.iblShare ?? 0.75
+    this.iblShare = options.iblShare ?? 0.88
+    /**
+     * Budget for non-key DirectionalLights arriving from BELOW the horizon —
+     * the bounce off the sunlit cloud deck. Real, and the thing that keeps the
+     * undersides of floating islands from going black, so it keeps a share; it
+     * was simply spending four times this.
+     */
+    this.bounceIrradianceRatio = options.bounceIrradianceRatio ?? 0.04
+    /**
+     * Budget for non-key DirectionalLights arriving from ABOVE the horizon.
+     *
+     * ZERO, deliberately. A shadowless fill from the opposite azimuth is the sky
+     * IBL's job, and the IBL does it directionally and with the correct colour
+     * per normal instead of as one flat wash. Running both is doing the job
+     * twice and paying for it in shadow depth. Raise this only if you have
+     * decided the IBL is off.
+     */
+    this.fillIrradianceRatio = options.fillIrradianceRatio ?? 0.0
     this._ambientAuto = true
 
     // --- scene walk state --------------------------------------------------
@@ -191,12 +243,32 @@ export class RenderPipeline {
     this._prepassHiddenVis = []
     this._sunLight = null
     this._hemiLight = null
+    // Every DirectionalLight found by the walk, so the budget below can be
+    // measured off the ones that are NOT the key. Reused by resetting .length,
+    // so a steady-state walk allocates nothing.
+    this._dirLights = []
     this._sunAuto = true
     this._sunDirWorld = new THREE.Vector3(-0.42, 0.46, 0.78).normalize()
     this._sunDirView = new THREE.Vector3(0, 1, 0)
     this._scratchDir = new THREE.Vector3()
+    this._scratchDir2 = new THREE.Vector3()
     // Bound once so scene.traverse() allocates no closure per frame.
     this._visit = (object) => this._visitObject(object)
+
+    /**
+     * Self-registration, so the verification harness can reach the pipeline.
+     *
+     * `window.__game` is assembled in main.js and does not carry this object,
+     * which meant no screenshot test could ever assert that contact shadows
+     * were on — and they silently were not, for exactly as long as nobody could
+     * check. Registering here rather than asking main.js to do it keeps the
+     * guarantee inside the file that owns it: the pipeline is reachable the
+     * instant it exists, whoever constructed it.
+     *
+     * Last-constructed wins, which is correct: the game builds exactly one, and
+     * selftest.js builds throwaways that dispose themselves.
+     */
+    if (typeof globalThis !== 'undefined') globalThis.__scRender = this
   }
 
   // ------------------------------------------------------------- scene walk
@@ -213,9 +285,20 @@ export class RenderPipeline {
    */
   _walk() {
     this._prepassHidden.length = 0
+    this._dirLights.length = 0
     this._sunLight = null
     this._hemiLight = null
     this.scene.traverse(this._visit)
+
+    // The key is the first shadow-casting DirectionalLight. Chosen after the
+    // traverse rather than during it so the classification below cannot depend
+    // on scene-graph order.
+    for (let i = 0; i < this._dirLights.length; i++) {
+      if (this._dirLights[i].castShadow) {
+        this._sunLight = this._dirLights[i]
+        break
+      }
+    }
 
     // --- the ambient budget -------------------------------------------------
     const sunIrradiance = this._sunLight
@@ -224,6 +307,37 @@ export class RenderPipeline {
     const target = sunIrradiance * this.skyIrradianceRatio
     const iblTarget = target * this.iblShare
     if (this.skyEnv) this.skyEnv.setIrradiance(iblTarget)
+
+    // --- the non-key DIRECT budget -----------------------------------------
+    // Same idea as the ambient trim, applied to the fill DirectionalLights,
+    // which are the larger half of the overspend. Split by whether the light
+    // arrives from above or below the horizon, matching the test the shader
+    // does per fragment (see DIR_WRAPPER in patch.js) — the two classifications
+    // must agree or a light gets measured in one bucket and trimmed by the
+    // other's factor.
+    let sideIrradiance = 0
+    let bounceIrradiance = 0
+    for (let i = 0; i < this._dirLights.length; i++) {
+      const light = this._dirLights[i]
+      if (light === this._sunLight) continue
+      const irr = light.intensity * colorLum(light.color)
+      if (irr <= 1e-6) continue
+      if (this._lightDirection(light, this._scratchDir2).y < 0) bounceIrradiance += irr
+      else sideIrradiance += irr
+    }
+    // min(1, ...) so this can only ever TRIM. If world.js dials its own fills
+    // down to or below the budget, the trims measure out at 1.0 and this whole
+    // mechanism costs one multiply per light per fragment and changes nothing —
+    // which is the correct behaviour for a budget, as opposed to a target.
+    const sideTrim =
+      sideIrradiance > 1e-4
+        ? Math.min(1, (sunIrradiance * this.fillIrradianceRatio) / sideIrradiance)
+        : 1
+    const bounceTrim =
+      bounceIrradiance > 1e-4
+        ? Math.min(1, (sunIrradiance * this.bounceIrradianceRatio) / bounceIrradiance)
+        : 1
+    this.patcher.setFillTrim(sideTrim, bounceTrim, !!this._sunLight)
 
     if (this._ambientAuto) {
       const hemiIrradiance = this._hemiLight
@@ -241,13 +355,24 @@ export class RenderPipeline {
     }
 
     if (this._sunAuto && this._sunLight) {
-      const t = this._sunLight.target
-      this._sunDirWorld
-        .copy(this._sunLight.position)
-        .sub(t ? t.position : this._scratchDir.set(0, 0, 0))
-      if (this._sunDirWorld.lengthSq() < 1e-8) this._sunDirWorld.set(-0.42, 0.46, 0.78)
-      this._sunDirWorld.normalize()
+      this._lightDirection(this._sunLight, this._sunDirWorld)
     }
+  }
+
+  /**
+   * Unit direction TOWARD `light`, world space, written into `out`.
+   *
+   * Local `position` rather than `matrixWorld`: the walk runs before the frame's
+   * matrix update, so a world matrix read here can be a frame stale or, on the
+   * very first frame, still identity — which would put every light at the origin
+   * and classify the sun itself as a fill. Lights in this game are direct
+   * children of the scene, so local and world are the same thing anyway.
+   */
+  _lightDirection(light, out) {
+    const t = light.target
+    out.copy(light.position).sub(t ? t.position : this._scratchDir.set(0, 0, 0))
+    if (out.lengthSq() < 1e-8) out.set(-0.42, 0.46, 0.78)
+    return out.normalize()
   }
 
   _visitObject(object) {
@@ -273,10 +398,11 @@ export class RenderPipeline {
     }
 
     if (object.isDirectionalLight === true) {
-      // The sun is the one that casts. The fill light deliberately does not,
-      // and must not be mistaken for the key or the contact shadows point the
-      // wrong way across the whole level.
-      if (object.castShadow && !this._sunLight) this._sunLight = object
+      // Collected, not classified. The key is the one that casts — the fills
+      // deliberately do not, and must not be mistaken for it or the contact
+      // shadows point the wrong way across the whole level — but that decision
+      // is made in _walk once the whole list exists.
+      this._dirLights.push(object)
     } else if (object.isHemisphereLight === true) {
       if (!this._hemiLight) this._hemiLight = object
     }
@@ -342,6 +468,67 @@ export class RenderPipeline {
   /** Assumed thickness of an occluder, metres. Raise if shadows look hollow. */
   get contactThickness() { return this.contact ? this.contact.thickness : 0 }
   set contactThickness(v) { if (this.contact) this.contact.thickness = v }
+
+  // --- ambient occlusion ---------------------------------------------------
+  //
+  // Shares the contact pass and its prepass. Two knobs: what the estimator
+  // produces (intensity/radius, on the pass) and how much of it reaches the
+  // shading (aoStrength, in the material).
+
+  /** Estimator strength. 0 skips the AO taps entirely. */
+  get aoIntensity() { return this.contact ? this.contact.aoIntensity : 0 }
+  set aoIntensity(v) { if (this.contact) this.contact.aoIntensity = v }
+
+  /** AO world radius, metres. Size it to the architecture, not to the screen. */
+  get aoRadius() { return this.contact ? this.contact.aoRadius : 0 }
+  set aoRadius(v) { if (this.contact) this.contact.aoRadius = v }
+
+  /** How much of the AO buffer is applied to the indirect terms. 0..1. */
+  get aoStrength() { return this.patcher.aoStrength }
+  set aoStrength(v) { this.patcher.aoStrength = v }
+
+  // --- debug views ---------------------------------------------------------
+
+  /**
+   * 0 = normal output. 1 = contact-shadow visibility, 2 = AO, 3 = linear view
+   * depth, 4 = prepass normals. Anything but 0 bypasses the whole display
+   * transform — see scDebugView in composite.js for why.
+   */
+  get debugView() { return this.composite.uniforms.uDebug.value.x }
+  set debugView(v) { this.composite.uniforms.uDebug.value.x = v | 0 }
+
+  /**
+   * One-call health report for the shading half of the chain, for the harness.
+   *
+   * Every field is read from the live object graph rather than from the options
+   * that were requested, because the two disagreeing is the entire failure mode
+   * this exists to catch.
+   */
+  shadingReport() {
+    const tex = this.patcher.uniforms.scContactTex.value
+    return {
+      hdrSupported: this.hdrSupported,
+      contactEnabled: this._contactEnabled,
+      contactSupported: this.contactSupported,
+      contactShadows: this.contactShadows,
+      gbufferAllocated: !!(this.gbuffer && this.gbuffer.rt),
+      gbufferSize: this.gbuffer ? [this.gbuffer.width, this.gbuffer.height] : null,
+      contactTextureBound: !!tex,
+      contactUniformArmed: this.patcher.uniforms.scFeat.value.x > 0.5,
+      contactSize: this.contact && this.contact.rtA
+        ? [this.contact.rtA.width, this.contact.rtA.height]
+        : null,
+      beautySize: [this._width, this._height],
+      contactStrength: this.contactStrength,
+      aoIntensity: this.aoIntensity,
+      aoStrength: this.aoStrength,
+      skyEnvOk: this.skyEnv ? this.skyEnv.ok : false,
+      fillTrim: this.patcher.uniforms.scFill.value.toArray(),
+      ambientTrim: this.patcher.ambientTrim,
+      iblGain: this.patcher.iblGain,
+      patchedMaterials: this.patcher.count,
+    }
+  }
 
   // --- ambient budget ------------------------------------------------------
 
@@ -412,6 +599,23 @@ export class RenderPipeline {
   /** Brightness of the inscattered light. >1 makes distance LIGHTEN. */
   get aerialInscatter() { return this.patcher.aerialInscatter }
   set aerialInscatter(v) { this.patcher.aerialInscatter = v }
+
+  /**
+   * Floor on transmittance: the minimum fraction of its own colour a surface
+   * keeps at any distance. This is what stops the far archipelago converging on
+   * one value and reading as a wall of fog.
+   */
+  get aerialFloor() { return this.patcher.aerialFloor }
+  set aerialFloor(v) { this.patcher.aerialFloor = v }
+
+  /** Backlit silhouette rim strength, for separating distant islands from haze. */
+  get aerialRim() { return this.patcher.aerialRim }
+  set aerialRim(v) { this.patcher.aerialRim = v }
+
+  /** Haze colour looking AWAY from the sun (hex, sRGB). Cool, and darker. */
+  setAerialCoolColor(hex, scale = 0.7) {
+    this.patcher.uniforms.scHazeCool.value.set(hex).multiplyScalar(scale)
+  }
 
   /** Haze colour away from the sun (hex, sRGB). Match the sky's horizon band. */
   setAerialColor(hex) {
@@ -550,6 +754,8 @@ export class RenderPipeline {
       const tex = this.contact.render(renderer, this.gbuffer, this.camera, this._sunDirView)
       this.patcher.setContactTexture(tex)
       this.patcher.setContactEnabled(true)
+      this.composite.uniforms.tDebugContact.value = tex
+      this.composite.uniforms.tDebugNormal.value = this.gbuffer.normalTexture
     } else {
       this.patcher.setContactEnabled(false)
     }

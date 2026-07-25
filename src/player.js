@@ -27,6 +27,34 @@ export const TUNING = {
   groundAccel: 70,
   groundFriction: 8.5,
   frictionFloor: 4.0,      // friction never drops below this "control speed"
+  // Friction applied while grounded, steering, and ABOVE the sprint cap.
+  //
+  // Full ground friction here is the single worst momentum leak the controller
+  // had: at 21 m/s (a dash) it removes 178 m/s², so a dash or grapple exit was
+  // scrubbed back to 11 m/s within 0.08 s of touching a roof — measured, not
+  // guessed. The player never asked for that, which makes it a bug by the rule
+  // at the top of this file. At 0.9 the same 21 m/s bleeds to sprint over
+  // ~0.7 s, which is long enough to carry a boost into the next jump and short
+  // enough that it does not become the new cruising speed. Letting go of the
+  // stick still hands you the full 8.5 — that deceleration you *did* ask for.
+  overspeedFriction: 0.9,
+  // How fast a grounded player above the sprint cap can swing their momentum
+  // around, in rad/s. Above the cap steering *redirects* velocity instead of
+  // adding to it: Quake-style ground acceleration projects onto the wish axis,
+  // so with the old friction gone a player who simply held W and swept the
+  // mouse accumulated speed out of nothing and pegged the 34 m/s clamp in a
+  // few seconds. Turning must never print speed — a dash has to stay the only
+  // way to get dash speed. 7 rad/s puts a 90° carve at ~0.35 s, which reads as
+  // weight at pace without feeling like ice.
+  overspeedTurn: 7.0,
+
+  // One footfall per this much ground covered. Lives here rather than inline
+  // because the camera locks its head-bob to the same cadence; when the two
+  // drifted apart the view bobbed at 2.6 Hz over footsteps firing at 4.3 Hz,
+  // and the mismatch reads as the animation being broken even though both
+  // halves are individually fine.
+  strideWalk: 2.0,
+  strideSprint: 2.5,
 
   airAccel: 42,
   airWishSpeed: 2.6,       // the strafe-gain cap — small on purpose
@@ -49,6 +77,13 @@ export const TUNING = {
   slideFriction: 0.35,
   slideDownhillPull: 9.0,
   slideHopBoost: 1.6,
+  // Coyote time for the slide-hop. Nobody releases crouch and presses jump on
+  // the same frame; they let go of Ctrl first and then hit Space. Without this
+  // grace the stance update stands you up before `_tryJump` runs, the hop
+  // boost never applies, and the natural input is *slower* out of a slide than
+  // simply holding Ctrl through it — a trick move that punishes the intuitive
+  // hands. Same philosophy as coyoteTime: honour what the player meant.
+  slideHopGrace: 0.15,
 
   wallRunTime: 1.6,
   wallRunMinSpeed: 4.6,
@@ -91,7 +126,10 @@ export const TUNING = {
   dashSpeed: 21.0,
   dashTime: 0.22,
   dashCooldown: 0.9,
-  dashExitSpeed: 14.0,     // speed retained when the burst ends
+  // There is deliberately no `dashExitSpeed` clamp. The burst simply ends and
+  // `overspeedFriction` bleeds what is left, so how much of the dash you carry
+  // depends on what you do next rather than on a constant. (A dead
+  // `dashExitSpeed: 14.0` sat here for a while, read by nothing.)
 
   // --- grapple: the courier's brass cuff ---------------------------------
   // The fiction has called for this since docs/intent.md was written. It
@@ -143,8 +181,22 @@ export class Player {
     this.airJumpsLeft = TUNING.airJumps
     this.coyote = 0
     this.jumpBuffered = 0
+    this.slideGrace = 0
     this.footDistance = 0
     this.landImpact = 0
+    /**
+     * Metres the body was teleported straight up by a step-up or mantle this
+     * frame, 0 otherwise.
+     *
+     * Published for the camera, which has to absorb it: the body legitimately
+     * jumps up to `vaultMaxHeight` in a single frame, and a view that follows
+     * that literally reads as a glitch rather than as a mantle. Handing over
+     * the exact number beats any heuristic the rig could run on the position,
+     * and it stays correct no matter how many sim steps a render frame took.
+     */
+    this.stepUp = 0
+    /** Horizontal speed at the top of the frame, before collision flattens it. */
+    this._preSpeed = 0
 
     /** Drained each frame by the audio + camera layers. */
     this.events = []
@@ -241,11 +293,13 @@ export class Player {
     this.sliding = false
     this.height = TUNING.standHeight
     this.wallTimer = TUNING.wallRunTime
+    this.slideGrace = 0
   }
 
   update(dt, input, yaw, pitch = 0) {
     const T = TUNING
     this.events.length = 0
+    this.stepUp = 0
     this.wasGrounded = this.grounded
     this._yaw = yaw
     this._pitch = pitch
@@ -268,6 +322,8 @@ export class Player {
     // frame-perfect re-taps — that is dexterity testing, not flow.
     if (input.jumpHeld && this.grounded) this.jumpBuffered = T.jumpBuffer
     this.wallCooldown = Math.max(0, this.wallCooldown - dt)
+    // Decayed before `_updateStance`, which is what re-arms it on slide exit.
+    this.slideGrace = Math.max(0, this.slideGrace - dt)
 
     this._updateStance(input)
     this._updateAbilities(dt, input, wishing)
@@ -310,7 +366,7 @@ export class Player {
 
     if (this.grounded && horiz > 0.5) {
       this.footDistance += horiz * dt
-      const stride = this.sliding ? 1e9 : (input.sprint ? 2.5 : 2.0)
+      const stride = this.sliding ? 1e9 : (input.sprint ? T.strideSprint : T.strideWalk)
       if (this.footDistance > stride) {
         this.footDistance = 0
         this.events.push({ type: 'step', speed: horiz })
@@ -342,6 +398,7 @@ export class Player {
       if (this.world.isClear(this._probe, T.radius * 0.98, T.standHeight, this._scratch)) {
         this.sliding = false
         this.height = T.standHeight
+        this.slideGrace = T.slideHopGrace
       }
     }
   }
@@ -350,10 +407,26 @@ export class Player {
 
   _groundMove(dt, input, wishing) {
     const T = TUNING
-    const friction = this.sliding ? T.slideFriction : T.groundFriction
     const speed = this.speed
 
-    if (speed > 0.01 && (!wishing || this.sliding || speed > T.sprintSpeed)) {
+    // How much of the current velocity is going where the player is steering.
+    // -1 is dead against it, +1 is straight along it.
+    const along = (wishing && speed > 0.01)
+      ? (this.velocity.x * this._wish.x + this.velocity.z * this._wish.z) / speed
+      : 0
+
+    // Four friction regimes, and the whole distinction is *who asked for the
+    // slowdown*. Steering below the cap: none, so accelerating feels immediate.
+    // Steering forward above it: a slow bleed, because speed you earned with a
+    // dash, a grapple or a slide is yours until you spend it. Steering against
+    // your own momentum, or not steering at all: the full brake, because those
+    // are the two cases where the player genuinely asked to stop.
+    let friction = 0
+    if (this.sliding) friction = T.slideFriction
+    else if (!wishing) friction = T.groundFriction
+    else if (speed > T.sprintSpeed) friction = along > 0 ? T.overspeedFriction : T.groundFriction
+
+    if (speed > 0.01 && friction > 0) {
       const drop = Math.max(speed, T.frictionFloor) * friction * dt
       const next = Math.max(0, speed - drop)
       const k = next / speed
@@ -367,6 +440,14 @@ export class Player {
       return
     }
     if (!wishing) return
+
+    if (this.speed > T.sprintSpeed) {
+      // Above the cap the wish direction steers momentum rather than feeding
+      // it. See `overspeedTurn`: running accelerate() here instead lets a mouse
+      // sweep manufacture speed the player never earned.
+      steerHorizontal(this.velocity, this._wish, T.overspeedTurn, dt)
+      return
+    }
 
     const target = input.sprint ? T.sprintSpeed : T.walkSpeed
     accelerate(this.velocity, this._wish, target, T.groundAccel, dt)
@@ -530,10 +611,13 @@ export class Player {
       this.coyote = 0
       this.grounded = false
       this.velocity.y = T.jumpSpeed
-      if (this.sliding) {
+      if (this.sliding || this.slideGrace > 0) {
         // Slide-hop: leaving a slide through a jump keeps the speed the slide
-        // built. This is the main chaining trick the course rewards.
+        // built. This is the main chaining trick the course rewards, and the
+        // grace window means it fires whether you held Ctrl through the jump
+        // or let go of it first (see `slideHopGrace`).
         this.sliding = false
+        this.slideGrace = 0
         this.height = T.standHeight
         const s = this.speed
         if (s > 0.01) {
@@ -576,6 +660,16 @@ export class Player {
     }
 
     // --- air jump ---------------------------------------------------------
+    // A press made just before touchdown means "jump the moment I land", not
+    // "spend the double jump at knee height". Without this guard the air jump
+    // always won the race: pressing Space 0.04 s before a roof burned the
+    // charge at y = 0.77 m and produced a *weaker* hop than simply waiting
+    // (airJumpSpeed 7.6 vs jumpSpeed 8.6), which is the exact opposite of what
+    // the player asked for. We only hold the press when the buffer is provably
+    // long enough to reach the floor, so a press that could never be honoured
+    // on landing still becomes an air jump — the buffer is never eaten.
+    if (this.velocity.y < -0.5 && this._floorWithinFall(this.jumpBuffered)) return
+
     if (this.airJumpsLeft > 0) {
       this.airJumpsLeft--
       this.jumpBuffered = 0
@@ -594,6 +688,30 @@ export class Player {
     }
   }
 
+  /**
+   * Is there floor close enough below that we will certainly land within
+   * `time` seconds at the current fall rate?
+   *
+   * Only called on the handful of frames where a jump is buffered mid-air, and
+   * it borrows the shared probe/scratch, so it allocates nothing. The 0.75
+   * factor is deliberate pessimism: a player drifting sideways off the ledge
+   * we just probed must fall through to the air jump rather than sit on a
+   * buffered press that never gets honoured. Because it re-runs every frame
+   * with the shrinking remainder of the buffer, that fallback happens on its
+   * own while there is still buffer left to spend.
+   */
+  _floorWithinFall(time) {
+    const fall = -this.velocity.y * time * 0.75
+    if (fall < 0.02) return false
+    this._probe.copy(this.position)
+    this._probe.y -= fall
+    const below = this.world.resolve(this._probe, TUNING.radius, this.height, this._scratch)
+    for (let i = 0; i < below.length; i++) {
+      if (below[i].normal.y > 0.7) return true
+    }
+    return false
+  }
+
   // ------------------------------------------------------------- collision
 
   _integrate(dt) {
@@ -604,9 +722,8 @@ export class Player {
     const sdt = dt / steps
 
     this.grounded = false
-    this._hitWall = false
+    this._ledge = false
     this._wallTop = -Infinity
-    let wallNx = 0, wallNy = 0, wallNz = 0
 
     for (let s = 0; s < steps; s++) {
       this.position.addScaledVector(vel, sdt)
@@ -626,17 +743,27 @@ export class Player {
 
           if (n.y > 0.7) {
             this.grounded = true
-          } else if (Math.abs(n.y) < 0.45) {
-            this._hitWall = true
-            wallNx = n.x; wallNy = n.y; wallNz = n.z
+          } else if (n.y > -0.45) {
+            // Everything that is neither floor nor ceiling is a step-up
+            // candidate, and the band matters more than it looks.
+            //
+            // The old test was `|n.y| < 0.45`, i.e. near-vertical faces only.
+            // But the capsule's bottom hemisphere never *reaches* a vertical
+            // face on anything shorter than its own radius (0.34 m): it meets
+            // the top EDGE, and the normal from the capsule axis to that edge
+            // comes back tilted around n.y ≈ 0.5. That fell through both
+            // branches, so a 20 cm kerb was never offered to the step-up path
+            // and was resolved as a ramp instead — measured at 11 m/s in, 2.95
+            // m/s out, with 4.9 m/s of the difference converted into an
+            // unasked-for hop. Every kerb, cornice and stair nosing in the
+            // course did that. Widening the band hands those contacts to the
+            // vault path, which steps onto them and keeps the speed.
+            this._ledge = true
             if (c.top > this._wallTop) this._wallTop = c.top
           }
         }
       }
     }
-
-    if (this._hitWall) this._pendingWall = { x: wallNx, y: wallNy, z: wallNz }
-    else this._pendingWall = null
 
     // At exact rest the capsule sits *touching* the floor with zero
     // penetration, so the contact query finds nothing and `grounded` flickers
@@ -672,19 +799,40 @@ export class Player {
     // walks into a knee-high ledge and simply *stops* is the single most
     // damning movement bug a parkour game can have, and it silently breaks
     // every staircase in the level as well.
-    if (this._pendingWall && wishing) {
+    if (this._ledge && wishing) {
       const rise = this._wallTop - this.position.y
       if (rise > 0.02 && rise < T.vaultMaxHeight) {
         this._probe.set(this.position.x, this._wallTop + 0.02, this.position.z)
         this._probe.addScaledVector(this._wish, T.radius * 0.9)
         if (this.world.isClear(this._probe, T.radius * 0.95, this.height, this._scratch)) {
           const airborne = !this.grounded
+          this.stepUp = this._probe.y - this.position.y
           this.position.copy(this._probe)
           // Mantling out of the air gets a push over the lip; stepping up a
           // stair while running must not launch you, or stairs become a
           // trampoline.
-          if (airborne) this.velocity.y = Math.max(this.velocity.y, T.vaultLift)
-          else if (this.velocity.y < 0) this.velocity.y = 0
+          if (airborne) {
+            this.velocity.y = Math.max(this.velocity.y, T.vaultLift)
+          } else {
+            // A grounded step-up must never leave you rising faster than you
+            // already were. `fallSpeed` is this frame's pre-collision vertical
+            // velocity, so a real jump (which is airborne by then anyway) is
+            // untouched while the upward kick a kerb collision manufactures is
+            // discarded along with the ramp it came from.
+            this.velocity.y = Math.min(this.velocity.y, Math.max(fallSpeed, 0))
+          }
+          // Give back the horizontal speed the collision solver cancelled when
+          // the capsule touched the riser. It zeroes the component *into* the
+          // wall, and on a head-on ledge that is the entire velocity — which is
+          // why a sprint into a 0.6 m lip used to come out the other side at
+          // 6.4 m/s, and why an eight-step staircase dropped an 11 m/s run to
+          // 0.33 m/s. intent.md promises a mantle "keeps momentum through the
+          // top"; this is the line that makes that true. `_preSpeed` is this
+          // frame's pre-collision speed, so the player is handed back exactly
+          // what they arrived with and never more.
+          const carry = Math.max(this.speed, this._preSpeed)
+          this.velocity.x = this._wish.x * carry
+          this.velocity.z = this._wish.z * carry
           this.grounded = true
           this.wallRunning = false
           if (airborne || rise > 0.35) {
@@ -836,6 +984,31 @@ export class Player {
  * point where the projection of velocity onto `dir` reaches `wishSpeed`. With
  * a small wishSpeed in air this is what produces strafe gain.
  */
+/**
+ * Rotate horizontal velocity toward `dir` at `rate` rad/s, preserving its
+ * magnitude exactly.
+ *
+ * The counterpart to `accelerate` for the overspeed case: the player keeps
+ * every metre per second they earned and can still aim it, but the act of
+ * turning neither adds nor removes any. Renormalising the blended direction is
+ * what guarantees that — a plain vector lerp would shorten the vector on every
+ * turn and quietly tax the corner.
+ */
+function steerHorizontal(vel, dir, rate, dt) {
+  const sp = Math.hypot(vel.x, vel.z)
+  if (sp < 1e-4) return
+  const k = 1 - Math.exp(-rate * dt)
+  const cx = vel.x / sp, cz = vel.z / sp
+  const nx = cx + (dir.x - cx) * k
+  const nz = cz + (dir.z - cz) * k
+  const l = Math.hypot(nx, nz)
+  // Degenerate only when the wish is exactly opposite to the current heading;
+  // the full-brake friction regime is already handling that case.
+  if (l < 1e-3) return
+  vel.x = (nx / l) * sp
+  vel.z = (nz / l) * sp
+}
+
 function accelerate(vel, dir, wishSpeed, accel, dt) {
   const current = vel.x * dir.x + vel.z * dir.z
   const add = wishSpeed - current

@@ -23,6 +23,19 @@ import { GBUFFER_GLSL } from './gbuffer.js'
  * of a hemisphere are different quantities, and multiplying a directional
  * visibility term onto ambient is how you get a scene where the shadows are
  * black holes instead of the cool green they should be.
+ *
+ * ------------------------------ AND THE AO ---------------------------------
+ * The same pass also computes a hemisphere ambient occlusion into .b, because
+ * it already has the two textures AO needs bound and a jitter value computed,
+ * and a separate AO pass would pay that setup twice for no benefit.
+ *
+ * AO is not a luxury in THIS art direction, it is load-bearing. The sun sits at
+ * ~10 degrees of elevation, so a horizontal deck receives sin(10) = 0.17 of the
+ * key and is overwhelmingly lit by the ambient term. Every wall/floor junction,
+ * every moss cap's overhang and every balustrade base is therefore drawn almost
+ * entirely by ambient light, and un-occluded ambient draws none of them: that is
+ * precisely the "untextured primitives" read. AO puts the form back into the
+ * one term that is actually doing the lighting on a low-sun frame.
  */
 
 const CONTACT = /* glsl */ `
@@ -35,6 +48,7 @@ uniform mat4 uProj;
 uniform mat4 uProjInv;
 uniform vec3 uSunDirView;
 uniform vec4 uParams;   // x length(m)  y thickness(m)  z frame  w strength
+uniform vec4 uAO;       // x intensity  y radius(m)  z max screen radius(uv)  w bias
 varying vec2 vUv;
 
 // 14 steps. Below ~10 the ray steps over thin geometry (railings, the
@@ -43,23 +57,89 @@ varying vec2 vUv;
 // curve flattens for a ray this short.
 #define SC_CS_STEPS 14
 
+// 8 AO taps. The bilateral below averages a 5x5 neighbourhood, so each pixel
+// effectively sees far more than 8 samples; going to 16 here doubles the cost of
+// the most expensive pass in the chain for a difference that disappears into the
+// blur. The golden-angle spiral is what makes 8 enough — it has no preferred
+// direction, so the residual error is isotropic noise rather than a pattern.
+#define SC_AO_TAPS 8
+#define SC_GOLDEN_ANGLE 2.39996323
+
+/**
+ * Horizon-style hemisphere AO from the depth/normal prepass.
+ *
+ * For each tap we form the vector from this pixel to the sampled surface and ask
+ * how far above the tangent plane it rises: dot(N, v/|v|). That is the sine of
+ * the elevation the occluder subtends, which is the correct cosine-weighted
+ * contribution for a diffuse hemisphere, and it costs one normalise.
+ *
+ * The two guards matter more than the estimator:
+ *  - the RANGE check discards occluders further away than the radius, otherwise
+ *    a near wall darkens a distant floor and you get the classic white halo
+ *    around every silhouette;
+ *  - the BIAS discards near-tangent samples, which are the same surface seen
+ *    through depth-buffer quantisation rather than a real occluder.
+ */
+float scAmbientOcclusion( vec3 P, vec3 N, float depth, float jitter ) {
+  if ( uAO.x <= 0.0 ) return 1.0;
+
+  float radius = uAO.y;
+  // World radius -> uv radius. A length L at view depth d subtends L*P00/d in
+  // NDC x, and uv is half of NDC. Clamped: at 30 cm from a wall the unclamped
+  // footprint is most of the screen, which is both slow (cache misses on every
+  // tap) and wrong (it stops being *ambient* occlusion and becomes shading).
+  vec2 uvR = vec2( uProj[0][0], uProj[1][1] ) * ( radius / ( 2.0 * max( depth, 0.05 ) ) );
+  uvR = min( uvR, vec2( uAO.z ) );
+
+  float occ = 0.0;
+  for ( int i = 0; i < SC_AO_TAPS; i ++ ) {
+    float fi = float( i ) + jitter;
+    float a = fi * SC_GOLDEN_ANGLE;
+    // sqrt of the index gives a UNIFORM disc rather than a centre-heavy one;
+    // without it three quarters of the taps land inside the inner third of the
+    // radius and the AO has no reach.
+    float r = min( 1.0, sqrt( ( fi + 0.5 ) / float( SC_AO_TAPS ) ) );
+    vec2 suv = vUv + vec2( cos( a ), sin( a ) ) * r * uvR;
+    if ( suv.x <= 0.0 || suv.x >= 1.0 || suv.y <= 0.0 || suv.y >= 1.0 ) continue;
+    if ( texture2D( tNormal, suv ).z < 0.5 ) continue;   // sky occludes nothing
+
+    vec3 S = scViewPos( suv, texture2D( tDepth, suv ).r, uProjInv );
+    vec3 v = S - P;
+    float d = sqrt( max( dot( v, v ), 1e-8 ) );
+    float range = clamp( 1.0 - ( d - radius ) / max( radius, 1e-3 ), 0.0, 1.0 );
+    occ += max( dot( N, v / d ) - uAO.w, 0.0 ) * range;
+  }
+
+  return clamp( 1.0 - uAO.x * occ / float( SC_AO_TAPS ), 0.0, 1.0 );
+}
+
 void main() {
   vec4 nrm = texture2D( tNormal, vUv );
 
-  // Coverage 0 = the prepass never wrote here = sky. Return full light and a
-  // huge depth so the bilateral blur below treats it as a hard discontinuity
-  // and never bleeds a shadow out over the cloud deck.
-  if ( nrm.z < 0.5 ) { gl_FragColor = vec4( 1.0, 1e4, 0.0, 1.0 ); return; }
+  // Coverage 0 = the prepass never wrote here = sky. Return full light, full
+  // AO, and a huge depth so the bilateral blur below treats it as a hard
+  // discontinuity and never bleeds a shadow out over the cloud deck.
+  if ( nrm.z < 0.5 ) { gl_FragColor = vec4( 1.0, 1e4, 1.0, 1.0 ); return; }
 
   float depth = texture2D( tDepth, vUv ).r;
   vec3 P = scViewPos( vUv, depth, uProjInv );
   vec3 N = scDecodeNormal( nrm.xy );
   vec3 L = uSunDirView;
 
+  // Rotate the sample positions per pixel and per frame. Without the jitter the
+  // march's 14 steps are visible as 14 concentric bands and the AO spiral is
+  // visible as 8 spokes; with it both become noise the bilateral resolves into
+  // a soft gradient. Shared by both estimators — they sample different spaces,
+  // so one value cannot correlate them.
+  float jitter = scIGN( gl_FragCoord.xy + uParams.z * 3.1717 );
+
+  float ao = scAmbientOcclusion( P, N, depth, jitter );
+
   // A surface already facing away from the sun is in its own shadow; marching
-  // from it can only produce a shadow on top of a shadow, at full cost.
+  // from it can only produce a shadow on top of a shadow, at full cost. The AO
+  // above still runs for it, which is the whole reason it is computed first.
   float NdL = dot( N, L );
-  if ( NdL <= 0.02 ) { gl_FragColor = vec4( 1.0, depth, 0.0, 1.0 ); return; }
+  if ( NdL <= 0.02 ) { gl_FragColor = vec4( 1.0, depth, ao, 1.0 ); return; }
 
   // Scale the march with depth. A fixed WORLD length would shrink to a fraction
   // of a pixel at range (all cost, no visible result); a fixed SCREEN length
@@ -68,11 +148,6 @@ void main() {
   // keeps the screen-space footprint roughly constant. Clamped at 2.5x so a
   // pixel on the far archipelago cannot march 40 m and shadow another island.
   float len = uParams.x * clamp( depth * 0.08 + 0.75, 0.75, 2.5 );
-
-  // Rotate the sample positions per pixel and per frame. Without the jitter the
-  // 14 steps are visible as 14 concentric bands; with it they become noise that
-  // the bilateral below resolves into a soft gradient.
-  float jitter = scIGN( gl_FragCoord.xy + uParams.z * 3.1717 );
 
   // Start the ray off the surface along the normal. The constant term (12 mm)
   // covers interpolated-normal error on the merged boxes; the depth-scaled term
@@ -113,8 +188,8 @@ void main() {
     }
   }
 
-  // .g carries depth through to the blur so it can be edge-aware.
-  gl_FragColor = vec4( 1.0 - occ * uParams.w, depth, 0.0, 1.0 );
+  // .g carries depth through to the blur so it can be edge-aware; .b is the AO.
+  gl_FragColor = vec4( 1.0 - occ * uParams.w, depth, ao, 1.0 );
 }
 `
 
@@ -132,23 +207,27 @@ uniform sampler2D tSrc;
 uniform vec2 uDirection;
 varying vec2 vUv;
 void main() {
-  vec2 c = texture2D( tSrc, vUv ).rg;
-  float sum = c.r * 0.5;
+  vec3 c = texture2D( tSrc, vUv ).rgb;
+  // Contact visibility and AO ride the same weights: they were estimated from
+  // the same depth buffer at the same texel, so anything that makes a neighbour
+  // a bad blur partner for one makes it a bad partner for the other.
+  vec2 sum = c.rb * 0.5;
   float wsum = 0.5;
   for ( int i = 1; i <= 2; i ++ ) {
     vec2 o = uDirection * float( i );
-    vec2 a = texture2D( tSrc, vUv + o ).rg;
-    vec2 b = texture2D( tSrc, vUv - o ).rg;
+    vec3 a = texture2D( tSrc, vUv + o ).rgb;
+    vec3 b = texture2D( tSrc, vUv - o ).rgb;
     float w = 0.3 / float( i );
     // Depth tolerance is RELATIVE (divided by the centre depth): a 10 cm step
     // is a hard edge at 2 m and noise at 200 m, and a fixed tolerance either
     // over-blurs up close or refuses to blur at all in the distance.
     float wa = w * exp( -abs( a.g - c.g ) * 40.0 / max( 0.1, c.g ) );
     float wb = w * exp( -abs( b.g - c.g ) * 40.0 / max( 0.1, c.g ) );
-    sum += a.r * wa + b.r * wb;
+    sum += a.rb * wa + b.rb * wb;
     wsum += wa + wb;
   }
-  gl_FragColor = vec4( sum / wsum, c.g, 0.0, 1.0 );
+  sum /= wsum;
+  gl_FragColor = vec4( sum.x, c.g, sum.y, 1.0 );
 }
 `
 
@@ -170,12 +249,41 @@ export class ContactShadows {
           // thickness: 0.42 m. See the thickness test in the shader.
           0.42,
           0, // frame counter, driven per frame
-          // strength: 0.85, not 1.0. A contact shadow that removes 100% of the
-          // key light is darker than the shadow-mapped shadow immediately next
-          // to it (which is filtered, and floored by ambient), so the contact
-          // reads as a black outline rather than as the same shadow getting
-          // tighter. 0.85 makes them agree.
-          0.85
+          // strength: 0.95. It used to be 0.85 on the argument that a contact
+          // darker than the neighbouring shadow-mapped shadow reads as an
+          // outline. That argument was made when non-key light ran at 43% of
+          // key, which floored every shadow at a value the contact could
+          // undercut. At the 20% budget the pipeline now enforces, the two
+          // agree at 0.95 and the extra 10% is the difference between a moss
+          // cap that sits on the stone and one that is printed on it.
+          0.95
+        ),
+      },
+      uAO: {
+        value: new THREE.Vector4(
+          // intensity 1.55. Above 1 because the estimator is a single-bounce
+          // visibility sum over 8 taps and systematically UNDER-reports a real
+          // cosine-weighted integral; 1.55 lands a right-angled wall/floor
+          // junction at roughly 0.5 occlusion, which is what the analytic answer
+          // for a quarter-space is. Deliberately the last knob turned to deepen
+          // the frame, rather than another cut to the ambient budget: AO darkens
+          // CREASES, which adds form, whereas cutting ambient darkens whole
+          // faces, which at some point stops being contrast and starts being an
+          // unreadable route.
+          1.55,
+          // radius 0.7 m. Sized to the architecture, not to the screen: the
+          // features this has to draw are the 0.3-0.6 m offsets of a moss lip,
+          // a balustrade base and a stair nosing. A 2 m radius would turn the
+          // whole scene into soft dirt in the corners and stop describing
+          // anything.
+          0.7,
+          // max screen radius, 0.055 uv. See the clamp in the shader.
+          0.055,
+          // bias 0.12, i.e. discard occluders within ~7 degrees of the tangent
+          // plane. That is the band where depth quantisation on a flat floor
+          // impersonates an occluder, and without it large flat surfaces come
+          // back with a faint grey wash instead of white.
+          0.12
         ),
       },
     })
@@ -199,13 +307,22 @@ export class ContactShadows {
   get strength() { return this.pass.uniforms.uParams.value.w }
   set strength(s) { this.pass.uniforms.uParams.value.w = s }
 
+  /** AO intensity. 0 disables the AO taps entirely (the branch is uniform). */
+  get aoIntensity() { return this.pass.uniforms.uAO.value.x }
+  set aoIntensity(v) { this.pass.uniforms.uAO.value.x = v }
+
+  /** AO world radius in metres. */
+  get aoRadius() { return this.pass.uniforms.uAO.value.y }
+  set aoRadius(v) { this.pass.uniforms.uAO.value.y = v }
+
   setSize(w, h) {
     if (this.rtA) this.rtA.dispose()
     if (this.rtB) this.rtB.dispose()
-    // RG16F: one channel of visibility, one of depth for the bilateral. Half
-    // the bandwidth of RGBA at full resolution, and visibility genuinely does
-    // not need more than 11 bits of mantissa.
-    const o = { name: 'sc-contact', format: THREE.RGFormat }
+    // RGBA16F: visibility, depth for the bilateral, AO. It was RG16F before the
+    // AO moved into this pass; the third channel is worth the bandwidth because
+    // the alternative is a second full-resolution pass that re-reads the same
+    // two prepass textures to produce it.
+    const o = { name: 'sc-contact' }
     this.rtA = renderTarget(w, h, THREE.HalfFloatType, o)
     this.rtB = renderTarget(w, h, THREE.HalfFloatType, o)
     this._texel.set(1 / Math.max(1, w), 1 / Math.max(1, h))

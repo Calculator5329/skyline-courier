@@ -29,6 +29,22 @@ import { macroTexture, MACRO_SIZE } from './noise.js'
  *   5. STOCHASTIC DE-TILING — a second, rotated and rescaled sample of the same
  *      texture, height-blended by a low-frequency mask, so the repeat stops
  *      being countable.
+ *   6. THE SUN AUREOLE, in the specular chain only. See SUN LOBE below — this
+ *      is the fix for "there is not a single specular highlight anywhere in
+ *      the game", which is what made a metal wall read as varnished pine.
+ *   7. CAVITY COOL — recesses tint toward the green zenith they actually see
+ *      instead of toward the low warm sun they cannot see, and (SC_CAVITY +
+ *      specAo) lose reflected radiance, which is what puts a real dark end on
+ *      brass's value range.
+ *   8. THE HORIZON GLINT. See HORIZON GLINT below. The sun lobe alone only
+ *      fires on faces pointed at the sun; this is what makes a metal read as
+ *      metal from every other angle.
+ *   9. WRAPPED / BACK-LIT DIFFUSE. Foliage is translucent, and under a sun
+ *      sitting 10 degrees above the horizon a flat moss deck collects almost
+ *      no direct term by cosine law. See WRAP below.
+ *  10. WORLD-PLANAR TILE UV. Optional, per material: sample the tile in world
+ *      space instead of per-box uv, so a cap built out of several boxes is one
+ *      continuous mat rather than several with visible joins.
  *
  * Base stays MeshStandardMaterial so lighting/IBL work composes with this.
  *
@@ -56,6 +72,41 @@ export const SHARED = {
    * the tower deck at y = 6.4. Callers can override with setGroundLevels().
    */
   scGroundLevels: { value: new THREE.Vector4(0.0, 6.4, -9999.0, -9999.0) },
+  /**
+   * x — squared angular width (radians^2) of the sun's aureole, the lobe the
+   *     specular chain is missing. 0.030 is a 10-degree half-width, which is
+   *     what a hazy golden-hour sun actually subtends once the aureole is
+   *     counted. See SUN LOBE in the fragment source.
+   * y — how much of that lobe a fragment loses to being in a pocket, so a
+   *     recessed groove does not glint as hard as the proud land beside it.
+   * z — weight of the wide aureole term relative to the disc.
+   * w — spare.
+   */
+  scSunP: { value: new THREE.Vector4(0.030, 0.55, 1.0, 0) },
+  /**
+   * What a shadowed pocket sees. Not black and not grey: it is the cool green
+   * zenith from skyenv.js, so the deeper a crevice the greener and cooler it
+   * goes. Multiplied into albedo, hence < 1 on every channel.
+   */
+  scCavityCol: { value: new THREE.Color(0.52, 0.68, 0.64) },
+  /**
+   * The shadow-side bias. Green up, red down, blue up a little: skyenv's
+   * zenith is 0x4d7f83, which is green-dominant rather than blue-dominant, and
+   * copying that is what makes the cool side read as a sky-garden's shadow
+   * rather than as a moonlit one.
+   */
+  scShadeCol: { value: new THREE.Color(0.72, 0.94, 0.93) },
+  /**
+   * The radiance of the bright band where the cloud sea meets the sky — the
+   * one sharp structure in this environment, and the thing the horizon glint
+   * puts back. Linear light units, matched to skyenv.js's horizon (0xffcfa0 at
+   * gain 1.7) and cloud (0xffd7a8 at gain 1.9) bands, which straddle it.
+   *
+   * Over 1 on the red channel is not a mistake: skyenv normalises its map for
+   * *irradiance*, which averages the whole hemisphere, so the peak radiance of
+   * the horizon band is several times the mean it was normalised against.
+   */
+  scHorizonCol: { value: new THREE.Color(1.55, 1.18, 0.72) },
 }
 
 /** Point the dust wedge at a different set of floor planes (max four). */
@@ -94,15 +145,33 @@ uniform sampler2D scMacroTex;
 uniform vec4 scGroundLevels;
 uniform vec4 scMacroP;    // x tiles/metre, y albedo amt, z roughness amt, w hue amt
 uniform vec4 scBigP;      // x contrast expansion, y big albedo amt, z big tiles/metre, w big rough amt
-uniform vec4 scReliefP;   // x tilt amount, y relief->albedo coupling, z de-tile amount, w unused
+uniform vec4 scReliefP;   // x tilt amount, y relief->albedo coupling, z de-tile amount, w world-uv tiles/metre
 uniform vec4 scWeatherP;  // x wedge amt, y top amt, z wedge height (m), w top-rough amt
+uniform vec4 scSpecP;     // x sun-lobe amount, y cavity strength, z shade-tint amt, w unused
+uniform vec4 scGlintP;    // x horizon-glint amount, y specular AO from cavity, z glint band width, w unused
+uniform vec4 scWrapP;     // x wrap width, y wrap amount, z back-lit transmission, w unused
+uniform vec4 scSunP;      // shared: x aureole width^2, y cavity's bite on specular
 uniform vec3 scWedgeCol;  // moss / lichen creeping out of the inside corner
 uniform vec3 scTopCol;    // sun-bleach + settled grit on upward faces
+uniform vec3 scCavityCol; // what a pocket sees: the cool green zenith
+uniform vec3 scShadeCol;  // what the sun-away hemisphere sees: the same sky
+uniform vec3 scHorizonCol;// the bright band where the cloud sea meets the sky
 
 // Written by the map_fragment block, consumed by the chunk overrides further
-// down main(). GLSL globals, so no varyings and no recomputation.
+// down main(). GLSL globals, so no varyings and no recomputation. scCavity is
+// initialised to "fully open" so the lighting hook is safe on any permutation
+// that never runs the map block at all.
 float scRoughAdd;
 vec3  scTiltW;
+float scCavity = 1.0;
+/**
+ * The uv every tile-scale map is sampled at. Normally just vMapUv; under
+ * SC_WORLDUV it is the world-planar projection instead, and then the roughness,
+ * metalness and normal chunks have to be pointed at it too — sampling albedo in
+ * world space and form in box space would put the moss colour and the moss
+ * bumps in different places, which is worse than the seam it fixes.
+ */
+vec2 scUv0 = vec2( 0.0 );
 
 /**
  * Height-preserving blend of two samples of the same texture.
@@ -154,8 +223,21 @@ const MAIN_FRAGMENT = /* glsl */ `
   vec2 scMuv = scWuv * scMacroP.x;
   vec4 mac = texture2D( scMacroTex, scMuv );
 
+  // ------------------------------------------------------- tile frame ----
+  // WORLD-PLANAR UV. A moss cap assembled from four boxes has four independent
+  // uv origins, so the mat visibly steps at every box join — that seam is
+  // exactly what the art review found across the top of the gaps deck. Driving
+  // the tile off the world position instead makes the whole cap one mat. Only
+  // materials that ask for it pay: everything with registered detail (ashlar,
+  // roof laps, brass bands) wants to stay keyed to its box.
+  #ifdef SC_WORLDUV
+    scUv0 = scWuv * scReliefP.w;
+  #else
+    scUv0 = vMapUv;
+  #endif
+
   // ---------------------------------------------------------- albedo ----
-  vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+  vec4 sampledDiffuseColor = texture2D( map, scUv0 );
 
   #ifdef SC_DETILE
   {
@@ -164,7 +246,7 @@ const MAIN_FRAGMENT = /* glsl */ `
     // texture never come back into phase within any distance you can see.
     const float C = 0.804;  // cos(36.5 deg)
     const float S = 0.595;  // sin(36.5 deg)
-    vec2 uv2 = vec2( vMapUv.x * C - vMapUv.y * S, vMapUv.x * S + vMapUv.y * C ) * 0.617
+    vec2 uv2 = vec2( scUv0.x * C - scUv0.y * S, scUv0.x * S + scUv0.y * C ) * 0.617
              + vec2( 0.37, 0.71 );
     vec3 alt = texture2D( map, uv2 ).rgb;
     // Blend mask is low-frequency, so whole patches of surface swap copies
@@ -186,7 +268,17 @@ const MAIN_FRAGMENT = /* glsl */ `
   diffuseColor.rgb *= mix( 1.0, 0.62 + 0.80 * macro, scMacroP.y );
   // Hue drift, not just value: warm one part of a slab and cool another, or the
   // variation reads as a lighting artefact rather than as material.
-  diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 1.045, 1.0, 0.945 ), ( mac.g - 0.5 ) * scMacroP.w );
+  //
+  // Warm and cool are NOT two ends of one axis here. The warm end is the low
+  // sun (red up, blue down); the cool end is the green zenith (green AND blue
+  // up, red down). Swinging a single symmetric vector gives red<->cyan, which
+  // is the wrong cool and is part of why the frame reads as one orange wedge.
+  {
+    float hs = ( mac.g - 0.5 ) * scMacroP.w;
+    vec3 warm = vec3( 1.11, 1.00, 0.86 );
+    vec3 cool = vec3( 0.89, 1.02, 1.03 );
+    diffuseColor.rgb *= mix( vec3( 1.0 ), mix( cool, warm, step( 0.0, hs ) ), abs( hs ) );
+  }
   // Roughness has to move or nothing in the frame ever glints differently.
   scRoughAdd += ( mac.g - 0.5 ) * scMacroP.z + ( mac.a - 0.5 ) * 0.10;
 
@@ -231,6 +323,49 @@ const MAIN_FRAGMENT = /* glsl */ `
     // little albedo to the same field — troughs slightly darker, because a
     // trough is a partly occluded pocket — is what makes it read as form.
     diffuseColor.rgb *= 1.0 - ( mac.b - 0.5 ) * scReliefP.y;
+  }
+  #endif
+
+  // ----------------------------------------------------- cavity cool ----
+  #ifdef SC_CAVITY
+  {
+    // Alpha of the normal map carries "how deep in a pocket am I", measured by
+    // textures.js as local height minus regional height. 1 = proud or flat.
+    scCavity = texture2D( normalMap, scUv0 ).a;
+    float occ = ( 1.0 - scCavity ) * scSpecP.y;
+    // The single most defining characteristic of the reference is a warm key
+    // against cool green shadow, and it has to start here. A mortar joint, a
+    // band channel, the gap between two roof tiles: none of them can see a sun
+    // sitting 12 degrees above the horizon, and all of them can see the zenith.
+    // Tinting them toward it is not grading, it is what is actually happening.
+    diffuseColor.rgb *= mix( vec3( 1.0 ), scCavityCol, occ );
+    // Sheltered pockets hold dust and damp, so they are also duller.
+    scRoughAdd += occ * 0.12;
+  }
+  #endif
+
+  // ------------------------------------------------ shadow-side cool ----
+  #if defined( SC_SHADETINT ) && ( NUM_DIR_LIGHTS > 0 )
+  {
+    // A face turned away from the sun is lit by sky alone, and this sky's upper
+    // dome is a cool green (skyenv zenith 0x4d7f83). Physically that belongs in
+    // the ambient term, and the ambient term is where the art review found it
+    // missing — but envMapIntensity is the only ambient knob a material owns,
+    // and on its own it cannot separate "facing the sun" from "facing away".
+    //
+    // So this is a stylisation and is stated as one: it biases albedo toward
+    // the sky's colour on the sun-away hemisphere. It is the same move a
+    // stylised animated feature makes with a shadow-colour ramp, it costs one
+    // dot product, and it produces the warm-key/cool-green-shadow split that
+    // docs/art-direction.md calls the single most defining characteristic of
+    // the reference. The real fix is a stronger cool ambient upstream; when
+    // that lands, this amount should come down, not stay.
+    vec3 scLv = directionalLights[ 0 ].direction;
+    float ndl = dot( normalize( mat3( viewMatrix ) * scNw ), scLv );
+    // Wide crossover: a hard terminator here would draw a second, wrong
+    // shadow edge across every curved-looking surface.
+    float away = smoothstep( 0.35, -0.30, ndl );
+    diffuseColor.rgb *= mix( vec3( 1.0 ), scShadeCol, away * scSpecP.z );
   }
   #endif
 
@@ -283,6 +418,70 @@ const MAIN_FRAGMENT = /* glsl */ `
 `
 
 /**
+ * ============================== THE SUN LOBE ==============================
+ *
+ * skyenv.js deliberately leaves the sun disc out of the IBL, and it is right
+ * to: the DirectionalLight already carries the sun's direct energy, and putting
+ * a disc in an 8192-texel equirect that is then normalised for irradiance would
+ * double-count the brightest thing in the scene into every diffuse surface.
+ *
+ * But that decision took the sun out of the SPECULAR chain too, and specular is
+ * the only chain a metal has. With diffuse suppressed by metalness and nothing
+ * bright anywhere in the environment to mirror, brass returned a flat orange
+ * gradient — which is exactly what varnished wood looks like, and is exactly
+ * what the art review found. Measured: clipped-high was 0.00% in all eight
+ * captures. There was not one specular highlight in the entire game.
+ *
+ * So the disc goes back, on the specular side only, added straight into
+ * `radiance` where an env map's pre-convolved reflection would have landed:
+ *
+ *   - Direction and colour come from `directionalLights[0]`, so this tracks
+ *     whatever world.js does with the sun and cannot drift out of sync.
+ *   - Diffuse is untouched, so nothing is double-counted.
+ *   - The lobe is the surface's own GGX width convolved with the sun's aureole
+ *     (scSunP.x). At golden hour the aureole is genuinely 8-10 degrees wide and
+ *     carries real energy, so a broad lobe here is physical, not a cheat.
+ *   - Peak radiance scales with the lobe's sharpness (n / 2pi) because a fixed
+ *     amount of energy squeezed into a smaller solid angle is brighter. Without
+ *     that, polishing a surface would make it dimmer.
+ *
+ * It is not shadowed, which is correct for the same reason an env map is not:
+ * this is the sky's reflection, not the direct term.
+ */
+const SUN_LOBE = /* glsl */ `
+#if defined( SC_SUNLOBE ) && ( NUM_DIR_LIGHTS > 0 )
+{
+  vec3 scL = directionalLights[ 0 ].direction;
+  vec3 scR = reflect( -geometryViewDir, geometryNormal );
+  float scCa = max( dot( scR, scL ), 0.0 );
+  // A face turned away from the sun can still produce a positive R.L at
+  // grazing angles; without this gate the shaded side of a wall glints.
+  float scFace = smoothstep( 0.0, 0.16, dot( geometryNormal, scL ) );
+  float scAlpha = max( material.roughness * material.roughness, 0.0025 );
+  // Widths add in quadrature: surface lobe convolved with source lobe.
+  float scW = scAlpha * scAlpha + scSunP.x;
+  // Capped at 240 (~5 degrees). Beyond that the lobe is narrower than a pixel
+  // footprint on a normal-mapped surface and turns into crawling fireflies.
+  float scN = min( 2.0 / scW, 240.0 );
+  // 0.159 = 1/(2pi): converts the lobe's peak back to a radiance.
+  float scDisc = pow( scCa, scN ) * scN * 0.159;
+  // The WIDE half of the sunset lobe, and the half that actually does the work.
+  // A disc-only highlight is ~7 degrees across; whether it lands is a coin
+  // flip on where the camera happens to be, and a material that is only metal
+  // from one angle is not a material. skyenv.js models the same aureole for the
+  // diffuse chain as 0.34*exp(-gamma*0.62) — tens of degrees wide, carrying
+  // real energy — and this is its specular counterpart. It gives every metal
+  // face a bright sun side and a dark away side, which is the actual reason a
+  // reflective surface reads as reflective.
+  float scHaze = scCa * scCa * ( 0.35 + 0.65 * scCa );
+  radiance += directionalLights[ 0 ].color
+            * ( scDisc + scHaze * scSunP.z ) * scFace * scSpecP.x
+            * mix( 1.0 - scSunP.y, 1.0, scCavity );
+}
+#endif
+`
+
+/**
  * Chunk overrides. `<color_fragment>` is deliberately absent: level.js owns the
  * vertex colour channels and they must apply exactly as they do today.
  */
@@ -293,9 +492,10 @@ const OVERRIDES = [
     '#include <roughnessmap_fragment>',
     '#include <roughnessmap_fragment>\nroughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );',
   ],
-  // No normalMap on these materials, so this chunk is empty and ours replaces
-  // it wholesale. `normal` is view-space here; viewMatrix is rigid, so its
-  // upper 3x3 carries a world direction across without renormalising.
+  // The macro tilt is added AFTER the tile-scale normal map, not instead of
+  // it: they work at different scales and both are wanted. `normal` is
+  // view-space here; viewMatrix is rigid, so its upper 3x3 carries a world
+  // direction across without renormalising.
   [
     '#include <normal_fragment_maps>',
     `#include <normal_fragment_maps>
@@ -303,6 +503,10 @@ const OVERRIDES = [
   normal = normalize( normal + mat3( viewMatrix ) * scTiltW );
 #endif`,
   ],
+  // The sun's aureole, into the IBL specular accumulator only. Placed after
+  // <lights_fragment_maps> because that is where `radiance` is filled and
+  // before <lights_fragment_end>, which is where it is consumed.
+  ['#include <lights_fragment_maps>', '#include <lights_fragment_maps>\n' + SUN_LOBE],
 ]
 
 /**
@@ -310,7 +514,7 @@ const OVERRIDES = [
  * invalidate a warm program cache — three keys programs on the chunk set plus
  * this string, and will happily reuse a stale compiled program otherwise.
  */
-const SHADER_VERSION = 'sc1'
+const SHADER_VERSION = 'sc2'
 
 export const DEFAULT_PARAMS = {
   /** macro tiles per metre. 0.085 -> ~11.8 m period, so features land at 1-4 m. */
@@ -347,6 +551,16 @@ export const DEFAULT_PARAMS = {
   wedgeColor: 0x40662f,
   /** what settles on upward faces — warm sun-bleached grit */
   topColor: 0xe6d2a8,
+  /**
+   * How much of the sun's aureole this material reflects. 0 disables the lobe
+   * and its branch. Metals want the most; a matte moss cap wants a trace, but
+   * not zero — a wet moss cap does catch the sky.
+   */
+  sunLobe: 0,
+  /** how hard a recess is tinted toward the cool zenith; 0 disables */
+  cavity: 0,
+  /** how hard the sun-away hemisphere is tinted cool; 0 disables */
+  shadeTint: 0,
 }
 
 /**
@@ -370,6 +584,7 @@ export function extendSurfaceMaterial(material, params = {}) {
     scWeatherP: {
       value: new THREE.Vector4(p.wedge, p.topDust, p.wedgeHeight, p.topRough),
     },
+    scSpecP: { value: new THREE.Vector4(p.sunLobe, p.cavity, p.shadeTint, 0) },
     // THREE.Color converts the sRGB hex into the renderer's working space.
     scWedgeCol: { value: new THREE.Color(p.wedgeColor) },
     scTopCol: { value: new THREE.Color(p.topColor) },
@@ -380,6 +595,10 @@ export function extendSurfaceMaterial(material, params = {}) {
   if (p.detile > 0) defines.SC_DETILE = ''
   if (p.wedge > 0) defines.SC_WEDGE = ''
   if (p.topDust > 0) defines.SC_TOPWEAR = ''
+  if (p.sunLobe > 0) defines.SC_SUNLOBE = ''
+  // Cavity rides in the normal map's alpha, so it cannot be enabled without one.
+  if (p.cavity > 0 && material.normalMap) defines.SC_CAVITY = ''
+  if (p.shadeTint > 0) defines.SC_SHADETINT = ''
 
   Object.assign(material.defines ?? (material.defines = {}), defines)
   material.userData.scUniforms = own

@@ -44,13 +44,18 @@ const H = 64
 
 const DEFAULTS = {
   /**
-   * Cool, slightly green zenith. THE COOL HALF OF THE WARM/COOL SPLIT. Shaded
+   * Cool, GREEN zenith. THE COOL HALF OF THE WARM/COOL SPLIT. Shaded
    * up-facing surfaces read almost entirely off this colour, so it is what
    * makes the shadows green-cool instead of neutral grey, and the green
    * (rather than pure blue) is the moss and the vegetation-heavy islands
    * feeding back into the sky term.
+   *
+   * Pushed green-of-cyan (g > b) from the old 0x4d7f83, which was a hair blue
+   * of neutral-teal. art-direction.md asks for green-tinted shadows and names
+   * the warm/cool split "the single most defining characteristic"; a teal that
+   * leans blue lands in teal-and-orange territory, which is a different film.
    */
-  zenith: 0x4d7f83,
+  zenith: 0x4c8f88,
   /** Peach/cream mid-to-horizon band, away from the sun. */
   horizon: 0xffcfa0,
   /** The gold aureole around a low sun. Broad, bright, no disc. */
@@ -63,11 +68,34 @@ const DEFAULTS = {
    * and getting it wrong is what makes floating geometry look grounded.
    */
   cloud: 0xffd7a8,
-  /** Relative radiance gains for the four bands, before normalisation. */
-  zenithGain: 1.0,
+  /**
+   * Relative radiance gains for the four bands, before normalisation.
+   *
+   * These are RATIOS, not brightness: the map is renormalised to the measured
+   * irradiance target afterwards, so raising one of them takes budget from the
+   * others rather than lightening the frame. That is what makes them safe to
+   * tune for hue.
+   *
+   * zenithGain 1.6, up from 1.0. MEASURED, not guessed. The cosine-weighted
+   * irradiance an up-facing surface receives is dominated by the top of the
+   * dome (mean dy = 2/3, so the pow-0.42 blend sits at t = 0.84 — 84% zenith),
+   * and yet the delivered ambient on a shadowed deck came out warm: with the
+   * old numbers the Mie lobe plus the sunset reddening below contributed more
+   * red to that integral than the zenith contributed green. A shadow lit by a
+   * warmer light than the key is not a shadow, it is a dimmer.
+   */
+  zenithGain: 1.6,
   horizonGain: 1.7,
   sunHazeGain: 2.4,
-  cloudGain: 1.9,
+  /**
+   * The cloud deck, 2.6 up from 1.9. It is measured OUT of the normalisation
+   * (only dy > 0 contributes to the reference irradiance), so this is a true
+   * absolute lift on everything that faces down. art-direction.md asks for a
+   * bounce "much stronger than a normal earth bounce, so undersides are lit,
+   * not black", and the undersides of the islands are half the silhouette of
+   * this world.
+   */
+  cloudGain: 2.6,
   /**
    * Extra sunset warming applied on top of whatever the sun's real elevation
    * says. The rig's sun sits higher than the reference art, and this lets the
@@ -240,12 +268,34 @@ export class SkyEnvironment {
         let gg = (c.horizon.g * g.horizon) * (1 - t) + (c.zenith.g * g.zenith) * t
         let b = (c.horizon.b * g.horizon) * (1 - t) + (c.zenith.b * g.zenith) * t
 
+        /**
+         * How much of this direction is "horizon" rather than "zenith".
+         *
+         * The same 1 - t the gradient above already uses, so the two cannot
+         * drift apart. Everything that is a consequence of a LONG ATMOSPHERIC
+         * PATH — the aureole, the sunset reddening — is weighted by it, because
+         * that is the only place a long path exists. Looking straight up at
+         * golden hour you are looking through one air mass, not thirty-eight.
+         */
+        const horizonW = 1 - t
+
         // --- Mie forward lobe --------------------------------------------
         // Two exponentials: a tight aureole (the bright ring you cannot look
         // at) and a wide one carrying warmth a long way around the sky. This
         // is what makes the ambient directional — the whole reason we are
         // doing an IBL instead of leaving the HemisphereLight alone.
-        const mie = 1.35 * Math.exp(-gamma * 3.1) + 0.34 * Math.exp(-gamma * 0.62)
+        //
+        // The wide lobe used to be exp(-gamma * 0.62), which is barely a lobe at
+        // all: at the zenith, 90+ degrees off a sun sitting on the horizon, it
+        // still delivered 40% of its peak. Multiplied by the 2.4 sunHaze gain
+        // that was the single largest term in an up-facing surface's ambient,
+        // and it is gold. 1.15 halves it by 60 degrees, which is what a real
+        // aureole does, and the horizon gate finishes the job: the aureole is a
+        // thing that happens AROUND the sun near the horizon, not a wash over
+        // the whole sky.
+        const mie =
+          (1.35 * Math.exp(-gamma * 3.1) + 0.30 * Math.exp(-gamma * 1.15)) *
+          (0.15 + 0.85 * horizonW)
         r += c.sunHaze.r * g.sunHaze * mie
         gg += c.sunHaze.g * g.sunHaze * mie
         b += c.sunHaze.b * g.sunHaze * mie
@@ -266,9 +316,18 @@ export class SkyEnvironment {
         // Longer path through the atmosphere removes short wavelengths. The
         // asymmetry (red up, blue down hard, green barely) is what separates
         // "warm" from "orange filter over everything".
-        r *= 1 + low * 0.55
-        gg *= 1 - low * 0.10
-        b *= 1 - low * 0.38
+        //
+        // Weighted by horizonW, and that weighting is the fix rather than a
+        // refinement. Applied flat it reddened the ZENITH by the same 55% as
+        // the horizon, which is physically backwards (the reddening IS the long
+        // path) and, because the zenith is what an up-facing shadowed surface
+        // integrates, it was turning every cool shadow in the game warm. The
+        // horizon band still gets the full sunset; the top of the dome, which
+        // is the cool half of the split, now keeps its colour.
+        const warm = low * horizonW
+        r *= 1 + warm * 0.55
+        gg *= 1 - warm * 0.10
+        b *= 1 - warm * 0.38
 
         // --- the cloud sea --------------------------------------------------
         // Below the horizon this is not ground, it is a sunlit cloud deck, and

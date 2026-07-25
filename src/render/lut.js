@@ -41,14 +41,15 @@ export const GRADE = {
   // --- ASC CDL: out = (in * slope + offset) ^ power, per channel -----------
   //
   // A gentle warm bias in the transfer itself rather than in the tints, so it
-  // affects the whole range instead of only the ends. Red gains 2%, blue loses
-  // 1.5%: that is about 80K of warmth, enough to make cream read as cream
+  // affects the whole range instead of only the ends. Red gains 2.4%, blue loses
+  // 1.8%: that is about 100K of warmth, enough to make cream read as cream
   // rather than as white, and small enough that the sky blue stays blue.
-  slope: [1.020, 1.004, 0.985],
-  // A hair of lift on all three so the darkest corner of a shadowed archway
-  // has air in it. 0.003 is under one code value — this is not the toe, it is
+  slope: [1.024, 1.005, 0.982],
+  // A hair of lift, and cooler than it is warm, so the darkest corner of a
+  // shadowed archway has air in it and that air is on the cool side of the
+  // warm/cool split. Under one code value each — this is not the toe, it is
   // just refusing to sit at absolute zero.
-  offset: [0.003, 0.003, 0.004],
+  offset: [0.001, 0.002, 0.003],
   // Power < 1 lifts the mid-tones. 0.97 on red and green is a visible brighten
   // of the mid greys; blue is left at 1.0 so lifting the mids does not also
   // wash the sky out.
@@ -80,10 +81,17 @@ export const GRADE = {
 
   // --- contrast ------------------------------------------------------------
   //
-  // A power about a pivot: out = pivot * (in/pivot)^contrast. 1.20 is a gentle
-  // filmic firming, not a crush; this is a game where the player has to read a
-  // runnable wall from 30 metres at speed.
-  contrast: 1.20,
+  // A power about a pivot: out = pivot * (in/pivot)^contrast.
+  //
+  // 1.32, up from 1.20. The baseline critique was that the whole game lived in
+  // the mid-tones: measured, the 1st percentile across the shot set ranged
+  // 43.7-73.3 and the 99th 155.5-185.3, with nothing clipped at either end.
+  // The white point below fixed the top; this fixes the bottom, because a
+  // contrast power about a 0.5 pivot is the only control in the chain that
+  // pushes dark values DOWN without also lifting a veil over the mids.
+  // Still gentle — this is a game where the player has to read a runnable wall
+  // from 30 metres at speed, and a crush there is a gameplay bug.
+  contrast: 1.32,
   //
   // THE PIVOT IS 0.50 AND MUST STAY THERE. It is the code value that does not
   // move under the contrast power, and AgX places 18% scene grey at ~0.50
@@ -102,11 +110,13 @@ export const GRADE = {
 
   // --- toe -----------------------------------------------------------------
   //
-  // Black lift in code values / 255. 0.006 is one and a half code values:
-  // visible as "there is atmosphere down there", invisible as haze. A gentle
-  // toe is right for this game — crushed blacks would make the shadowed parts
-  // of the route unreadable, which is a gameplay bug, not a look.
-  toe: 0.006,
+  // Black lift in code values / 255. 0.003 is under one code value: visible as
+  // "there is atmosphere down there", invisible as haze. Halved from 0.006 —
+  // with the contrast above doing the work in the bottom third, the extra lift
+  // was cancelling exactly what it was meant to protect. Some toe is still
+  // right for this game: crushed blacks would make the shadowed parts of the
+  // route unreadable, which is a gameplay bug, not a look.
+  toe: 0.003,
 
   // --- shoulder ------------------------------------------------------------
   //
@@ -115,22 +125,55 @@ export const GRADE = {
   // last fifth of the range.
   shoulder: 0.62,
   // Softness, in the same units. The roll-off is NORMALISED (see
-  // shoulderParams) so that input 1.0 maps to output 1.0 exactly. Without that
-  // normalisation the curve asymptotes short of white and every bright surface
-  // in the game piles up in a 30-code-value band — the classic "milky pastel
-  // wash with no white in it" failure.
+  // shoulderParams) so that the WHITE POINT below maps to output 1.0 exactly.
+  // Without that normalisation the curve asymptotes short of white and every
+  // bright surface in the game piles up in a 30-code-value band — the classic
+  // "milky pastel wash with no white in it" failure.
   shoulderSoft: 1.20,
+
+  // --- white point ---------------------------------------------------------
+  //
+  // THE INPUT CODE VALUE THAT BECOMES DISPLAY WHITE. This grade did not have
+  // one, which is to say its white point was 1.0, which is to say it had no
+  // white point at all — and it showed. Measured across all eight harness
+  // shots: 99th percentile 155-185, clipped-high 0.000%, brightest pixel in the
+  // entire set 251. Nothing in this game was ever white, including the sun.
+  //
+  // The reason is arithmetic, not taste. AgX's log range puts display white at
+  // +4.03 EV above 1.0 linear, i.e. at a scene value of 16.3; the brightest
+  // surface this level produces after metering is about 2.8, and the sky's
+  // solar disc is authored at 5. Neither is remotely close, so the top four
+  // stops of the transform were dead code and every highlight was delivered
+  // into the upper mid-tones.
+  //
+  // 0.885 says: a display value of 0.885 out of AgX is as bright as this game
+  // gets, so print it as white. Sun-facing brass, the solar disc and the
+  // emissives cross it; sunlit sandstone does not. It only ever rescales the
+  // range ABOVE the shoulder knee — mid-tones and shadows come through the
+  // identical curve, which is the whole reason it is implemented here rather
+  // than as an exposure or slope change.
+  //
+  // Tuned against the harness, not by eye: at 0.87 the sun-raked brass in the
+  // underpass shot clipped 1.3% of the frame and the near column lost its form
+  // entirely, which is a readability bug on a runnable surface. 0.885 keeps the
+  // clipped fraction between 0.05% and 0.5% across the set — enough that the
+  // light sources read as light, little enough that nothing the player has to
+  // land on turns into a white blob.
+  whitePoint: 0.885,
 }
 
 /**
  * Derive the shoulder constants, including the normaliser that guarantees
- * scurve(1) === 1.
+ * scurve(whitePoint) === 1.
  */
 function shoulderParams(g) {
   const k = Math.min(0.98, Math.max(0.05, g.shoulder))
   const s = Math.max(1e-3, g.shoulderSoft)
-  // The largest post-contrast value an in-gamut input (1.0) can produce.
-  const cMax = g.pivot * Math.pow(1 / g.pivot, g.contrast)
+  const w = Math.min(1, Math.max(0.2, g.whitePoint ?? 1))
+  // The post-contrast value the white point produces. Everything from the knee
+  // to here is mapped onto [knee, 1]; anything above simply clips, which is
+  // what a white point is for.
+  const cMax = g.pivot * Math.pow(w / g.pivot, g.contrast)
   const norm = 1 - Math.exp(-Math.max(cMax - k, 1e-3) / s)
   return { k, s, norm }
 }

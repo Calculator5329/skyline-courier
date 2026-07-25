@@ -62,17 +62,22 @@ function emit(L, opts) {
 // ----------------------------------------------------------- shape helpers
 
 /**
- * Half-extents of N rectangles whose union approximates a disc of radius
- * `r`. Every rectangle's corners sit *on* the circle, so the union is
- * strictly inscribed — it can never overhang its own collider. facets 1 is
- * a square, 3 reads as a dodecagon, 4+ as a circle at platform scale.
+ * Half-extents of N rectangles whose union approximates a disc.
+ *
+ * `r` is the half-width ACROSS FLATS: the union's extent on X is always
+ * exactly 2r whatever the facet count, so a platform never changes size
+ * when its LOD changes — the facets only chamfer the corners off the
+ * square. facets 1 is that square, 2 an octagon, 3 a dodecagon, 4+ reads as
+ * a circle at platform scale. Every rectangle's corners lie on one common
+ * circle, so the silhouette is a convex polygon rather than a stepped cross.
  */
 function discRects(r, facets = 3, squash = 1) {
   const n = Math.max(1, Math.min(6, facets | 0))
+  const R = r / Math.cos((Math.PI / 2) * (0.5 / n))
   const out = []
   for (let i = 0; i < n; i++) {
     const a = (Math.PI / 2) * ((i + 0.5) / n)
-    out.push({ hx: r * Math.cos(a), hz: r * squash * Math.sin(a) })
+    out.push({ hx: R * Math.cos(a), hz: R * squash * Math.sin(a) })
   }
   return out
 }
@@ -157,19 +162,28 @@ function frame(axis) {
 export function drumPlatform(L, x, y, z, opts = {}) {
   const {
     radius = 6, kind = 'stone', capKind = 'moss', detail = 2,
-    capThickness = 0.55, bodyDepth = 2.6, tiers = detail === 0 ? 1 : 3,
+    capThickness = 0.42, bodyDepth = 2.6, tiers = detail === 0 ? 1 : 3,
     vines = detail >= 2, squash = 1,
   } = opts
+  // The cap is the *built* surface (paving or turf) and the mass below it is
+  // living rock, so they are almost never the same material. Defaulting both
+  // to `kind` would put grass texture down the vertical faces of the drum,
+  // which is precisely the "slice of astroturf" read we are fixing.
+  const rimKind = opts.rimKind ?? kind
+  const boulderKind = opts.boulderKind ?? kind
   const rand = pick(opts)
   const facets = opts.facets ?? (detail >= 2 ? 4 : detail === 1 ? 3 : 1)
   const { S, D } = emit(L, opts)
   let n = 0
 
-  // Moss cap: sits proud of the stone by a lip, top face exactly at y.
+  // Cap: sits proud of the stone by a lip, top face exactly at y. Thin on
+  // purpose — a 40 cm mat overhanging a shadowed rim reads as moss growing
+  // over an edge; a 2 m one reads as a green box.
   n += disc(S, x, y - capThickness / 2, z, radius, capThickness, capKind, facets, squash)
-  // Chamfer course just under the lip — this is what stops the silhouette
-  // reading as one extruded slab.
-  n += disc(S, x, y - capThickness - 0.26, z, radius * 0.94, 0.55, kind, facets, squash)
+  // Chamfer course just under the lip, inset so the cap visibly overhangs it
+  // and drops a contact shadow onto the rock. This is what stops the
+  // silhouette reading as one extruded slab.
+  n += disc(S, x, y - capThickness - 0.26, z, radius * 0.94, 0.55, rimKind, facets, squash)
   // The drum body.
   n += disc(S, x, y - capThickness - 0.53 - bodyDepth / 2, z,
     radius * 0.9, bodyDepth, kind, facets, squash)
@@ -180,7 +194,7 @@ export function drumPlatform(L, x, y, z, opts = {}) {
   for (let i = 0; i < tiers; i++) {
     const h = 2.2 + rand() * 1.6 + i * 0.5
     tr *= 0.68 + rand() * 0.1
-    n += disc(S, x, ty - h / 2, z, tr, h, kind, Math.max(1, facets - 1), squash)
+    n += disc(S, x, ty - h / 2, z, tr, h, boulderKind, Math.max(1, facets - 1), squash)
     ty -= h * 0.92
   }
 
@@ -437,8 +451,8 @@ export function gearWheel(L, x, y, z, opts = {}) {
   } = opts
   const { S, D } = emit(L, opts)
   const put = solidRim ? S : D
-  const teeth = opts.teeth ?? (detail >= 2 ? 20 : detail === 1 ? 12 : 8)
-  const rimSegs = detail >= 2 ? 18 : detail === 1 ? 12 : 8
+  const teeth = opts.teeth ?? (detail >= 2 ? 24 : detail === 1 ? 14 : 8)
+  const rimSegs = detail >= 2 ? 26 : detail === 1 ? 16 : 8
   const hubR = radius * 0.22
   let n = 0
 
@@ -460,9 +474,12 @@ export function gearWheel(L, x, y, z, opts = {}) {
   n += detail >= 1 ? 3 : 1
 
   // Spokes, stepped out from the hub to just inside the rim.
-  const rimIn = radius * 0.8
-  const steps = detail >= 2 ? 5 : detail === 1 ? 3 : 2
-  const st = Math.max(0.16, radius * 0.09)
+  const rimIn = radius * 0.7
+  // Spoke step count drives how a diagonal bar reads. Five boxes over a 2.7 m
+  // spoke is a visible staircase at arm's length — these wheels get mounted
+  // where the player runs past them, so pay for the extra segments.
+  const steps = detail >= 2 ? 9 : detail === 1 ? 5 : 2
+  const st = Math.max(0.15, radius * 0.06)
   for (let i = 0; i < spokes; i++) {
     const a = (2 * Math.PI * i) / spokes + Math.PI / spokes
     const c = Math.cos(a), s = Math.sin(a)
@@ -478,15 +495,19 @@ export function gearWheel(L, x, y, z, opts = {}) {
     }
   }
 
-  // Rim: an inner web ring plus alternating teeth.
+  // Rim: a continuous web annulus, then teeth standing on it.
+  //
+  // The web has to be a genuine ring — deep enough radially and dense enough
+  // tangentially that its boxes overlap — or the wheel reads as a snowflake:
+  // a thin hoop with detached cubes floating around it. Teeth sit at ONE
+  // radius rather than alternating in and out, because alternating teeth at a
+  // thin web just make the hoop look broken.
   n += ringOfBoxes((cx, cy, cz, bx, by, bz, k) => put(cx, cy, cz, bx, by, bz, k),
-    x, y, z, radius * 0.86, radius * 0.13, rimSegs, plane, kind, thickness)
+    x, y, z, radius * 0.82, radius * 0.28, rimSegs, plane, kind, thickness)
+  const tw = Math.max(0.16, (2 * Math.PI * radius) / teeth * 0.45)
   for (let i = 0; i < teeth; i++) {
     const a = (2 * Math.PI * i) / teeth
-    const c = Math.cos(a), s = Math.sin(a)
-    const rr = radius * (i % 2 === 0 ? 1.0 : 0.93)
-    const tw = Math.max(0.18, (2 * Math.PI * radius) / teeth * 0.5)
-    const P = dirs(c * rr, s * rr)
+    const P = dirs(Math.cos(a) * radius, Math.sin(a) * radius)
     boxAt(P, flat(tw), kind, put)
     n += 1
   }
@@ -871,11 +892,113 @@ export function stairFlight(L, x, y, z, opts = {}) {
   return { topY, run: run * steps, width, boxes: n }
 }
 
+/**
+ * lanternPost — the brass standard that carries a lantern, plus the lantern
+ * itself via `L.lantern()`.
+ *
+ * This is the one prefab that is level design rather than decoration: every
+ * lantern is a grapple anchor, so placing one authors a 34 m reachable
+ * volume. That is why the flame's world position is returned — a caller
+ * sizing a crossing needs the number, not a vibe.
+ *
+ * ANCHOR: (x, y, z) is the FOOT of the post; the flame sits at y + height.
+ *
+ * SOLID: the plinth and the shaft. The placement contract that makes this
+ * safe is the caller's, not the prefab's — a standard belongs at a parapet,
+ * a corner, or against a wall, never on the running line, because a 30 cm
+ * collider in the middle of a sprint is a momentum bug (taste.md). Pass
+ * `{ post: false }` for the bracket form, which hangs the lantern off an
+ * entablature or wall with no floor footprint at all and is the right
+ * choice anywhere near the route.
+ * DECOR: the cage, the finial and the bracket arm — all above head height.
+ *
+ * @returns {{flame:[number,number,number], topY:number, boxes:number}}
+ */
+export function lanternPost(L, x, y, z, opts = {}) {
+  const {
+    height = 3.2, kind = 'brass', detail = 2, post = true,
+    reach = 0, axis = 'x', color,
+  } = opts
+  const F = frame(axis)
+  const { S, D } = emit(L, opts)
+  let n = 0
+
+  if (post) {
+    // Plinth, tapered shaft, collar. Two courses on the plinth so the base
+    // has a chamfer instead of reading as a peg pushed into the floor.
+    n += disc(S, x, y + 0.13, z, 0.42, 0.26, 'porcelain', detail >= 1 ? 3 : 1)
+    n += disc(S, x, y + 0.34, z, 0.31, 0.18, kind, detail >= 1 ? 3 : 1)
+    n += disc(S, x, y + 0.43 + (height - 0.9) / 2, z, 0.13, height - 0.9, kind,
+      detail >= 1 ? 2 : 1)
+    n += disc(S, x, y + height - 0.45, z, 0.22, 0.16, kind, detail >= 1 ? 2 : 1)
+  }
+
+  // Optional bracket arm, so a lantern can be hung off a wall or a cornice
+  // and put its anchor out over a void where the crossing actually needs it.
+  let [fx, fz] = [x, z]
+  if (reach) {
+    const [ax, az] = F.at(x, z, reach / 2, 0)
+    const [asx, asz] = F.sz(Math.abs(reach), 0.16)
+    n += D(ax, y + height - 0.34, az, asx, 0.16, asz, kind)
+    ;[fx, fz] = F.at(x, z, reach, 0)
+    // A diagonal knee under the arm; a cantilever with nothing under it reads
+    // as a floating stick.
+    if (detail >= 1) {
+      n += strut((cx, cy, cz, bx, by, bz, k) => D(cx, cy, cz, bx, by, bz, k),
+        x, y + height - 1.1, z, fx, y + height - 0.42, fz, 0.13, 3, kind)
+    }
+  }
+
+  // Cage: four uprights and a capping cone, around where the glow sits.
+  const fy = y + height
+  if (detail >= 1) {
+    for (const [ox, oz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      n += D(fx + ox * 0.26, fy, fz + oz * 0.26, 0.09, 0.86, 0.09, kind)
+    }
+    n += D(fx, fy - 0.46, fz, 0.72, 0.12, 0.72, kind)
+    n += D(fx, fy + 0.5, fz, 0.66, 0.14, 0.66, kind)
+    n += D(fx, fy + 0.66, fz, 0.34, 0.22, 0.34, kind)
+  }
+  n += D(fx, fy + 0.86, fz, 0.14, 0.3, 0.14, kind)
+
+  // The glow itself, and with it the grapple anchor.
+  if (L.lantern) L.lantern(fx, fy, fz, color)
+
+  return { flame: [fx, fy, fz], topY: fy + 1.0, boxes: n }
+}
+
 // ------------------------------------------------------------------ export
 
 export const PREFABS = {
   drumPlatform, archway, colonnade, balustrade, gearWheel, armillary,
-  observatoryDome, cypress, vineCurtain, waterfall, stairFlight,
+  observatoryDome, cypress, vineCurtain, waterfall, stairFlight, lanternPost,
+}
+
+/**
+ * A recording facade over PREFABS, plus the assertion that closes the loop.
+ *
+ * The failure this exists to make impossible: every prefab in this file was
+ * written, none was ever imported, and eight captures went by with not one
+ * arch, gear, vine or dome in them while `npm run build` stayed green. A
+ * dead export is invisible; a thrown error is not. `buildCourse()` calls
+ * `assertAllPlaced()` at the end, so an unplaced prefab takes the game down
+ * on load — which the headless shot harness reports as a page error and
+ * fails on. Build-green is no longer a way to ship a rotting kit.
+ */
+export function trackedKit() {
+  const placed = new Set()
+  const api = {}
+  for (const [name, fn] of Object.entries(PREFABS)) {
+    api[name] = (...args) => { placed.add(name); return fn(...args) }
+  }
+  api.placed = placed
+  api.assertAllPlaced = () => {
+    const missing = Object.keys(PREFABS).filter((k) => !placed.has(k))
+    if (missing.length) {
+      throw new Error(`kit prefabs declared but never placed in the course: ${missing.join(', ')}`)
+    }
+  }
+  return api
 }
 
 /**
@@ -897,6 +1020,9 @@ export function kitSelfTest(overrides = {}) {
     const stub = {
       solid: (...a) => { rec.solid++; push(...a); return stub },
       decor: (...a) => { rec.decor++; push(...a); return stub },
+      // lanternPost registers a grapple anchor; the recorder only needs to
+      // count it, but it must exist or the prefab throws under test.
+      lantern: (lx, ly, lz) => { rec.anchors = (rec.anchors || 0) + 1; return stub },
     }
     const ret = fn(stub, 0, 0, 0, { seed: 0xC0FFEE, ...(overrides[name] || {}) })
     const min = [Infinity, Infinity, Infinity]
