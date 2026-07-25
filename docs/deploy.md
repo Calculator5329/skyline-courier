@@ -9,10 +9,24 @@ static build and stays that way.
 ## Ship it
 
 ```sh
-npm run deploy      # vite build && firebase deploy --only hosting
+npm run ship        # push main, then deploy that exact commit
 ```
 
 That is the whole process. Anyone with the link can play; no sign-in.
+
+`ship` pushes `main` to `origin`, then builds from a throwaway export of
+`HEAD` — so what goes live is exactly what is committed and pushed, even
+when the working tree is mid-edit by an agent. It refuses to run off `main`,
+and `SHIP_DRY_RUN=1 npm run ship` exercises everything but the push and the
+deploy.
+
+```sh
+npm run deploy      # vite build && firebase deploy --only hosting
+```
+
+`deploy` is the lower-level escape hatch: it ships the **working tree**,
+uncommitted changes included, and does not push. Use it to put a local
+experiment in front of someone; use `ship` for anything real.
 
 To preview the production build with the real hosting headers before
 shipping, run the `skyline-firebase-verify` launch config (serves `dist/`
