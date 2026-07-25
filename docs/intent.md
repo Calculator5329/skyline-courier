@@ -10,6 +10,26 @@ garden terraces. You are always late. The route is never the safe way.
 First-person is in-fiction, not just a technical dodge: you see your own
 gloved hands, the brass grapple cuff on your wrist, and nothing else.
 
+## The feel target (Ethan, 2026-07-25)
+
+**Dying Light 2, Mirror's Edge Catalyst, and first-person Forspoken.** What
+those three share, and what this game is aiming at:
+
+- **Traversal is effortless, not fussy.** Vaults, mantles and ledge catches
+  happen automatically and generously. The player expresses skill through
+  *route choice and speed*, not through frame-perfect inputs. Every assist
+  window here is deliberately wider than it needs to be.
+- **Mistakes are recoverable.** A double jump, an air dash, and a forgiving
+  ledge grab mean a misjudged gap is survivable. That is what lets a player
+  commit to a fast line instead of creeping.
+- **Abilities sit on top of the base verbs**, they do not replace them. Dash
+  and the vertical wall-run extend the vocabulary; they never become the only
+  way through.
+- **Speed is communicated like a racing game** — peripheral streaks, a
+  tightening vignette, FOV, camera shake, wind rushing past. All peripheral by
+  construction, because the centre of the screen is where the player reads the
+  ledge they are about to land on.
+
 ## The movement vocabulary
 
 The whole game is these verbs and how cleanly they chain:
