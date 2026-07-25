@@ -1,4 +1,11 @@
 import * as THREE from 'three'
+import {
+  lathe, extrudeAlong, sweepTube, gear as gearPlate, blob, chamferBox,
+  arch as archRing, corniceShape, mergeGeometries,
+} from './props.js'
+import {
+  FoliageField, scatterOnBox, hangFromEdge, vineRope, JUNCTION_MIX,
+} from './foliage.js'
 
 /**
  * kit.js — architectural prefabs for the sky-garden archipelago.
@@ -44,6 +51,43 @@ import * as THREE from 'three'
  * Cost control: expensive prefabs take `detail` (0 = far silhouette,
  * 1 = mid, 2 = near, the default). The level places these across four
  * distance bands; band 3 should generally use `detail: 0, ghost: true`.
+ *
+ * ROUND THREE (2026-07-25 art direction review). Six findings, and where each
+ * one is answered:
+ *
+ *  1. "Every island is the same island." `discRects()` now takes the prefab's
+ *     seeded `rand` and pulls each facet INWARD by 8-12%; `drumPlatform` varies
+ *     tier count, per-tier inset and — on scenery only — the footprint aspect.
+ *     See `discRects` for the proof that the union never grows.
+ *  2. "Voxel undersides." The boulder tiers are `props.blob()` at full 3-axis
+ *     orientation, drawn inside hidden colliders. No cuboid is left down there.
+ *  3. "Moss caps read as snooker tables." `mossCapGeometry()` — real thickness,
+ *     an irregular outline, a 10-15 cm overhang with a hard-darkened underside,
+ *     and a relief-broken top.
+ *  4. "Bare architecture." Every prefab dresses itself out of `foliage.js`;
+ *     see THE FOLIAGE CHANNEL below.
+ *  5. "Unchamfered edges." Every nosing, cornice and string course gets a
+ *     3-5 cm bevel course; mouldings are swept sections, not stacked slabs.
+ *  6. "Real curves." `props.arch` voussoirs, `props.gear` involute teeth,
+ *     `props.lathe` shafts and domes, `props.extrudeAlong` cornices.
+ *
+ * ============================ THE FOLIAGE CHANNEL ==========================
+ * `foliage.js` draws instanced alpha-tested cards, which the `L.mesh()` batch
+ * (one opaque merged geometry per material) structurally cannot carry. So the
+ * kit owns a small pool of `FoliageField`s, hung off the Level, bucketed by
+ * world position so each one is a separately-cullable draw call, and flushed
+ * into `L.group` by `trackedKit().assertAllPlaced()` — which `buildCourse()`
+ * already calls as its last act, before `Level.build()` runs.
+ *
+ * Every path through it is guarded and failure-tolerant: the atlas is painted
+ * on a canvas, so there is no field at all under node (`kitSelfTest`), and a
+ * throw anywhere in the vegetation layer must never take the course down. A
+ * world with no plants is a disappointment; a world that does not load is a
+ * bug. `kitFoliageStats(L)` reports what actually got planted.
+ *
+ * SAFETY: vegetation is decor with no collider, so it obeys taste.md's rule by
+ * construction — cards are capped well under step height on anything walkable
+ * (`DECK_PLANT_HEIGHT`), and hanging species only ever exist below a lip.
  */
 
 // --------------------------------------------------------------- randomness
@@ -63,6 +107,327 @@ export function makeRand(seed = DEFAULT_SEED) {
 
 function pick(opts) {
   return opts.rand || makeRand(opts.seed ?? DEFAULT_SEED)
+}
+
+// ------------------------------------------------------------- the foliage
+//
+// See THE FOLIAGE CHANNEL in this file's header for why the kit owns this
+// rather than level.js.
+
+/**
+ * Metres per field bucket.
+ *
+ * One field per island is what foliage.js asks for, and one field for the world
+ * is what makes frustum culling a no-op. 96 m is the compromise the course
+ * actually wants: the route is ~350 m of +X with the archipelago at |z| up to
+ * ~100 m, which buckets into a dozen or so fields — each one a single draw call
+ * covering about the distance the 55-90 m fade window already spans, so a
+ * bucket that is off screen is genuinely off screen.
+ */
+const FOLIAGE_BUCKET = 96
+
+/**
+ * How tall a plant may be on a surface the player can stand on.
+ *
+ * taste.md: "Non-colliding scenery must never... visually impersonate a surface
+ * you can land on." The controller vaults anything up to 1.45 m, so a 24 cm
+ * card is not within an order of magnitude of a thing that could be read as a
+ * ledge — it is unmistakably grass, at an eye height of 1.6 m. The first pass
+ * ran 18 cm and measured invisible from the gameplay camera: too short to
+ * catch the low sun, so a deck came back looking swept.
+ */
+const DECK_PLANT_HEIGHT = 0.24
+
+/** Mostly grass and small leaf, with flowers as the accent. Never moss: a moss
+ *  wedge belongs in a corner where water sits, not sprinkled over open paving. */
+const DECK_MIX = [['grass', 6], ['flower', 1.3], ['leaf', 0.9], ['fern', 0.4]]
+/** A damp, shaded bed — under an arch, beside a waterfall, on an island rim. */
+const WILD_MIX = [['grass', 4], ['leaf', 2.4], ['fern', 1.6], ['flower', 1.0], ['ivy', 0.8]]
+
+/**
+ * The per-Level foliage state, created on first use.
+ *
+ * Returns `null` — permanently, and without retrying — in any environment that
+ * cannot paint a canvas atlas or has no scene group to hang meshes off. That
+ * covers `kitSelfTest()` under node, which must keep working.
+ */
+function foliageState(L) {
+  if (!L || typeof L !== 'object') return null
+  if (L.__kitFoliage !== undefined) return L.__kitFoliage
+  let state = null
+  if (L.group && typeof document !== 'undefined') {
+    state = { fields: new Map(), planted: 0, failed: 0, built: false }
+  }
+  L.__kitFoliage = state
+  return state
+}
+
+/**
+ * The field covering a world position. One per 96 m bucket, made on demand so
+ * an empty quadrant of the map costs nothing.
+ */
+function foliageAt(L, x, z) {
+  const state = foliageState(L)
+  if (!state || state.built) return null
+  const bx = Math.floor(x / FOLIAGE_BUCKET)
+  const bz = Math.floor(z / FOLIAGE_BUCKET)
+  const key = `${bx}:${bz}`
+  let f = state.fields.get(key)
+  if (f === undefined) {
+    try {
+      // The seed is a function of the bucket, not a counter, so a field's
+      // contents do not depend on the order islands happened to be built in.
+      f = new FoliageField({ seed: (0x5EED1 ^ (bx * 0x9E3779B1) ^ (bz * 0x85EBCA6B)) >>> 0 })
+    } catch (e) {
+      f = null
+      state.failed++
+    }
+    state.fields.set(key, f)
+  }
+  return f
+}
+
+/**
+ * Run `fn(field)` for a position, counting what it planted and swallowing any
+ * failure. The vegetation layer is never allowed to be the reason the course
+ * fails to load — see this file's header.
+ */
+function plant(L, x, z, fn) {
+  const f = foliageAt(L, x, z)
+  if (!f) return 0
+  try {
+    const n = fn(f) || 0
+    const state = foliageState(L)
+    if (state) state.planted += n
+    return n
+  } catch (e) {
+    const state = foliageState(L)
+    if (state) state.failed++
+    return 0
+  }
+}
+
+/**
+ * Build every field and hang it in the level's group. Called once, from
+ * `trackedKit().assertAllPlaced()`.
+ */
+function foliageFinish(L) {
+  const state = foliageState(L)
+  if (!state || state.built) return state
+  state.built = true
+  for (const f of state.fields.values()) {
+    if (!f) continue
+    try {
+      const g = f.build()
+      // The wind clock. main.js drives every other time-varying effect from its
+      // own loop; foliage.js exposes a module-level clock instead, and nothing
+      // currently ticks it. Rather than leave every plant frozen at its rest
+      // pose, each page advances the shared clock as it is about to be drawn —
+      // one float write per draw call, in the one place kit.js is allowed to
+      // reach. If main.js ever calls `foliageTick()` itself, this becomes a
+      // redundant write of the same kind of value and nothing breaks.
+      for (const m of g.children) {
+        m.onBeforeRender = () => f.update(performance.now() / 1000)
+      }
+      L.group.add(g)
+    } catch (e) {
+      state.failed++
+    }
+  }
+  // Published on the level's own group so the headless harness (and a dev
+  // console, via `window.__game.level`) can read what the vegetation layer
+  // actually cost without importing this module. A claim about lushness that
+  // cannot be checked from a terminal is the kind of claim this project has
+  // been burned by before.
+  if (L.group) L.group.userData.kitFoliage = kitFoliageStats(L)
+  return state
+}
+
+/** What the vegetation layer actually cost. Diagnostic; safe to call anywhere. */
+export function kitFoliageStats(L) {
+  const state = foliageState(L)
+  if (!state) return { fields: 0, planted: 0, failed: 0, instances: 0, drawCalls: 0, triangles: 0 }
+  let instances = 0, drawCalls = 0, triangles = 0
+  for (const f of state.fields.values()) {
+    if (!f || !f.group) continue
+    const s = f.stats()
+    instances += s.instances; drawCalls += s.drawCalls; triangles += s.triangles
+  }
+  return {
+    fields: state.fields.size, planted: state.planted, failed: state.failed,
+    instances, drawCalls, triangles,
+  }
+}
+
+/**
+ * Scatter plants over a FACETED DISC rather than a rectangle.
+ *
+ * `foliage.scatterOnBox` is the right tool for a rectangular deck and the wrong
+ * one for a drum: the drum's collider is a union of rectangles, so scattering
+ * over its bounding box drops plants into four corners that are open sky. This
+ * is the same job with the union as the domain — rejection-sampled against the
+ * exact `discRects` the platform was built from, so a plant can only ever exist
+ * over something solid.
+ *
+ * The clump mask is the same idea as foliage.js's: a smooth low-frequency field
+ * so vegetation grows in patches with bare ground between them. Two octaves of
+ * hash lattice noise, evaluated per candidate — no allocation, deterministic.
+ */
+function scatterDisc(L, cx, y, cz, rects, squash, rand, opts = {}) {
+  const {
+    density = 5.0, mix = DECK_MIX, inset = 0.35, maxHeight = DECK_PLANT_HEIGHT,
+    clump = 0.6, clumpScale = 2.4, max = 400, rimBias = 0.25,
+  } = opts
+  let hx = 0, hz = 0
+  for (const q of rects) { if (q.hx > hx) hx = q.hx; if (q.hz > hz) hz = q.hz }
+  if (hx <= inset || hz <= inset) return 0
+  const circ = rects.map((q) => ({ hx: q.hx, hz: q.hz / (squash || 1) }))
+  // Area of the bounding box is an over-estimate of the union's, and the
+  // rejection test below removes the difference — so the attempt count is
+  // scaled by the disc's own fill fraction (pi/4 for a near-circle) to land on
+  // the requested plants per square metre rather than 27% over it.
+  const area = 4 * hx * hz * 0.82
+  const attempts = Math.min(max, Math.max(1, Math.round(opts.count ?? area * density)))
+  const seed = ((rand() * 0xffffffff) >>> 0) || 1
+
+  return plant(L, cx, cz, (field) => {
+    let placed = 0
+    for (let i = 0; i < attempts; i++) {
+      // Radial warp toward the rim: the reference's islands are green at the
+      // edge and worn in the middle where people walk.
+      const w = (t) => {
+        const c = t * 2 - 1
+        return Math.sign(c) * Math.pow(Math.abs(c), 1 - rimBias * 0.6) * 0.5 + 0.5
+      }
+      const px = (w(rand()) * 2 - 1) * hx
+      const pz = (w(rand()) * 2 - 1) * hz
+      // Inside the union, with an inset so no card overhangs the collider.
+      const th = Math.atan2(pz / (squash || 1), px)
+      const rU = unionRadiusAt(circ, th)
+      const rr = Math.hypot(px, pz / (squash || 1))
+      if (rr > rU - inset) continue
+      const m = 1 - clump + clump * clumpNoise((cx + px) / clumpScale, (cz + pz) / clumpScale, seed)
+      if (rand() > m) continue
+      const species = pickWeighted(mix, rand())
+      field.add(species, cx + px, y, cz + pz, { height: 0.5 * maxHeight + rand() * 0.5 * maxHeight })
+      placed++
+    }
+    return placed
+  })
+}
+
+/**
+ * THE MOSS WEDGE, as vegetation rather than as a new geometry primitive.
+ *
+ * docs/roadmap.md wants moss creeping out of every wall/floor junction; the
+ * shader term for it landed and measured invisible. A narrow strip of
+ * `JUNCTION_MIX` along the base of the wall is the geometry half, and it is a
+ * `scatterOnBox` call rather than a kit primitive because foliage.js already
+ * ships the mix and the ledge guard for exactly this.
+ *
+ * @param {object} edge `{ x, y, z, axis, length, width }` — the junction line,
+ *        `y` the floor height, `width` how far the moss creeps out (0.35 m).
+ */
+function mossJunction(L, edge, opts = {}) {
+  const { x, y, z, axis = 'x', length = 4, width = 0.38 } = edge
+  if (length <= 0.4) return 0
+  const alongX = axis === 'x'
+  const cx = x + (alongX ? length / 2 : 0)
+  const cz = z + (alongX ? 0 : length / 2)
+  return plant(L, cx, cz, (field) => scatterOnBox(field, {
+    cx, cy: y, cz, sx: alongX ? length : width, sy: 0, sz: alongX ? width : length,
+  }, {
+    mix: JUNCTION_MIX,
+    density: opts.density ?? 5.5,
+    inset: 0.04,
+    clump: 0.42,
+    clumpScale: 1.4,
+    edgeBias: 0,
+    maxHeight: opts.maxHeight ?? 0.24,
+    y,
+  }))
+}
+
+/** Drape hanging ivy off a straight lip. Thin wrapper so prefabs read cleanly. */
+function drape(L, edge, opts = {}) {
+  return plant(L, edge.x, edge.z, (field) => hangFromEdge(field, edge, opts))
+}
+
+/**
+ * Drape ivy along the ACTUAL boundary polygon of a faceted platform.
+ *
+ * Draping four cardinal chords instead measured wrong in two directions at
+ * once: a chord at the full X extent runs past the corners of the union, so
+ * strands ended up hanging in open sky beyond the island (visible in gaps.png
+ * as loose leaves floating off the right-hand rim), and a chord pulled in far
+ * enough to avoid that buries itself inside the drum, where it is invisible
+ * except where it pokes through. The outline polygon is neither: every segment
+ * of it is a real edge of the real footprint, so every strand grips stone.
+ *
+ * `outline` is what `discOutline()` returns — a CCW loop, so the outward
+ * normal of the segment a→b is (dz, -dx).
+ */
+function drapeOutline(L, cx, y, cz, outline, opts = {}) {
+  const minRun = opts.minRun ?? 0.9
+  let placed = 0
+  for (let i = 0; i < outline.length; i++) {
+    const a = outline[i], b = outline[(i + 1) % outline.length]
+    const dx = b[0] - a[0], dz = b[1] - a[1]
+    const len = Math.hypot(dx, dz)
+    if (len < minRun) continue
+    const alongX = Math.abs(dx) >= Math.abs(dz)
+    // Only the axis-aligned runs, which on a staircase outline is all of them
+    // except the corner chamfers — and a 12 cm chamfer is not worth a strand.
+    if (alongX ? Math.abs(dz) > len * 0.3 : Math.abs(dx) > len * 0.3) continue
+    // Outward normal of a CCW segment is (dz, -dx). `hangFromEdge` offsets
+    // along Z for an X-run and along X for a Z-run, so it wants that normal's
+    // component on the perpendicular axis.
+    const outward = alongX ? Math.sign(-dx) || 1 : Math.sign(dz) || 1
+    // It also marches in the POSITIVE axis direction from its anchor, so hand
+    // it whichever end of the segment is lower on that axis.
+    const s = alongX ? (dx >= 0 ? a : b) : (dz >= 0 ? a : b)
+    placed += drape(L, {
+      x: cx + s[0], y, z: cz + s[1],
+      axis: alongX ? 'x' : 'z',
+      length: len,
+      outward,
+    }, opts)
+  }
+  return placed
+}
+
+/** Weighted pick from `[[key, weight], ...]`. */
+function pickWeighted(mix, r) {
+  let total = 0
+  for (const m of mix) total += m[1]
+  let t = r * total
+  for (const m of mix) { t -= m[1]; if (t <= 0) return m[0] }
+  return mix[mix.length - 1][0]
+}
+
+/**
+ * Smooth 0..1 lattice noise. Value noise on an integer hash, two octaves,
+ * quintic fade — the cheapest thing that makes a density mask read as patches
+ * of ground rather than as film grain.
+ */
+function clumpNoise(x, z, seed) {
+  return 0.65 * valueNoise(x, z, seed) + 0.35 * valueNoise(x * 2.7 + 11.3, z * 2.7 - 4.1, seed ^ 0x9e37)
+}
+
+function valueNoise(x, z, seed) {
+  const x0 = Math.floor(x), z0 = Math.floor(z)
+  const fx = x - x0, fz = z - z0
+  const u = fx * fx * fx * (fx * (fx * 6 - 15) + 10)
+  const v = fz * fz * fz * (fz * (fz * 6 - 15) + 10)
+  const a = hash2(x0, z0, seed), b = hash2(x0 + 1, z0, seed)
+  const c = hash2(x0, z0 + 1, seed), d = hash2(x0 + 1, z0 + 1, seed)
+  return (a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v
+}
+
+function hash2(x, z, seed) {
+  let h = (x * 374761393 + z * 668265263 + seed) | 0
+  h = (h ^ (h >>> 13)) * 1274126177
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296
 }
 
 /**
@@ -94,6 +459,10 @@ const _q = new THREE.Quaternion()
 const _e = new THREE.Euler()
 const _pos = new THREE.Vector3()
 const _one = new THREE.Vector3(1, 1, 1)
+// Scratch scale, for the one thing that genuinely needs it: squashing a
+// revolved solid onto an elliptical footprint. Read by `Matrix4.compose`
+// inside `place()` before anything else can touch it.
+const _sc = new THREE.Vector3(1, 1, 1)
 
 /**
  * A shape authored in XY and extruded along +Z, turned to face out of one of
@@ -111,98 +480,29 @@ function place(x, y, z, quat, scale = _one) {
   return new THREE.Matrix4().compose(_pos.set(x, y, z), quat, scale)
 }
 
-/** Bevelled extrusion of a closed profile — every extruded arris chamfered. */
-function extrude(shape, depth, bevel) {
-  const b = Math.max(0.004, Math.min(bevel, depth * 0.32))
-  const geo = new THREE.ExtrudeGeometry(shape, {
-    depth: depth - b * 2,
-    bevelEnabled: true,
-    bevelThickness: b,
-    bevelSize: b,
-    bevelOffset: 0,
-    bevelSegments: 1,
-    steps: 1,
-    curveSegments: 3,
-  })
-  geo.translate(0, 0, -depth / 2)
-  return geo
-}
-
 /**
- * A real gear: a toothed outline with a trapezoid tooth profile and a
- * chamfered crown, spoke windows cut as holes, extruded in one piece.
+ * A random orientation on all three axes.
  *
- * This replaces a ring of axis-aligned cubes placed at angles. The review's
- * words were "a jagged pixel-art disc extruded into 3D, and it is the single
- * most amateur read in the set", and it was right: teeth are radial, and
- * approximating them with cubes announces that the engine cannot rotate.
+ * The review's second finding was that the only rotation anywhere in this file
+ * was `{ axis: 'y' }`, and "a Y-rotated cuboid is still a cuboid" — its top and
+ * bottom stay horizontal, so the countable-cubes read survives the rotation
+ * that was added to hide it. Anything that carries no collision constraint can
+ * and should be turned in three axes.
+ *
+ * Uniform over the sphere via the standard subgroup construction, so a stand of
+ * boulders has no preferred pole.
  */
-function gearGeometry(radius, thickness, teeth, spokes) {
-  const rTip = radius
-  const rRoot = radius * 0.845
-  const p = (2 * Math.PI) / teeth
-  const shape = new THREE.Shape()
-  for (let i = 0; i < teeth; i++) {
-    const a0 = i * p
-    // root · rising flank · tip land · falling flank — a trapezoid tooth, not
-    // a square one, so the crown catches the sun along a taper.
-    const prof = [[rRoot, 0.0], [rRoot, 0.23], [rTip, 0.35], [rTip, 0.65], [rRoot, 0.77]]
-    for (const [r, f] of prof) {
-      const a = a0 + p * f
-      const x = Math.cos(a) * r, y = Math.sin(a) * r
-      if (i === 0 && f === 0.0) shape.moveTo(x, y)
-      else shape.lineTo(x, y)
-    }
-  }
-  shape.closePath()
-
-  if (spokes >= 3) {
-    const rIn = radius * 0.32, rOut = radius * 0.70
-    const w = (2 * Math.PI) / spokes
-    const gap = w * 0.17           // half the angular width of one spoke
-    for (let i = 0; i < spokes; i++) {
-      const a0 = i * w + gap, a1 = (i + 1) * w - gap
-      const hole = new THREE.Path()
-      const STEPS = 5
-      for (let k = 0; k <= STEPS; k++) {
-        const a = a0 + (a1 - a0) * (k / STEPS)
-        const x = Math.cos(a) * rOut, y = Math.sin(a) * rOut
-        if (k === 0) hole.moveTo(x, y); else hole.lineTo(x, y)
-      }
-      for (let k = STEPS; k >= 0; k--) {
-        const a = a0 + (a1 - a0) * (k / STEPS)
-        hole.lineTo(Math.cos(a) * rIn, Math.sin(a) * rIn)
-      }
-      hole.closePath()
-      shape.holes.push(hole)
-    }
-  }
-  return extrude(shape, thickness, Math.min(0.05, radius * 0.035))
+function orient3(rand) {
+  const u1 = rand(), u2 = rand(), u3 = rand()
+  const s1 = Math.sqrt(1 - u1), s2 = Math.sqrt(u1)
+  return new THREE.Quaternion(
+    s1 * Math.sin(2 * Math.PI * u2), s1 * Math.cos(2 * Math.PI * u2),
+    s2 * Math.sin(2 * Math.PI * u3), s2 * Math.cos(2 * Math.PI * u3))
 }
 
-/**
- * One voussoir: a trapezoid narrow at the intrados and wide at the extrados,
- * chamfered on every arris. Swept to its own tangent angle by the caller.
- */
-function voussoirGeometry(wIn, wOut, radial, depth) {
-  const s = new THREE.Shape()
-  s.moveTo(-wIn / 2, -radial / 2)
-  s.lineTo(wIn / 2, -radial / 2)
-  s.lineTo(wOut / 2, radial / 2)
-  s.lineTo(-wOut / 2, radial / 2)
-  s.closePath()
-  return extrude(s, depth, Math.min(0.035, radial * 0.14))
-}
-
-/**
- * A lathe from a (radius, height) profile. The honest way to draw anything
- * turned: balusters, finials, column drums, domes.
- */
-function latheGeometry(profile, segments) {
-  const pts = profile.map(([r, h]) => new THREE.Vector2(Math.max(1e-4, r), h))
-  const geo = new THREE.LatheGeometry(pts, segments)
-  geo.computeVertexNormals()
-  return geo
+/** A lathe from a (radius, height) profile, via props.js. */
+function latheGeometry(profile, segments, opts) {
+  return lathe(profile, { segments, ...opts })
 }
 
 /**
@@ -220,53 +520,182 @@ function unionRadiusAt(rects, theta) {
 }
 
 /**
- * THE MOSS LIP — the skirt that hangs off the edge of every island cap.
+ * THE MOSS CAP — the turf mat that is the top of every island.
  *
- * art-direction.md asks for moss caps with "a soft irregular overhanging lip";
- * the review found square notches, because a cap built as a union of
- * concentric rectangles has a stepped outline and nothing hides it.
+ * WHAT WAS WRONG (art review, 2026-07-25): "moss caps read as snooker tables".
+ * The cap was a union of flat boxes at one height with a separate skirt band
+ * tacked round it, which produced three separate failures at once — a
+ * perfectly flat top with no relief, hard triangular gussets where the skirt
+ * bulged past the stepped union at the facet corners, and a lip that stood
+ * proud of the collider and so presented as a walkable ledge from above.
  *
- * The skirt is a three-ring band swept round the cap. Its top ring hugs the
- * union's ACTUAL stepped boundary, so it is always anchored on stone; its
- * middle ring bulges out to a smoothed radius plus 10–22 cm of noise, which
- * both rounds the notches off and casts the contact shadow that makes the cap
- * read as a mat growing over a rock; its bottom ring tucks back underneath.
+ * This is one closed mat instead, with five rings of section:
  *
- * It is decor, and it overhangs the collider, and that is legal for exactly
- * one reason: its highest point is 2 cm BELOW the walkable surface and it
- * slopes away downwards from there. There is no height at which it presents
- * something to stand on — it is a lip under an edge, not a ledge beside one.
+ *   0  the crown, `relief` below y at most, domed and noise-broken
+ *   1  the outer top edge, at the outline radius
+ *   2  the arris, one bevel down and in — MATCHED TO level.js's own 4.5 cm box
+ *      chamfer, which is what kills the corner-gusset read: the cap and the
+ *      drum under it now turn their edges over by the same amount
+ *   3  the bottom of the fascia, a full `thickness` below the top
+ *   4  the underside, tucked back in to `inner` — this is the 10-15 cm
+ *      overhang band, and because its normal points down, level.js's mesh path
+ *      darkens it to 0.72 automatically. That contact shadow is what makes the
+ *      cap read as a mat GROWING OVER a rock rather than a plate resting on it
+ *
+ * THE COLLISION CONTRACT, in three steps that are each individually provable:
+ *   1. `discOutline()` walks the exact boundary of the collider's own rectangle
+ *      union, so the starting polygon IS the footprint, not an approximation.
+ *   2. It is scaled by `pull` <= 0.99. Scaling a union of origin-centred
+ *      rectangles by k <= 1 gives a subset of itself, whatever the facets are.
+ *   3. Every ring is a further radial scale <= 1 of that, and the union is
+ *      star-shaped about its centre.
+ * So no vertex can be outside the collider — inset, never overhang, which is
+ * docs/geometry-unlock.md's rule. The old skirt broke it; nothing here can.
+ * Audited by `kitSelfTest`, which measures a 6 m drum at exactly 12 m across.
+ *
+ * TOP RELIEF. `relief` is subtracted, never added — the walkable plane and the
+ * collider's top face are both `y`, so a crown that bulged upward would put
+ * visible turf above the surface you stand on — and it is biased so the peaks
+ * reach exactly `y` rather than stopping below it. See the `dip` mapping.
  */
-function skirtGeometry(rects, across, squash, drop, rand, segs) {
-  const circ = rects.map((q) => ({ hx: q.hx, hz: q.hz / squash }))
-  const pos = [], uv = [], idx = []
-  for (let i = 0; i <= segs; i++) {
-    const th = (2 * Math.PI * i) / segs
-    const c = Math.cos(th), s = Math.sin(th)
-    const rU = unionRadiusAt(circ, th)
-    // 65% of the way from the stepped boundary to the across-flats radius:
-    // enough to fill the notches, never so much that the lip leaves the stone.
-    const over = 0.10 + rand() * 0.12
-    const rB = rU * 0.35 + across * 0.65 + over
-    const arc = th * across
-    // The bulge sits only 12% of the drop below the cap's top edge. High
-    // enough that the SMOOTH outline is what the eye reads from above — which
-    // is the whole point, since the stepped one underneath it is what the
-    // collider has to be — and still unambiguously under the walking surface.
-    const ring = [
-      [rU * 0.995, -0.015, 0],
-      [rB, -drop * 0.12, 1],
-      [rU * 0.88, -drop, 2],
-    ]
-    for (const [r, h, v] of ring) {
-      pos.push(r * c, h, r * s * squash)
-      uv.push(arc, v * drop)
+/**
+ * The exact outline of a faceted disc's union, as a closed CCW polygon in XZ.
+ *
+ * WHY NOT SAMPLE IT RADIALLY. The union of N nested rectangles is a STAIRCASE,
+ * not a curve. Sampling `unionRadiusAt` at uniform angles and joining the
+ * samples cuts diagonally across every step, so each step's re-entrant corner
+ * becomes a sharp V — which is exactly what the first cut of the moss cap came
+ * back with, and it is a worse artefact than the stepped edge it was trying to
+ * hide. Walking the staircase itself reproduces the footprint the collider
+ * actually has, and the convex corners can then be chamfered (always inward,
+ * so always legal) to turn the 90-degree arrises over.
+ *
+ * `pull` is a global inward scale. Scaling a union of origin-centred rectangles
+ * by k <= 1 gives a subset of itself — each rectangle scales into itself — so
+ * the result is inside the collider by construction, whatever the facets are.
+ *
+ * @returns {Array<[number,number]>} points, with `.len` (radius per point) set.
+ */
+function discOutline(rects, squash, pull, chamfer) {
+  const n = rects.length
+  // One quadrant, from the +X axis round to the +Z axis.
+  const quad = [[rects[0].hx, 0]]
+  for (let i = 0; i < n; i++) {
+    quad.push([rects[i].hx, rects[i].hz])
+    if (i + 1 < n) quad.push([rects[i + 1].hx, rects[i].hz])
+  }
+  quad.push([0, rects[n - 1].hz])
+
+  // Mirror into four quadrants, dropping the shared axis points.
+  const loop = []
+  const push = (px, pz) => {
+    const last = loop[loop.length - 1]
+    if (!last || Math.abs(last[0] - px) > 1e-6 || Math.abs(last[1] - pz) > 1e-6) loop.push([px, pz])
+  }
+  for (const [px, pz] of quad) push(px, pz)
+  for (let i = quad.length - 1; i >= 0; i--) push(-quad[i][0], quad[i][1])
+  for (let i = 0; i < quad.length; i++) push(-quad[i][0], -quad[i][1])
+  for (let i = quad.length - 1; i >= 0; i--) push(quad[i][0], -quad[i][1])
+  if (loop.length > 1) {
+    const a = loop[0], b = loop[loop.length - 1]
+    if (Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6) loop.pop()
+  }
+
+  // Chamfer every CONVEX corner. Cutting a convex corner only ever removes
+  // area, so this can never push the outline outside the union; concave
+  // corners are left alone precisely because cutting one would.
+  const out = []
+  const M = loop.length
+  for (let i = 0; i < M; i++) {
+    const p = loop[i], a = loop[(i - 1 + M) % M], b = loop[(i + 1) % M]
+    const cross = (p[0] - a[0]) * (b[1] - p[1]) - (p[1] - a[1]) * (b[0] - p[0])
+    const la = Math.hypot(p[0] - a[0], p[1] - a[1]) || 1
+    const lb = Math.hypot(b[0] - p[0], b[1] - p[1]) || 1
+    // CCW winding makes a left turn (cross > 0) the convex case.
+    const c = cross > 0 ? Math.min(chamfer, la * 0.45, lb * 0.45) : 0
+    if (c > 1e-4) {
+      out.push([p[0] - (p[0] - a[0]) / la * c, p[1] - (p[1] - a[1]) / la * c])
+      out.push([p[0] + (b[0] - p[0]) / lb * c, p[1] + (b[1] - p[1]) / lb * c])
+    } else {
+      out.push([p[0], p[1]])
     }
   }
-  for (let i = 0; i < segs; i++) {
-    const a = i * 3, b = (i + 1) * 3
-    idx.push(a, b, b + 1, a, b + 1, a + 1)
-    idx.push(a + 1, b + 1, b + 2, a + 1, b + 2, a + 2)
+  for (const p of out) { p[0] *= pull; p[1] *= pull * squash }
+  return out
+}
+
+function mossCapGeometry(rects, squash, thickness, overhang, bevel, rand) {
+  // 1% of guaranteed inset, so the mat's outer face is inside the collider
+  // rather than on it, plus a per-island 0-2% so no two caps are the same size
+  // at the same radius.
+  const pull = 0.99 - rand() * 0.02
+  // The chamfer that turns the outline's corners over. It is asked for large
+  // and clamped by `discOutline` to 45% of the shorter of the two edges at
+  // each corner, which is what turns the union's 90-degree steps into a
+  // faceted, roughly octagonal rim instead of a jigsaw edge. The corner
+  // gussets the review saw were the cap and the drum below it turning their
+  // arrises over by different amounts; both are now driven by `bevel`.
+  const outline = discOutline(rects, squash, pull,
+    Math.max(bevel * 2.6, rects[0].hx * 0.07))
+  const M = outline.length
+  const relief = Math.min(0.10, thickness * 0.42)
+  const nSeed = ((rand() * 0xffffff) | 0) || 1
+  const pos = [], uv = [], idx = []
+  const RINGS = 5
+
+  let arc = 0
+  for (let i = 0; i < M; i++) {
+    const p = outline[i]
+    const prev = outline[(i - 1 + M) % M]
+    if (i > 0) arc += Math.hypot(p[0] - prev[0], p[1] - prev[1])
+    const len = Math.hypot(p[0], p[1]) || 1e-6
+    // Inward offsets expressed as radial scales — the outline is star-shaped
+    // about the centre, so scaling toward it always stays inside.
+    const kBev = Math.max(0.55, 1 - bevel / len)
+    const kIn = Math.max(0.5, 1 - overhang / len)
+    // Crown relief. Real turf is not a plane, and shape is the ONLY channel
+    // the kit has for breaking the top: `level.js`'s mesh path derives its
+    // vertex tint from world height and normal, and does not read a geometry
+    // colour attribute, so per-vertex VALUE has to come from per-vertex SHAPE.
+    // A few centimetres of lattice noise is what stops the cap shading as one
+    // flat plate, which was the snooker-table read.
+    //
+    // BIASED SO THE PEAKS TOUCH ZERO. Measured: an unbiased dip put the whole
+    // crown 2.5-10 cm BELOW the collider's top face, so the player walked four
+    // centimetres above the visible turf — the same class of error as a
+    // floating platform, just small enough to be missed by eye. Mapping the
+    // noise through max(0, n - 0.35) leaves a third of the mat flat at exactly
+    // the walking plane and dips the rest away from it, which is both correct
+    // and what turf between clumps actually does.
+    const dip = (n) => -relief * Math.max(0, n - 0.35) / 0.65
+    const hInner = dip(clumpNoise(p[0] * 0.35, p[1] * 0.35, nSeed))
+    const hMid = dip(clumpNoise(p[0] * 0.8, p[1] * 0.8, nSeed))
+    const ring = [
+      [0.5, hInner, 0],
+      [kBev, hMid, 1],
+      [1, hMid - bevel, 2],
+      [1, -thickness + bevel * 0.5, 3],
+      [kIn, -thickness - overhang * 0.35, 4],
+    ]
+    for (const [k, h, v] of ring) {
+      pos.push(p[0] * k, h, p[1] * k)
+      uv.push(arc, v * 0.35)
+    }
+  }
+  for (let i = 0; i < M; i++) {
+    const a = i * RINGS, b = ((i + 1) % M) * RINGS
+    for (let k = 0; k < RINGS - 1; k++) {
+      idx.push(a + k, b + k, b + k + 1, a + k, b + k + 1, a + k + 1)
+    }
+  }
+  // Close the crown with a fan. The underside stays open at the inner ring,
+  // which is the one hole in the mat and is covered by the rim course directly
+  // beneath it — capping it would spend triangles on a face no camera reaches.
+  const centre = pos.length / 3
+  pos.push(0, -relief * 0.5, 0)
+  uv.push(0, 0)
+  for (let i = 0; i < M; i++) {
+    idx.push(centre, ((i + 1) % M) * RINGS, i * RINGS)
   }
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
@@ -287,16 +716,85 @@ function skirtGeometry(rects, across, squash, drop, rand, segs) {
  * square. facets 1 is that square, 2 an octagon, 3 a dodecagon, 4+ reads as
  * a circle at platform scale. Every rectangle's corners lie on one common
  * circle, so the silhouette is a convex polygon rather than a stepped cross.
+ *
+ * ======================= WHY THIS TAKES A `rand` ==========================
+ * The art review's sharpest single finding: "twelve identical silhouettes in
+ * gaps.png". This function was fully deterministic in `r` and `facets`, so
+ * every drumPlatform of a given radius was GEOMETRICALLY CONGRUENT — reuse
+ * read as copy-paste, which docs/world-plan.md names as the thing that has to
+ * stop before the world can get bigger.
+ *
+ * Each facet is now pulled INWARD by 8-12%, and inward is the whole safety
+ * argument: the union is a subset of what it was, so the collider can only
+ * ever shrink, never grow past what the caller reserved. There is no height at
+ * which a jittered platform presents a surface its collider does not have,
+ * because the visible boxes ARE the collider boxes.
+ *
+ * WHAT IS NEVER JITTERED: rect 0's `hx` and rect n-1's `hz`, which are the two
+ * rectangles that set the union's extent across flats. Pinning them keeps
+ * `radius` an exact promise — a 10.4 m deck stays 10.4 m across, so no jump on
+ * the route changes length — while every facet BETWEEN them moves, which is
+ * where the silhouette lives. `aspect` is the caller's opt-in to varying the
+ * overall footprint too, and level.js only passes it on scenery.
  */
-function discRects(r, facets = 3, squash = 1) {
+function discRects(r, facets = 3, squash = 1, shape = null) {
   const n = Math.max(1, Math.min(6, facets | 0))
   const R = r / Math.cos((Math.PI / 2) * (0.5 / n))
+  const ax = shape ? shape.aspect[0] : 1
+  const az = shape ? shape.aspect[1] : 1
+  const j = shape ? shape.facet : null
   const out = []
   for (let i = 0; i < n; i++) {
     const a = (Math.PI / 2) * ((i + 0.5) / n)
-    out.push({ hx: R * Math.cos(a), hz: R * squash * Math.sin(a) })
+    // ONE radius per facet, not an independent hx and hz.
+    //
+    // Measured the hard way: jittering the two half-extents separately pulls a
+    // rectangle out of step with its neighbours, and because the union of
+    // nested rectangles is a STAIRCASE, an out-of-step rectangle deepens the
+    // step next to it. Two independent 12% pulls compounded into ~20% notches,
+    // and the moss cap — which has to follow that boundary to stay inside the
+    // collider — came back as a five-pointed star.
+    //
+    // Scaling the whole rectangle keeps its corner on a circle of radius R*j,
+    // so the staircase keeps its regular character and only its proportions
+    // change. The facet-to-facet ratio of cos(a) is at least 1.18 at every
+    // facet count this kit uses, comfortably more than the 1.11 the jitter can
+    // introduce, so hx stays monotonically decreasing and hz monotonically
+    // increasing — which is exactly the condition for no new re-entrant corner.
+    const s = j && n > 2 && i > 0 && i < n - 1 ? j[i] : 1
+    out.push({ hx: R * Math.cos(a) * ax * s, hz: R * squash * Math.sin(a) * az * s })
   }
   return out
+}
+
+/**
+ * ONE island's shape signature: the per-facet inward pulls and the footprint
+ * aspect, drawn once and then reused by every course of that island.
+ *
+ * It has to be drawn once rather than per `disc()` call, or the cap, the rim,
+ * the body and four boulder tiers would each jitter differently and the stack
+ * would read as a pile of misaligned plates instead of as one carved mass.
+ *
+ * `aspect` is inward-only and opt-in (`vary`), because `deck()` in level.js
+ * pins the route's footprints deliberately and a platform that quietly loses
+ * 20% of its landing area is a movement bug, not a silhouette improvement.
+ */
+function discShape(facets, rand, vary = false) {
+  const n = Math.max(1, Math.min(6, facets | 0))
+  // 3-10% inward per interior facet. The outer two are never touched: they are
+  // the rectangles that set the union's extent across flats, and `radius` has
+  // to stay an exact promise or a jump on the route quietly changes length.
+  const facet = new Array(n)
+  for (let i = 0; i < n; i++) facet[i] = 1 - (0.03 + rand() * 0.07)
+  let aspect = [1, 1]
+  if (vary) {
+    // One axis holds at 1 and the other pulls in by up to 25%, so the ratio
+    // covers the review's requested 0.75-1.35 without either extent ever
+    // growing past the radius the caller reserved.
+    const pull = 1 - rand() * 0.25
+    aspect = rand() > 0.5 ? [pull, 1] : [1, pull]
+  }
+  return { facet, aspect }
 }
 
 // Vertical tie-break between the rectangles that make up one faceted disc.
@@ -314,10 +812,10 @@ function discRects(r, facets = 3, squash = 1) {
 const DISC_EPSILON = 6e-4
 
 /** A faceted disc/drum course. Returns the number of boxes emitted. */
-function disc(put, cx, cy, cz, r, h, kind, facets = 3, squash = 1, o) {
+function disc(put, cx, cy, cz, r, h, kind, facets = 3, squash = 1, o, shape = null) {
   let n = 0
   let i = 0
-  for (const q of discRects(r, facets, squash)) {
+  for (const q of discRects(r, facets, squash, shape)) {
     n += put(cx, cy - i * DISC_EPSILON, cz, q.hx * 2, h, q.hz * 2, kind, o)
     i++
   }
@@ -384,18 +882,28 @@ function frame(axis) {
  * ANCHOR: (x, y, z) is the CENTRE OF THE WALKABLE TOP SURFACE. `y` is the
  * height you land on, so a caller can place it straight off a jump arc.
  *
- * SOLID: the moss cap, the chamfer course, the drum body and every boulder
- * tier — the whole mass. The moss lip overhangs the drum, is at walkable
- * height, and is therefore solid; the footprint of the collision union is
- * pixel-identical to the visible union because they are the same boxes.
- * DECOR: only the optional vine curtain, which hangs below the rim.
+ * SOLID: the moss cap, the rim course, the drum body and every boulder tier —
+ * the whole mass, and at exactly the extents it has always had. What changed
+ * in round three is only what DRAWS those volumes: where there is a mesh
+ * channel the boxes become `{ hidden: true }` colliders and a turf mat, a
+ * lathed drum and a stack of `props.blob()` boulders are drawn inside them.
+ * Every one of those is provably inset — see `mossCapGeometry`'s collision
+ * contract and the containment note on the tier blobs — so the surface you can
+ * stand on is never larger than the surface you can see by more than the
+ * chamfer, and never smaller by any amount.
+ * DECOR: the hero vines, the boulder spurs, and the ivy, all of which exist
+ * only below the rim.
+ *
+ * VARIATION: `rand` drives the facet pull, tier count, tier inset, cap outline,
+ * rim height, boulder seeds and planting. Two islands of the same radius are
+ * no longer congruent — which was the review's headline finding.
  *
  * @returns {{topY:number, radius:number, baseY:number, boxes:number}}
  */
 export function drumPlatform(L, x, y, z, opts = {}) {
   const {
     radius = 6, kind = 'stone', capKind = 'moss', detail = 2,
-    capThickness = 0.42, bodyDepth = 2.6, tiers = detail === 0 ? 1 : 3,
+    capThickness = 0.42, bodyDepth = 2.6,
     vines = detail >= 2, squash = 1,
   } = opts
   // The cap is the *built* surface (paving or turf) and the mass below it is
@@ -407,45 +915,207 @@ export function drumPlatform(L, x, y, z, opts = {}) {
   const rand = pick(opts)
   const facets = opts.facets ?? (detail >= 2 ? 4 : detail === 1 ? 3 : 1)
   const { S, D } = emit(L, opts)
+  const curves = !!L.mesh && detail >= 1
   let n = 0
 
-  // Cap: sits proud of the stone by a lip, top face exactly at y. Thin on
-  // purpose — a 40 cm mat overhanging a shadowed rim reads as moss growing
-  // over an edge; a 2 m one reads as a green box.
-  n += disc(S, x, y - capThickness / 2, z, radius, capThickness, capKind, facets, squash)
-  // Chamfer course just under the lip, inset so the cap visibly overhangs it
-  // and drops a contact shadow onto the rock. This is what stops the
-  // silhouette reading as one extruded slab.
-  n += disc(S, x, y - capThickness - 0.26, z, radius * 0.94, 0.55, rimKind, facets, squash)
-  // The drum body.
-  n += disc(S, x, y - capThickness - 0.53 - bodyDepth / 2, z,
-    radius * 0.9, bodyDepth, kind, facets, squash)
+  // THE SHAPE SIGNATURE. Drawn once and threaded through every course, so this
+  // island's facets are its own and its stack still lines up. `ghost` platforms
+  // are scenery nobody stands on, so those also vary their footprint aspect;
+  // route decks keep the extent level.js reserved, exactly.
+  const shape = discShape(facets, rand, !!opts.ghost)
 
-  // The moss lip. See skirtGeometry for what it is and why it may overhang.
-  if (L.mesh && detail >= 1) {
+  // Tier count and the inset each tier takes are per-island now. Three tiers of
+  // 0.68 every time is the other half of why the archipelago read as one island
+  // stamped twelve times — the underside is most of an island's silhouette.
+  const tiers = opts.tiers ?? (detail === 0 ? 1 : 2 + ((rand() * 3) | 0))
+  const tierInset = 0.60 + rand() * 0.18
+
+  // THE OVERHANG. The cap stands this far proud of the stone below it, and the
+  // band it casts is the contact shadow that makes a cap read as turf growing
+  // over rock. 10-15 cm is the review's number and it is absolute rather than
+  // proportional on purpose: it is a shadow width, so it should not scale with
+  // the island the way a percentage of the radius would.
+  const overhang = 0.10 + rand() * 0.05
+  // Matched to level.js's BEVEL_MAX. The corner gussets the review saw were the
+  // cap turning its edge over by a different amount from the drum under it.
+  const bevel = 0.045
+
+  // Cap collider: unchanged in extent and height, so the surface the player
+  // lands on is the surface it always was. When there is a mesh channel the
+  // boxes are hidden and `mossCapGeometry` draws the mat instead.
+  n += disc(S, x, y - capThickness / 2, z, radius, capThickness, capKind, facets, squash,
+    { hidden: curves }, shape)
+  if (curves) {
     L.mesh(capKind,
-      skirtGeometry(discRects(radius, facets, squash), radius, squash,
-        capThickness * 1.25, rand, detail >= 2 ? 28 : 16),
-      place(x, y, z, _q.identity()), { shade: 0.97 })
+      mossCapGeometry(discRects(radius, facets, squash, shape), squash,
+        capThickness, overhang, bevel, rand),
+      place(x, y, z, _q.identity()),
+      // Value jitter across islands, on top of level.js's own per-call tint
+      // jitter. The review also asked for moss to stop being the brightest
+      // thing in the frame; 0.86-0.96 puts sandstone back on top.
+      { shade: 0.86 + rand() * 0.10 })
     n += 1
   }
 
-  // Boulder underside: descending, progressively inset tiers.
-  let ty = y - capThickness - 0.53 - bodyDepth
+  // THE RIM COURSE — the moulding the cap overhangs.
+  //
+  // This was one continuous prism at one radius, which is why every island read
+  // as a three-layer cake: green plate, red stripe, grey block. It is now a
+  // real string course with a swept cornice section, so it has a fillet, a
+  // hollow and a corona in it and every one of those is a horizontal shadow
+  // line. Its height and radius are per-island, and the collider is the same
+  // faceted disc it always was.
+  const rimTop = y - capThickness - 0.04
+  // Shallower than the 0.55 m band this replaces. The rim carries the route
+  // accent hue on built islands, and moving it out to (radius - overhang) to
+  // give the cap its 10-15 cm of shadow also made it a far wider stripe on
+  // screen — "green plate, red stripe, grey block" got LOUDER, not quieter.
+  // 30-42 cm of moulding under a 42 cm cap is the proportion that reads as a
+  // cornice rather than as a layer of the cake.
+  const rimH = 0.30 + rand() * 0.12
+  const rimR = radius - overhang - rand() * radius * 0.018
+  //
+  // The swept version is the single most expensive piece of an island —
+  // ~1300 triangles against ~3400 for the whole platform — so it is spent only
+  // where the eye can resolve a cornice profile at all. Beyond the near band
+  // the box course is what a 30 cm moulding is worth.
+  const richRim = curves && detail >= 2
+  n += disc(S, x, rimTop - rimH / 2, z, rimR, rimH, rimKind, facets, squash,
+    { hidden: richRim }, shape)
+  if (richRim) {
+    // Swept along the rim's own staircase outline, for the same reason the cap
+    // is: a path sampled at uniform angles cuts across the steps and puts a
+    // sharp V in the moulding at every re-entrant corner.
+    //
+    // The section stands PROUD of the path by `project` along the path normal,
+    // so the path is pulled in by that much (as a radial scale, since the
+    // outline is star-shaped about the centre) plus 2 cm, and the moulding's
+    // outer face lands just inside the collider rather than on it. A heavy
+    // chamfer on the outline's convex corners keeps the miter at those corners
+    // near 22 degrees, where a swept section still behaves.
+    const project = rimH * 0.5
+    const rects = discRects(rimR, facets, squash, shape)
+    // The closest the union's boundary ever comes to the centre is the smaller
+    // of its two half-extents — the union contains the widest rectangle on each
+    // axis — so a radial scale of 1 - d/minDist moves every boundary point in
+    // by at least d.
+    const minDist = Math.max(0.3, Math.min(rects[0].hx, rects[rects.length - 1].hz))
+    const pullBack = Math.max(0.5, 1 - (project + 0.02) / minDist)
+    const outline = discOutline(rects, squash, pullBack, project * 2.2)
+    const path = outline.map((p) => [p[0], 0, p[1]])
+    L.mesh(rimKind, extrudeAlong(corniceShape(project, rimH, 3), path, {
+      closed: true, detail: detail >= 2 ? 2 : 1, pathSegments: path.length,
+    }), place(x, rimTop - rimH, z, _q.identity()), { shade: 0.95 })
+    n += 1
+  }
+  const bodyTop = rimTop - rimH - 0.02
+
+  // The drum body. A lathed batter with a string course rather than one
+  // straight prism: "drums stop being stepped" is the review's wording, and a
+  // wall that leans in by 4% over its height is what a real revetment does.
+  n += disc(S, x, bodyTop - bodyDepth / 2, z, radius * 0.9, bodyDepth, kind, facets, squash,
+    { hidden: curves }, shape)
+  if (curves) {
+    const rb = radius * 0.9
+    // Inscribed in the collider by construction: `lathe` puts vertices ON the
+    // circle of radius r, and the disc union's half-width across flats is rb,
+    // so a profile that never exceeds rb never leaves the box.
+    L.mesh(kind, latheGeometry([
+      [rb * 0.88, -bodyDepth],
+      [rb * 0.97, -bodyDepth * 0.72],
+      [rb * 0.985, -bodyDepth * 0.34],
+      [rb * 0.93, -bodyDepth * 0.30],   // string course, a real shadow line
+      [rb * 0.99, -bodyDepth * 0.24],
+      [rb, -0.06],
+      [rb * 0.97, 0],
+    ], detail >= 2 ? 16 : 9, { capTop: false, capBottom: false }),
+    place(x, bodyTop, z, _q.identity(), _sc.set(1, 1, squash)))
+    n += 1
+  }
+
+  // ------------------------------------------------------- the underside
+  //
+  // KILLING THE VOXELS. The tiers stay solid — they are the island's mass and
+  // the review explicitly said to leave the solid discs alone — but where there
+  // is a mesh channel they are hidden and a `props.blob()` is drawn inside
+  // each one. A blob is a welded icosphere pushed around by seeded fractal
+  // noise: it has no horizontal top, no horizontal bottom and no countable
+  // step, which is precisely what a Y-rotated cuboid could never stop having.
+  //
+  // CONTAINMENT, stated rather than hoped: blob's displaced radius is
+  // `r * (1 + lumpiness * nz)` with `nz` in [-1,1], so asking for
+  // `r = tr / (1 + lumpiness)` guarantees every vertex is inside the tier's
+  // across-flats half-width. The lumps hung off the tiers carry no collider at
+  // all and no constraint either — they live under an overhang wider than
+  // themselves, which is the case art-direction.md grants for island undersides.
+  let ty = bodyTop - bodyDepth
   let tr = radius * 0.9
   for (let i = 0; i < tiers; i++) {
     const h = 2.2 + rand() * 1.6 + i * 0.5
-    tr *= 0.68 + rand() * 0.1
-    n += disc(S, x, ty - h / 2, z, tr, h, boulderKind, Math.max(1, facets - 1), squash)
-    // Boulder lumps: rotated, irregular masses hung off each tier so the
-    // underside reads as a chunky rounded rock rather than as the hard stepped
-    // terrace the review found in crossing.png and chain.png. They are decor,
-    // and they are legal because every one of them lives UNDER an overhang
-    // wider than itself — nothing here is reachable from above, which is the
-    // escape route art-direction.md's collision caveat explicitly grants for
-    // island undersides.
-    if (detail >= 1) {
-      const lumps = detail >= 2 ? 7 : 4
+    tr *= tierInset + rand() * 0.1
+    n += disc(S, x, ty - h / 2, z, tr, h, boulderKind, Math.max(1, facets - 1), squash,
+      { hidden: curves }, shape)
+    if (curves) {
+      // CONTAINMENT, worked rather than assumed. blob's displaced radius is
+      //   R = radius * (1 + lumpiness * noise) * (1 + taperY * dirY)
+      // with noise and dirY both in [-1,1], so its horizontal extent is bounded
+      // by radius * (1 + lumpiness) * (1 + taperY). Solving that for the tier's
+      // across-flats half-width `tr` is what `rBase` is. Y is then bounded by
+      // tr * squashY, so squashY is set to put it exactly on the tier's height.
+      const LUMP = 0.34
+      // POSITIVE taperY widens the top and pinches the bottom — checked against
+      // the formula above rather than taken from props.js's prose, which reads
+      // the sign the other way round. Wide-over-narrow is the island underside.
+      const taper = 0.28 + rand() * 0.22
+      const rBase = tr / ((1 + LUMP) * (1 + taper))
+      L.mesh(boulderKind, blob((rand() * 0xffffff) | 0, {
+        radius: rBase,
+        lumpiness: LUMP,
+        taperY: taper,
+        squash: (h / 2) / tr,
+        frequency: 1.3 + rand() * 0.7,
+        // MID, not NEAR: 320 triangles rather than 1280. Sixty islands with
+        // three tiers each is 180 of these in the world, and an island
+        // underside is seen from 30 m and below, where the extra subdivision
+        // buys smoother relief on a shape the eye reads as a silhouette. The
+        // cost of getting this wrong is the whole frame budget.
+        detail: detail >= 2 ? 1 : 0,
+      }), place(x, ty - h / 2, z, _q.identity(), _sc.set(1, 1, squash)),
+      { shade: 0.94 + rand() * 0.1 })
+      n += 1
+
+      // Spurs and boulders hung off the tier, at full three-axis orientation.
+      //
+      // These carry no collider, and the licence for that is that they live
+      // UNDER an overhang wider than themselves — so their reach is clamped to
+      // the drum's own radius rather than left to whatever the random sizes
+      // happen to add up to. Without the clamp a first-tier spur measured
+      // 3 cm outside the island's footprint, which is a visible surface with
+      // no collider under it and therefore the one bug this project exists to
+      // not have, however small.
+      const lumps = detail >= 2 ? 5 : 2
+      const reach = tr * 0.72
+      // blob's horizontal extent is radius * (1 + lumpiness) * (1 + taperY);
+      // 0.46 and 0.25 are the maxima the calls below can draw.
+      const maxAllowed = Math.max(0.1, (radius * 0.88 - reach) / (1.46 * 1.25))
+      for (let k = 0; k < lumps; k++) {
+        const a = (2 * Math.PI * (k + rand() * 0.7)) / lumps
+        const lr = Math.min(maxAllowed, tr * (0.26 + rand() * 0.22))
+        const ly = ty - h * (0.12 + rand() * 0.62)
+        L.mesh(boulderKind, blob((rand() * 0xffffff) | 0, {
+          radius: lr,
+          lumpiness: 0.30 + rand() * 0.16,
+          squash: 0.7 + rand() * 0.8,
+          taperY: (rand() - 0.5) * 0.5,
+          detail: 0,          // 80 triangles: a spur is pure silhouette
+        }), place(x + Math.cos(a) * reach, ly, z + Math.sin(a) * reach * squash,
+          orient3(rand)), { shade: 0.9 + rand() * 0.16 })
+        n += 1
+      }
+    } else if (detail >= 1) {
+      // No mesh channel (the far LOD, and the self-test's box recorder): keep
+      // the old box lumps rather than leaving the underside a bare prism.
+      const lumps = 4
       for (let k = 0; k < lumps; k++) {
         const a = (2 * Math.PI * (k + rand() * 0.7)) / lumps
         const lr = tr * (0.62 + rand() * 0.46)
@@ -458,13 +1128,70 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     ty -= h * 0.92
   }
 
+  // ---------------------------------------------------------- the planting
+  //
+  // "Vegetation is a primary element, not a garnish" (art-direction.md), and
+  // the review measured a frame of architecture at 100% bare stone. An island
+  // gets three layers of it: a scattered deck, ivy over the rim, and — where
+  // the player will actually stand next to it — two hero vines as real tubes.
+  if (detail >= 1) {
+    const rects = discRects(radius, facets, squash, shape)
+    scatterDisc(L, x, y + 0.02, z, rects, squash, rand, {
+      // Scenery is backdrop: capped hard, because sixteen near-band islands at
+      // deck density would plant more cards than the whole route needs.
+      // 6.5/m2 on the route, measured rather than chosen: at 5.0 with the cap
+      // at 420 attempts a 256 m2 terrace came back with ~290 plants and read
+      // as a swept deck with weeds at the edges. Scenery stays capped hard —
+      // sixteen near-band islands at route density is more cards than the
+      // whole route needs, for something 40 m off the running line.
+      density: opts.ghost ? 1.1 : 6.5,
+      max: opts.ghost ? 90 : 1100,
+      mix: opts.ghost ? WILD_MIX : DECK_MIX,
+      maxHeight: opts.ghost ? 0.34 : DECK_PLANT_HEIGHT,
+      inset: 0.4,
+      rimBias: 0.3,
+    })
+
+    // Ivy over the rim, along the island's real boundary. `hangFromEdge` emits
+    // strictly below the lip, so a drape can never be a phantom ledge.
+    //
+    // Pitch 1.15 rather than the library's 0.5 default: at 0.5 the perimeter
+    // of a 30 m terrace came back as a continuous hedge standing along both
+    // edges of the running line, and taste.md is explicit that scenery must
+    // never "obscure the view" — on a floating-island course the VOID is the
+    // read that matters most. Broken cover with gaps in it is also just what
+    // ivy on a wall looks like.
+    drapeOutline(L, x, y - capThickness, z,
+      discOutline(discRects(radius, facets, squash, shape), squash, 0.995, 0), {
+        drop: [0.7, 1.5 + radius * 0.1],
+        pitch: opts.ghost ? 1.9 : 1.15,
+        minRun: Math.max(0.9, radius * 0.12),
+      })
+  }
+
   if (vines) {
-    const strands = 3 + ((rand() * 3) | 0)
+    // Hero vines: real swept tubes on a catenary, for the two or three the
+    // player runs within arm's reach of. A card seen from 40 cm is a card.
+    const strands = 2 + ((rand() * 2) | 0)
     for (let i = 0; i < strands; i++) {
       const a = rand() * Math.PI * 2
-      const len = 1.6 + rand() * 3.4
-      n += D(x + Math.cos(a) * radius * 0.86, y - capThickness - len / 2,
-        z + Math.sin(a) * radius * 0.86 * squash, 0.28, len, 0.28, 'moss')
+      const c = Math.cos(a), s = Math.sin(a)
+      const ax2 = x + c * radius * 0.9
+      const az2 = z + s * radius * squash * 0.9
+      const len = 1.8 + rand() * 3.6
+      if (L.mesh) {
+        const rope = vineRope(ax2, y - capThickness - 0.05, az2, {
+          drop: len, reach: 0.25 + rand() * 0.4, dir: [c, s],
+          seed: ((rand() * 0xffffff) | 0) || 1,
+          radius: [0.055, 0.02],
+        })
+        L.mesh('moss', sweepTube(rope, 0.05, {
+          detail: detail >= 2 ? 1 : 0, taper: 0.34, capStart: false, capEnd: false,
+        }), place(0, 0, 0, _q.identity()), { shade: 0.9 })
+        n += 1
+      } else {
+        n += D(ax2, y - capThickness - len / 2, az2, 0.28, len, 0.28, 'moss')
+      }
     }
   }
 
@@ -498,6 +1225,8 @@ export function archway(L, x, y, z, opts = {}) {
   const segs = detail >= 2 ? 11 : detail === 1 ? 7 : 5
   let n = 0
 
+  const rand = pick(opts)
+
   for (const side of [-1, 1]) {
     const a = side * (R + pierWidth / 2)
     // Pier: three courses, each slightly inset, for a battered chamfer.
@@ -509,54 +1238,75 @@ export function archway(L, x, y, z, opts = {}) {
       const [cx, cz] = F.at(x, z, a, 0)
       const [sx, sz] = F.sz(w, d)
       n += S(cx, y + h * (i + 0.5), cz, sx, sy_(h), sz, kind)
+      // A BEVEL COURSE at every joint. The review's fifth finding: a course
+      // boundary with no relief in it has no shadow line, so a battered pier
+      // reads as one prism with lines painted on. 4 cm proud and 8 cm tall is
+      // enough to self-shadow at a 10-degree sun and invisible as added mass.
+      if (detail >= 1 && i < courses - 1) {
+        const [bsx2, bsz2] = F.sz(w + 0.08, d + 0.08)
+        n += S(cx, y + h * (i + 1) - 0.04, cz, bsx2, 0.08, bsz2, kind, { shade: 1.08 })
+      }
     }
-    // Springing block: the flared impost the arc launches from.
+    // Springing block: the flared impost the arc launches from, in two courses
+    // so its own top edge turns over rather than ending in a square arris.
     const [bx, bz] = F.at(x, z, a, 0)
     const [bsx, bsz] = F.sz(pierWidth * 1.22, depth * 1.12)
-    n += S(bx, y + springHeight + 0.22, bz, bsx, 0.44, bsz, kind)
+    n += S(bx, y + springHeight + 0.16, bz, bsx, 0.32, bsz, kind)
+    const [csx, csz] = F.sz(pierWidth * 1.34, depth * 1.2)
+    n += S(bx, y + springHeight + 0.38, bz, csx, 0.12, csz, kind, { shade: 1.1 })
   }
 
-  // --- the voussoir arc -------------------------------------------------
+  // --- the voussoir ring -------------------------------------------------
   //
-  // This used to be axis-aligned boxes stepped along the arc, which gave every
-  // arch in the game a notched, sawtooth intrados. Real voussoirs are
-  // trapezoids radiating from the arc centre, so that is what these are: the
-  // tangential width is computed at the intrados AND at the extrados from the
-  // same circle, and each block is swept to its own tangent angle.
+  // `props.arch()` builds this now: every block is a wedge cut on the arch's
+  // own radial lines, chamfered on all twelve edges, separated from its
+  // neighbours by a real mortar joint. That last part is the whole gain over
+  // the hand-rolled trapezoids this replaces — a joint that is a recess with
+  // two chamfers meeting in it casts a shadow line whatever the sun is doing,
+  // where an abutting joint casts nothing and the ring reads as one solid.
   //
-  // The collider stays an axis-aligned box — it is the AABB of the rotated
-  // wedge, computed exactly, so it always contains what is drawn. An extrados
-  // a player mantles onto from a wall-run is still a real ledge; it is just no
-  // longer a staircase.
+  // The collider is unchanged in kind: one axis-aligned box per block, sized
+  // as the exact AABB of that block's wedge, so an extrados a player mantles
+  // onto from a wall-run is still a real ledge and never a staircase.
   const cy0 = y + springHeight + 0.44
   const rr = R + vt / 2
-  // For a z-spanning arch the wedge's local +X (its tangential axis) has to
-  // land on world +Z, which is a -90 degree turn about Y. The sign matters:
-  // +90 lands it on -Z and every voussoir tilts the wrong way round the arc.
-  const archQuat = axis === 'z'
-    ? new THREE.Quaternion().setFromEuler(_e.set(0, -Math.PI / 2, 0))
-    : new THREE.Quaternion()
   const wIn = (Math.PI * R) / segs * 1.03
   const wOut = (Math.PI * (R + vt)) / segs * 1.03
   const wMax = Math.max(wIn, wOut)
   for (let i = 0; i < segs; i++) {
     const t = Math.PI * ((i + 0.5) / segs)
     const c = Math.cos(t), s = Math.sin(t)
-    // The wedge's radial axis points along (-c, s); tilting the upright block
-    // by phi = pi/2 - t about the arch-plane normal puts it there.
-    const phi = Math.PI / 2 - t
     const [cx, cz] = F.at(x, z, -c * rr, 0)
     const cyv = cy0 + s * rr
-    // Exact AABB of the rotated trapezoid. |cos phi| = |sin t| = s, |sin phi| = |c|.
-    const aAlong = wMax * s + vt * Math.abs(c)
-    const aUp = wMax * Math.abs(c) + vt * s
+    // AABB of the rotated trapezoid, plus 3 cm. |cos phi| = |sin t| = s and
+    // |sin phi| = |c| give the exact figure; the margin covers `props.arch`'s
+    // per-block extrados jitter, and it is spent in the safe direction — a
+    // collider slightly larger than its mesh, never a mesh outside its
+    // collider, which is docs/geometry-unlock.md's rule.
+    const aAlong = wMax * s + vt * Math.abs(c) + 0.03
+    const aUp = wMax * Math.abs(c) + vt * s + 0.03
     const [sx, sz] = F.sz(aAlong, depth)
     n += S(cx, cyv, cz, sx, aUp, sz, kind, { hidden: !!L.mesh })
-    if (L.mesh) {
-      const q = archQuat.clone()
-        .multiply(new THREE.Quaternion().setFromEuler(_e.set(0, 0, phi)))
-      L.mesh(kind, voussoirGeometry(wIn, wOut, vt, depth), place(cx, cyv, cz, q))
-    }
+  }
+  if (L.mesh) {
+    // One merged ring, drawn once. `arch` sits in XY with its springing line at
+    // y = 0 and the opening centred on x = 0, extruded along Z — which is
+    // exactly this prefab's own frame for an x-spanning arch, and a -90 degree
+    // turn about Y for a z-spanning one.
+    const q = axis === 'z'
+      ? new THREE.Quaternion().setFromEuler(_e.set(0, -Math.PI / 2, 0))
+      : new THREE.Quaternion()
+    L.mesh(kind, archRing(span, R, depth, segs, {
+      ringDepth: vt,
+      // A 2 cm joint at a 6 m span is a stonemason's joint, and it is the
+      // shadow line the whole ring reads by.
+      jointGap: 0.02,
+      bevel: Math.min(0.045, vt * 0.2),
+      keystone: keystone ? 0.26 : 0,
+      jitter: 0.014,
+      seed: ((rand() * 0xffffff) | 0) || 1,
+    }), place(x, cy0, z, q))
+    n += 1
   }
 
   const crownY = cy0 + R + vt / 2
@@ -572,6 +1322,37 @@ export function archway(L, x, y, z, opts = {}) {
     // appear at every scale. Overhead ornament, so decor.
     const [bx2, bz2] = F.at(x, z, 0, 0)
     n += D(bx2, crownY + vt * 1.0, bz2, 0.5, 0.4, depth * 1.2, 'brass')
+  }
+
+  // ---------------------------------------------------------- the planting
+  //
+  // "no frame contains a stone mass over ~3 m wide with a completely unbroken
+  // top edge" (docs/roadmap.md). An arch is the worst offender in the set: a
+  // clean semicircle of stone against sky. Ivy off both springings breaks the
+  // extrados, moss at the pier bases breaks the floor junction, and ferns in
+  // the soffit shade are what the reference puts under every arch.
+  if (detail >= 1) {
+    for (const side of [-1, 1]) {
+      const a = side * (R + pierWidth / 2)
+      const [px, pz] = F.at(x, z, a - pierWidth / 2, -depth / 2)
+      mossJunction(L, { x: px, y, z: pz, axis, length: pierWidth, width: depth * 0.9 })
+      // Off the springing block, where the ring leaves the pier: the one place
+      // a real arch always grows something, because the impost holds water.
+      const [dx2, dz2] = F.at(x, z, a - pierWidth * 0.6, -depth / 2)
+      drape(L, {
+        x: dx2, y: y + springHeight + 0.3, z: dz2,
+        axis, length: pierWidth * 1.2, outward: -1,
+      }, { drop: [0.7, 1.6 + R * 0.25], pitch: 0.5 })
+    }
+    // Ferns under the soffit, in the damp shade the arch casts all day.
+    const [fx, fz] = F.at(x, z, -R * 0.55, -depth * 0.3)
+    const [fsx, fsz] = F.sz(R * 1.1, depth * 0.6)
+    plant(L, fx + fsx / 2, fz + fsz / 2, (field) => scatterOnBox(field, {
+      cx: fx + fsx / 2, cy: y, cz: fz + fsz / 2, sx: fsx, sy: 0, sz: fsz,
+    }, {
+      mix: [['fern', 5], ['grass', 2], ['leaf', 1.5]],
+      density: 1.6, clump: 0.5, maxHeight: 0.3, inset: 0.2, y,
+    }))
   }
 
   return {
@@ -607,9 +1388,11 @@ export function colonnade(L, x, y, z, opts = {}) {
   } = opts
   const F = frame(axis)
   const { S, D } = emit(L, opts)
+  const rand = pick(opts)
   const facets = detail >= 2 ? 3 : 1
   const drums = detail >= 2 ? 4 : detail === 1 ? 2 : 1
   const baseFacets = Math.max(1, facets - 1)
+  const curves = !!L.mesh && detail >= 1
   let n = 0
 
   const shaftTop = y + 0.42 + height
@@ -619,16 +1402,56 @@ export function colonnade(L, x, y, z, opts = {}) {
     // Base: two plinth courses, the lower one wider.
     n += disc(S, cx, y + 0.11, cz, radius * 1.55, 0.22, kind, baseFacets)
     n += disc(S, cx, y + 0.32, cz, radius * 1.3, 0.2, kind, baseFacets)
-    // Shaft: stacked drums with a slight entasis so it is not one extrusion.
+    // Shaft: the collider stays a stack of faceted drums, because a wall-run
+    // along a colonnade has to behave identically at every column. What gets
+    // DRAWN is a single turned shaft — apophyge, entasis, astragal, echinus —
+    // inscribed inside those drums. `lathe` puts every vertex on the circle of
+    // the profile radius, and the drum's across-flats half-width is the same
+    // number, so the shaft can never leave its collider.
     for (let d = 0; d < drums; d++) {
       const f = (d + 0.5) / drums
       const rr = radius * (1.02 - 0.13 * f * f)
-      n += disc(S, cx, y + 0.42 + height * f, cz, rr, height / drums + 0.02, kind, facets)
+      n += disc(S, cx, y + 0.42 + height * f, cz, rr, height / drums + 0.02, kind, facets,
+        1, { hidden: curves })
+    }
+    if (curves) {
+      const H = height
+      L.mesh(kind, latheGeometry([
+        [radius * 1.00, 0],
+        [radius * 1.00, 0.06],
+        [radius * 0.96, 0.16],          // apophyge — the shaft leaves the base
+        [radius * 1.00, 0.30],
+        [radius * 1.00, H * 0.30],      // entasis: the swell, then the taper
+        [radius * 0.955, H * 0.62],
+        [radius * 0.88, H * 0.92],
+        [radius * 0.845, H * 0.965],
+        [radius * 0.90, H * 0.975],     // astragal — the ring under the neck
+        [radius * 0.845, H * 0.99],
+        [radius * 0.86, H],
+      ], detail >= 2 ? 14 : 9, { capTop: false, capBottom: false }),
+      place(cx, y + 0.42, cz, _q.identity()), { shade: 0.98 + rand() * 0.06 })
+      n += 1
     }
     // Capital: flare out again, with a brass collar under it.
     if (detail >= 1) n += disc(D, cx, shaftTop - 0.18, cz, radius * 1.06, 0.16, 'brass', baseFacets)
-    n += disc(S, cx, shaftTop + 0.14, cz, radius * 1.35, 0.28, kind, baseFacets)
+    n += disc(S, cx, shaftTop + 0.14, cz, radius * 1.35, 0.28, kind, baseFacets,
+      1, { hidden: curves })
+    if (curves) {
+      // The echinus: a real turned cushion between the neck and the abacus,
+      // which is the one part of a column the eye uses to date the order.
+      L.mesh(kind, latheGeometry([
+        [radius * 0.86, 0], [radius * 1.02, 0.10], [radius * 1.22, 0.20],
+        [radius * 1.33, 0.26], [radius * 1.35, 0.28],
+      ], detail >= 2 ? 14 : 9, { capBottom: false }),
+      place(cx, shaftTop, cz, _q.identity()))
+      n += 1
+    }
     n += disc(S, cx, shaftTop + 0.42, cz, radius * 1.62, 0.28, capKind, baseFacets)
+    // The abacus's own bevel course — 4 cm proud, so the square block on top
+    // of the capital turns its bottom arris over instead of ending flat.
+    if (detail >= 1) {
+      n += disc(D, cx, shaftTop + 0.29, cz, radius * 1.5, 0.06, capKind, baseFacets)
+    }
   }
 
   const len = (count - 1) * spacing
@@ -638,7 +1461,31 @@ export function colonnade(L, x, y, z, opts = {}) {
     const [esx, esz] = F.sz(len + radius * 4, radius * 3.4)
     n += S(ex, topY + 0.3, ez, esx, 0.6, esz, kind)
     const [fsx, fsz] = F.sz(len + radius * 4.6, radius * 3.9)
-    n += S(ex, topY + 0.78, ez, fsx, 0.36, fsz, capKind)
+    // The cornice. Two stacked slabs is exactly the failure props.js was
+    // written for — "seams whose shadow line is invisible because a slab has
+    // no section". This is a swept cornice: fillet, cavetto, corona. Every
+    // step in that profile is a horizontal shadow line by construction, and
+    // the collider is the same box the slab always was.
+    n += S(ex, topY + 0.78, ez, fsx, 0.36, fsz, capKind, { hidden: curves })
+    if (curves) {
+      const proj = radius * 0.5
+      const halfW = fsz / 2
+      for (const side of [-1, 1]) {
+        // Section stands proud along +X of the path frame, which for a path
+        // running along `axis` with up = +Y is the outward horizontal — so the
+        // path is laid on the far side and the moulding projects back inward
+        // to land inside the slab's own footprint.
+        const [p0x, p0z] = F.at(x, z, -radius * 2.3, side * (halfW - proj))
+        const [p1x, p1z] = F.at(x, z, len + radius * 2.3, side * (halfW - proj))
+        const path = side > 0
+          ? [[p0x, topY + 0.60, p0z], [p1x, topY + 0.60, p1z]]
+          : [[p1x, topY + 0.60, p1z], [p0x, topY + 0.60, p0z]]
+        L.mesh(capKind, extrudeAlong(corniceShape(proj, 0.36, 3), path,
+          { detail: detail >= 2 ? 2 : 1, pathSegments: 2 }),
+        place(0, 0, 0, _q.identity()), { shade: 1.04 })
+        n += 1
+      }
+    }
     topY += 0.96
     if (detail >= 1) {
       // Dentils under the cornice — pure overhead ornament, out of reach.
@@ -648,6 +1495,31 @@ export function colonnade(L, x, y, z, opts = {}) {
         const [dsx, dsz] = F.sz(step * 0.42, radius * 3.6)
         n += D(dx, topY - 1.14, dz, dsx, 0.2, dsz, capKind)
       }
+    }
+  }
+
+  // ---------------------------------------------------------- the planting
+  //
+  // tower.png came back with two colonnades in it and not one plant. Ivy off
+  // the architrave is the reference's own answer, and it is also the cheapest
+  // way to break a 20 m unbroken horizontal edge.
+  if (detail >= 1) {
+    const half = radius * 1.9
+    for (const side of [-1, 1]) {
+      const [dx, dz] = F.at(x, z, -radius * 2, side * half)
+      drape(L, {
+        x: dx, y: shaftTop + 0.56, z: dz,
+        axis, length: len + radius * 4, outward: side,
+      }, { drop: [0.8, 2.2], pitch: 1.15 })
+    }
+    // Moss where each column meets the floor. A column standing on a perfectly
+    // clean line is the single most synthetic read in the frame.
+    for (let i = 0; i < count; i++) {
+      const [cx, cz] = F.at(x, z, i * spacing, 0)
+      mossJunction(L, {
+        x: cx - radius * 1.5, y, z: cz - radius * 1.5,
+        axis: 'x', length: radius * 3, width: radius * 3,
+      }, { density: 3.2 })
     }
   }
 
@@ -677,6 +1549,7 @@ export function balustrade(L, x, y, z, opts = {}) {
   } = opts
   const F = frame(axis)
   const { S, D } = emit(L, opts)
+  const rand = pick(opts)
   let n = 0
 
   // Plinth, in two courses so the edge is chamfered rather than a slab.
@@ -685,6 +1558,12 @@ export function balustrade(L, x, y, z, opts = {}) {
   n += S(px, y + plinthHeight * 0.35, pz, sx, plinthHeight * 0.7, sz, kind)
   ;[sx, sz] = F.sz(length, thickness * 0.86)
   n += S(px, y + plinthHeight * 0.85, pz, sx, plinthHeight * 0.3, sz, kind)
+  // The bevel course between them: 4 cm proud of the upper course, so the
+  // step from plinth to die is a shadow line rather than an invisible seam.
+  if (detail >= 1) {
+    ;[sx, sz] = F.sz(length, thickness * 0.94)
+    n += S(px, y + plinthHeight * 0.70, pz, sx, 0.05, sz, kind, { shade: 1.14 })
+  }
 
   const plinthTopY = y + plinthHeight
   const railY = y + height
@@ -749,6 +1628,21 @@ export function balustrade(L, x, y, z, opts = {}) {
     }
   }
 
+  // ---------------------------------------------------------- the planting
+  //
+  // A balustrade edges a terrace, so it is exactly where the reference hangs
+  // ivy: over the coping and down the outboard face, with moss in the angle
+  // where the plinth meets the paving.
+  if (detail >= 1) {
+    const [dx, dz] = F.at(x, z, 0, thickness * 0.52)
+    drape(L, { x: dx, y: railY - 0.05, z: dz, axis, length, outward: 1 },
+      { drop: [0.5, 1.3], pitch: 1.5, proud: 0.06 })
+    for (const side of [-1, 1]) {
+      const [mx, mz] = F.at(x, z, 0, side * (thickness * 0.5 + 0.16))
+      mossJunction(L, { x: mx, y, z: mz, axis, length, width: 0.3 }, { density: 4.5 })
+    }
+  }
+
   return { topY: railY + 0.12, plinthTopY, length, boxes: n }
 }
 
@@ -803,20 +1697,55 @@ export function gearWheel(L, x, y, z, opts = {}) {
     }
   }
 
-  // THE WHEEL. One extrusion: toothed rim, chamfered crowns, spoke windows.
+  // THE WHEEL. `props.gear()` cuts the teeth on a real involute flank taken
+  // off a 20-degree pressure angle, so each tooth is wide at the root, narrow
+  // at the tip and CURVED between — the thing a trapezoid stuck on a disc can
+  // never be. Both faces are chamfered along the outline's own miter normals,
+  // which puts a highlight down the crown of every tooth.
+  //
+  // The plate is bored out and the spokes are separate bars, rather than
+  // windows cut in one extrusion, because that is how a cast wheel is actually
+  // made: the spokes stand proud of the web and catch the light on their own
+  // edges. Merged into one geometry, so it is still a single batch append.
   if (L.mesh) {
-    L.mesh(kind, gearGeometry(radius, thickness, teeth, detail >= 1 ? spokes : 0),
-      place(x, y, z, planeQuat(plane, (radius * 7.3) % 1)), { shade: 1.0 })
-    n += 1
-    // Hub boss, turned: a stepped cylinder standing proud of the web on both
-    // sides. Without it the wheel reads as a flat cut-out.
+    const parts = []
+    const bore = radius * (detail >= 1 && spokes >= 3 ? 0.62 : 0.30)
+    parts.push(gearPlate(teeth, {
+      tipR: radius,
+      rootR: radius * 0.845,
+      thickness,
+      bevel: Math.min(0.035, thickness * 0.24),
+      bore,
+      detail,
+    }))
+    if (detail >= 1 && spokes >= 3) {
+      const sl = bore - hubR * 0.7
+      const sw = Math.max(0.1, radius * 0.11)
+      for (let i = 0; i < spokes; i++) {
+        const a = (2 * Math.PI * i) / spokes
+        const g = chamferBox(sl + radius * 0.1, sw, thickness * 0.72, 0.022)
+        g.applyMatrix4(new THREE.Matrix4().compose(
+          _pos.set(0, 0, 0), _q.setFromEuler(_e.set(0, 0, a)), _one))
+        g.applyMatrix4(new THREE.Matrix4().makeTranslation(
+          Math.cos(a) * (hubR * 0.7 + sl / 2), Math.sin(a) * (hubR * 0.7 + sl / 2), 0))
+        parts.push(g)
+      }
+    }
+    // Hub boss: a stepped turning standing proud of the web on both sides.
+    // Without it the wheel reads as a flat cut-out with a hole in it.
     const hd = thickness * 1.9
-    L.mesh(kind, latheGeometry([
+    const hub = latheGeometry([
       [0, -hd / 2], [hubR * 1.15, -hd / 2], [hubR * 1.15, -hd * 0.18],
       [hubR * 0.82, -hd * 0.1], [hubR * 0.82, hd * 0.1],
       [hubR * 1.15, hd * 0.18], [hubR * 1.15, hd / 2], [0, hd / 2],
-    ], detail >= 2 ? 16 : 10), place(x, y, z, planeQuat(plane, 0)
-      .multiply(new THREE.Quaternion().setFromEuler(_e.set(Math.PI / 2, 0, 0)))))
+    ], detail >= 2 ? 16 : 10)
+    // The lathe revolves about +Y and the gear lies in XY, so the hub turns a
+    // quarter about X to put its axis down +Z with the rest of the wheel.
+    hub.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2))
+    parts.push(hub)
+
+    L.mesh(kind, mergeGeometries(parts, { dispose: true }),
+      place(x, y, z, planeQuat(plane, (radius * 7.3) % 1)), { shade: 1.0 })
     n += 1
   }
 
@@ -952,10 +1881,38 @@ export function observatoryDome(L, x, y, z, opts = {}) {
         'moss')
     }
   }
-  // Brass string course under the cornice.
-  n += disc(D, x, roofY - 0.35, z, radius * 1.03, 0.22, 'brass', facets)
-  // Cornice: the dome's landing shelf.
+  // Brass string course under the cornice — a swept ring moulding rather than
+  // a flat band, so it has a top and a bottom edge that each catch light.
+  n += disc(D, x, roofY - 0.35, z, radius * 1.03, 0.22, 'brass', facets, 1,
+    { hidden: !!L.mesh })
+  if (L.mesh) {
+    L.mesh('brass', latheGeometry([
+      [radius * 0.99, -0.11], [radius * 1.03, -0.07],
+      [radius * 1.03, 0.05], [radius * 0.99, 0.11],
+    ], detail >= 2 ? 20 : 12, { capTop: false, capBottom: false }),
+    place(x, roofY - 0.35, z, _q.identity()))
+    n += 1
+  }
+  // Cornice: the dome's landing shelf, and a real swept section on it.
   n += disc(S, x, roofY + 0.22, z, radius * 1.16, 0.44, 'terracotta', facets)
+  if (L.mesh && detail >= 1) {
+    const segs = detail >= 2 ? 20 : 12
+    const proj = 0.24
+    const path = []
+    for (let i = 0; i < segs; i++) {
+      const th = (2 * Math.PI * i) / segs
+      const rr = radius * 1.16 - proj - 0.02
+      // Swept INSIDE the shelf's own slab (roofY..roofY+0.44), not on top of
+      // it: the shelf is a landing the player lands on, and a 22 cm moulding
+      // standing proud of a walkable surface with no collider under it is the
+      // forbidden bug in miniature.
+      path.push([x + Math.cos(th) * rr, roofY + 0.22, z + Math.sin(th) * rr])
+    }
+    L.mesh('terracotta', extrudeAlong(corniceShape(proj, 0.22, 3), path,
+      { closed: true, detail: detail >= 2 ? 2 : 1 }),
+    place(0, 0, 0, _q.identity()), { shade: 1.05 })
+    n += 1
+  }
 
   // Dome: stepped stone courses carry the COLLISION, because a dome the player
   // runs up has to behave the same way every time. The visible dome is a real
@@ -994,18 +1951,47 @@ export function observatoryDome(L, x, y, z, opts = {}) {
 
   if (ribs) {
     // Meridian ribs over the dome: overhead ornament, hugging solid courses.
+    //
+    // A rib is a bent brass bar, and a bar bent over a dome has no flats in it
+    // anywhere, so this is `sweepTube` along the dome's own meridian rather
+    // than the staircase of little boxes it used to be. The path is sampled
+    // from the same profile the shell is revolved from, offset 6 cm out, so a
+    // rib sits ON the dome instead of cutting through it.
     const count = detail >= 2 ? 8 : 5
     for (let i = 0; i < count; i++) {
       const a = (2 * Math.PI * i) / count
       const c = Math.cos(a), s = Math.sin(a)
-      n += strut((cx, cy, cz, bx, by, bz, k) => D(cx, cy, cz, bx, by, bz, k),
-        x + c * domeR, roofY + 0.6, z + s * domeR,
-        x + c * domeR * 0.12, apex + 0.1, z + s * domeR * 0.12,
-        0.2, detail >= 2 ? 5 : 3, 'brass')
+      if (L.mesh) {
+        const pts = []
+        const SEG = detail >= 2 ? 9 : 6
+        for (let k = 0; k <= SEG; k++) {
+          const t = (k / SEG) * (Math.PI / 2)
+          const rr = domeR * Math.cos(t * 0.94) * 0.93 + 0.06
+          pts.push([x + c * rr, roofY + 0.44 + domeR * 0.86 * Math.sin(t) + 0.05, z + s * rr])
+        }
+        L.mesh('brass', sweepTube(pts, 0.075, {
+          detail: detail >= 2 ? 1 : 0, capStart: false, capEnd: false,
+        }), place(0, 0, 0, _q.identity()), { shade: 1.06 })
+        n += 1
+      } else {
+        n += strut((cx, cy, cz, bx, by, bz, k) => D(cx, cy, cz, bx, by, bz, k),
+          x + c * domeR, roofY + 0.6, z + s * domeR,
+          x + c * domeR * 0.12, apex + 0.1, z + s * domeR * 0.12,
+          0.2, detail >= 2 ? 5 : 3, 'brass')
+      }
     }
-    n += ringOfBoxes((cx, cy, cz, bx, by, bz, k) => D(cx, cy, cz, bx, by, bz, k),
-      x, roofY + 0.44 + domeR * 0.5, z, domeR * 0.78, 0.16,
-      detail >= 2 ? 16 : 10, 'xz', 'brass')
+    // The latitude hoop that ties the ribs together.
+    if (L.mesh) {
+      const hr = domeR * 0.78
+      L.mesh('brass', new THREE.TorusGeometry(hr, 0.07, detail >= 2 ? 6 : 4,
+        detail >= 2 ? 20 : 12),
+      place(x, roofY + 0.44 + domeR * 0.5, z, planeQuat('xz')))
+      n += 1
+    } else {
+      n += ringOfBoxes((cx, cy, cz, bx, by, bz, k) => D(cx, cy, cz, bx, by, bz, k),
+        x, roofY + 0.44 + domeR * 0.5, z, domeR * 0.78, 0.16,
+        detail >= 2 ? 16 : 10, 'xz', 'brass')
+    }
   }
 
   // Finial.
@@ -1027,6 +2013,44 @@ export function observatoryDome(L, x, y, z, opts = {}) {
     n += D(x + c * (domeR * 0.2 + len), y0 + len * 0.72, z + s * (domeR * 0.2 + len),
       0.95, 0.95, 0.95, 'brass')
     topY = Math.max(topY, y0 + len * 0.72 + 0.5)
+  }
+
+  // ---------------------------------------------------------- the planting
+  //
+  // The observatory is the building the whole last section is an approach to,
+  // and it was 100% bare stone. Ivy off the cornice breaks a 12 m unbroken
+  // horizontal edge, and moss round the plinth stops the drum reading as a
+  // cylinder set into the ground with a cookie cutter.
+  if (detail >= 1) {
+    const segs = 6
+    for (let i = 0; i < segs; i++) {
+      const a = (2 * Math.PI * i) / segs
+      const c = Math.cos(a), s = Math.sin(a)
+      const rr = radius * 1.14
+      // A chord of the cornice ring, laid along whichever world axis it is
+      // more nearly parallel to — `hangFromEdge` runs on one axis, and picking
+      // the closer one keeps the drape tangential rather than radial.
+      const alongX = Math.abs(c) < Math.abs(s)
+      const runLen = radius * 0.9
+      drape(L, {
+        x: x + c * rr - (alongX ? runLen / 2 : 0),
+        y: roofY + 0.2,
+        z: z + s * rr - (alongX ? 0 : runLen / 2),
+        axis: alongX ? 'x' : 'z',
+        length: runLen,
+        outward: alongX ? Math.sign(s) || 1 : Math.sign(c) || 1,
+      }, { drop: [1.0, 2.4], pitch: 0.7 })
+    }
+    // Moss out of the plinth/ground junction, all the way round.
+    for (const [ox, oz, ax2] of [[0, -1, 'x'], [0, 1, 'x'], [-1, 0, 'z'], [1, 0, 'z']]) {
+      const w = radius * 1.9
+      mossJunction(L, {
+        x: x + ox * radius * 1.12 - (ax2 === 'x' ? w / 2 : 0),
+        y: y + 0.5,
+        z: z + oz * radius * 1.12 - (ax2 === 'z' ? w / 2 : 0),
+        axis: ax2, length: w, width: 0.5,
+      }, { density: 4.0 })
+    }
   }
 
   return { roofY: roofY + 0.44, topY, radius, boxes: n }
@@ -1052,8 +2076,30 @@ export function cypress(L, x, y, z, opts = {}) {
   let n = 0
 
   if (trunk) {
-    L.decor(x, y + height * 0.06, z, height * 0.055, height * 0.14, height * 0.055, 'terracotta')
-    n += 1
+    if (L.mesh) {
+      // A real trunk: a swept tube that leans, tapers and is not vertical.
+      // A box for a trunk is the one thing that gives a stand of trees away
+      // instantly, because every trunk in the stand is then parallel.
+      const lean = 0.04 + rand() * 0.06
+      const dir = rand() * 6.283
+      const pts = []
+      const H = height * 0.30
+      for (let k = 0; k <= 4; k++) {
+        const t = k / 4
+        pts.push([
+          x + Math.cos(dir) * lean * height * t * t,
+          y + H * t,
+          z + Math.sin(dir) * lean * height * t * t,
+        ])
+      }
+      L.mesh('terracotta', sweepTube(pts, height * 0.035, {
+        detail: detail >= 2 ? 1 : 0, taper: 0.62, capStart: false, capEnd: false,
+      }), place(0, 0, 0, _q.identity()), { shade: 0.86 })
+      n += 1
+    } else {
+      L.decor(x, y + height * 0.06, z, height * 0.055, height * 0.14, height * 0.055, 'terracotta')
+      n += 1
+    }
   }
   const base = y + height * (trunk ? 0.08 : 0)
   const span = height - (base - y)
@@ -1088,6 +2134,26 @@ export function cypress(L, x, y, z, opts = {}) {
     n += 1
   }
 
+  // A skirt of real leaf cards round the base. A lathed cone reads as a
+  // cypress in silhouette and as a cone up close; the cards are what put a
+  // broken, translucent edge on it where the player can see one.
+  if (detail >= 2) {
+    plant(L, x, z, (field) => {
+      const r = height * 0.13
+      let placed = 0
+      const tufts = 7 + ((rand() * 5) | 0)
+      for (let i = 0; i < tufts; i++) {
+        const a = rand() * 6.283
+        const d = r * (0.4 + rand() * 0.8)
+        field.add(rand() > 0.35 ? 'leaf' : 'fern',
+          x + Math.cos(a) * d, y, z + Math.sin(a) * d,
+          { height: 0.26 + rand() * 0.26 })
+        placed++
+      }
+      return placed
+    })
+  }
+
   return { topY: y + height, height, boxes: n }
 }
 
@@ -1119,18 +2185,52 @@ export function vineCurtain(L, x, y, z, opts = {}) {
   L.decor(mx, y - 0.16, mz, msx, 0.32, msz, kind)
   n += 1
 
-  for (let a = pitch * 0.5; a < length; a += pitch) {
-    const len = drop * (0.28 + rand() * 0.72)
-    const w = 0.16 + rand() * 0.2
-    const [sx, sz] = F.at(x, z, a, (rand() - 0.5) * 0.3)
-    L.decor(sx, y - 0.3 - len / 2, sz, w, len, w * 0.8, kind)
-    n += 1
-    // A leaf clump partway down, on the longer strands only.
-    if (detail >= 2 && len > drop * 0.6) {
-      L.decor(sx, y - 0.3 - len * 0.55, sz, w * 2.4, len * 0.2, w * 2.0, kind)
-      n += 1
+  // THE MASS is instanced cards now, not boxes: an ivy strand drawn as a
+  // 20 cm prism is a green stick, and this prefab is placed on every island
+  // rim in the world, so it was a green stick sixty times over. The cards
+  // carry an alpha-tested silhouette and a wind term for a sixth of the cost.
+  const placed = drape(L, { x, y, z, axis, length, outward: 1 }, {
+    drop: [drop * 0.3, drop],
+    pitch,
+    jitter: 0.24,
+  })
+
+  if (placed > 0) {
+    // Two hero strands as real swept tubes, for the ones the player passes
+    // within arm's reach of.
+    if (L.mesh && detail >= 2) {
+      for (let i = 0; i < 2; i++) {
+        const a = length * (0.25 + rand() * 0.5)
+        const [sx, sz] = F.at(x, z, a, 0)
+        const len = drop * (0.5 + rand() * 0.5)
+        const rope = vineRope(sx, y - 0.1, sz, {
+          drop: len, reach: 0.2 + rand() * 0.3,
+          dir: axis === 'x' ? [0, 1] : [1, 0],
+          seed: ((rand() * 0xffffff) | 0) || 1,
+        })
+        L.mesh(kind, sweepTube(rope, 0.045, {
+          detail: 1, taper: 0.35, capStart: false, capEnd: false,
+        }), place(0, 0, 0, _q.identity()), { shade: 0.92 })
+        n += 1
+        lowest = Math.min(lowest, y - 0.1 - len)
+      }
     }
-    lowest = Math.min(lowest, y - 0.3 - len)
+    lowest = Math.min(lowest, y - drop)
+  } else {
+    // No foliage channel (node, or a field that failed to build): fall back to
+    // the box strands rather than leaving every rim in the world bare.
+    for (let a = pitch * 0.5; a < length; a += pitch) {
+      const len = drop * (0.28 + rand() * 0.72)
+      const w = 0.16 + rand() * 0.2
+      const [sx, sz] = F.at(x, z, a, (rand() - 0.5) * 0.3)
+      L.decor(sx, y - 0.3 - len / 2, sz, w, len, w * 0.8, kind)
+      n += 1
+      if (detail >= 2 && len > drop * 0.6) {
+        L.decor(sx, y - 0.3 - len * 0.55, sz, w * 2.4, len * 0.2, w * 2.0, kind)
+        n += 1
+      }
+      lowest = Math.min(lowest, y - 0.3 - len)
+    }
   }
 
   return { bottomY: lowest, length, boxes: n }
@@ -1160,6 +2260,19 @@ export function waterfall(L, x, y, z, opts = {}) {
   // Lip: the water gathers and rounds over the edge.
   L.decor(x, y - 0.12, z, width * 1.25, 0.28, width * 0.9, kind)
   n += 1
+
+  // The wet margin. Ferns and moss at the head of a fall is the single most
+  // reliable "this place has water in it" cue the reference uses, and it costs
+  // a dozen cards. Everything sits AT the lip height, so nothing here can be
+  // mistaken for a step down into the fall.
+  if (detail >= 1) {
+    plant(L, x, z, (field) => scatterOnBox(field, {
+      cx: x, cy: y, cz: z, sx: width * 3.2, sy: 0, sz: width * 2.6,
+    }, {
+      mix: [['fern', 4], ['grass', 3], ['moss', 2], ['leaf', 1]],
+      density: 2.6, clump: 0.4, maxHeight: 0.3, inset: 0.15, y: y + 0.02,
+    }))
+  }
 
   for (let i = 0; i < segs; i++) {
     const f = (i + 0.5) / segs
@@ -1237,6 +2350,15 @@ export function stairFlight(L, x, y, z, opts = {}) {
       const [nx, nz] = F.at(x, z, run * i + run * 0.08, 0)
       const [nsx, nsz] = F.sz(run * 0.16, width * 0.99)
       n += S(nx, h - 0.06, nz, nsx, 0.12, nsz, kind, { shade: 1.32 })
+      // THE BEVEL COURSE under the nosing (roadmap: "step, cornice and string
+      // course helpers get a 3-5 cm bevel course inset from the mass below, so
+      // every horizontal edge self-shadows"). 4 cm tall, set BACK 5 cm from
+      // the nosing above it, so the nosing overhangs it and lays a hard line
+      // across the riser at any sun angle — which is what stops the ascent
+      // being a guess. Darkened to make the pair read as light-over-dark.
+      const [rx, rz] = F.at(x, z, run * i + run * 0.13, 0)
+      const [rsx, rsz] = F.sz(run * 0.10, width * 0.985)
+      n += S(rx, h - 0.16, rz, rsx, 0.04, rsz, kind, { shade: 0.74 })
     }
     // Moss crept over the shaded bottom steps.
     if (moss && i < 2) {
@@ -1265,6 +2387,30 @@ export function stairFlight(L, x, y, z, opts = {}) {
         n += S(px, h + 0.55, pz, 0.9, 1.5, 0.9, kind)
         n += D(px, h + 1.45, pz, 0.42, 0.42, 0.42, 'brass')
       }
+    }
+  }
+
+  // ---------------------------------------------------------- the planting
+  //
+  // Moss in the angle where each tread meets its cheek wall — the damp corner
+  // of a real stair, and the junction the review measured as "perfectly clean
+  // hard lines". Kept to the outer 60 cm of each side so the running line down
+  // the middle of the flight stays clear paving.
+  if (detail >= 1 && cheeks) {
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < steps; i += 1) {
+        const h = y + rise * (i + 1)
+        const [gx, gz] = F.at(x, z, run * i + run * 0.12, side * (width / 2 - 0.3))
+        mossJunction(L, {
+          x: gx, y: h + 0.02, z: gz, axis, length: run * 0.8, width: 0.5,
+        }, { density: 3.0, maxHeight: 0.16 })
+      }
+    }
+    // Grass and ferns tumbling over the outside of the cheek walls.
+    for (const side of [-1, 1]) {
+      const [dx, dz] = F.at(x, z, 0, side * (width / 2 + 0.7))
+      drape(L, { x: dx, y: y + 0.9, z: dz, axis, length: run * steps, outward: side },
+        { drop: [0.4, 1.0], pitch: 1.6 })
     }
   }
 
@@ -1367,8 +2513,16 @@ export const PREFABS = {
 export function trackedKit() {
   const placed = new Set()
   const api = {}
+  let level = null
   for (const [name, fn] of Object.entries(PREFABS)) {
-    api[name] = (...args) => { placed.add(name); return fn(...args) }
+    api[name] = (...args) => {
+      placed.add(name)
+      // Every prefab takes the Level first. Remembering it is what lets
+      // `assertAllPlaced` flush the vegetation without level.js having to know
+      // the foliage layer exists — see THE FOLIAGE CHANNEL in the header.
+      if (args.length && args[0] && typeof args[0] === 'object') level = args[0]
+      return fn(...args)
+    }
   }
   api.placed = placed
   api.assertAllPlaced = () => {
@@ -1376,7 +2530,14 @@ export function trackedKit() {
     if (missing.length) {
       throw new Error(`kit prefabs declared but never placed in the course: ${missing.join(', ')}`)
     }
+    // THE FLUSH. `buildCourse()` calls this as its last act and `Level.build()`
+    // runs after it, so a group added here is in the scene. Fields have to be
+    // built after the last `add()` — an InstancedMesh is sized once — and this
+    // is the only end-of-build hook the kit is given.
+    if (level) foliageFinish(level)
+    return api.foliage()
   }
+  api.foliage = () => kitFoliageStats(level)
   return api
 }
 
@@ -1430,6 +2591,11 @@ export function kitSelfTest(overrides = {}) {
       boxes: rec.boxes.length,
       solid: rec.solid,
       decor: rec.decor,
+      // The generated-curve channel, reported rather than implied. A prefab
+      // that claims to be built on real curves and shows `meshes: 0` here is
+      // lying, and this is the number that catches it from a terminal.
+      meshes: rec.meshes || 0,
+      meshTris: Math.round(rec.meshTris || 0),
       min: r3(min),
       max: r3(max),
       size: r3(max.map((q, k) => q - min[k])),

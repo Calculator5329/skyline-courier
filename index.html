@@ -5,10 +5,22 @@
 <style>
   :root {
     --cream: #f4ead8;
+    --sand: #e8d3ad;
     --brass: #d9a441;
+    --brass-hi: #f7e2ab;
+    --brass-lo: #8a6224;
+    --brass-deep: #5d411a;
+    --verdigris: #6f9a8d;
     --moss: #6f8f5f;
     --terracotta: #c8724c;
     --ink: #2b2622;
+
+    /* One polished-metal ramp, reused everywhere so every instrument reads as
+       the same alloy under the same low sun rather than as separate widgets. */
+    --plate: linear-gradient(158deg, var(--brass-hi) 0%, var(--brass) 30%,
+                             var(--brass-lo) 58%, var(--brass) 78%, var(--brass-hi) 100%);
+    --scrim: radial-gradient(ellipse 130% 130% at 50% 50%, rgba(18, 14, 11, .52), rgba(18, 14, 11, 0) 72%);
+    --hair: rgba(217, 164, 65, .34);
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -31,6 +43,43 @@
     user-select: none;
   }
 
+  /* Paint-only defs holder: must not participate in layout. */
+  #hud-defs { position: absolute; width: 0; height: 0; }
+
+  /* Shared instrument vocabulary ---------------------------------------- */
+
+  /* Engraved caption. Small, wide, dim — a label stamped into the plate, not
+     a piece of UI chrome competing with the number it describes. */
+  .cap {
+    font-size: 9px;
+    letter-spacing: .3em;
+    text-transform: uppercase;
+    color: var(--brass);
+    opacity: .58;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, .9);
+  }
+
+  /* Every readout sits over a live sky that can be anything from pale gold to
+     white cloud, so legibility comes from a local scrim plus a hard shadow,
+     never from assuming a dark background. */
+  .inst {
+    position: absolute;
+    line-height: 1.3;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .85), 0 2px 12px rgba(0, 0, 0, .5);
+  }
+  .inst::before {
+    content: "";
+    position: absolute;
+    inset: -18px -26px;
+    background: var(--scrim);
+    z-index: -1;
+  }
+
+  .hair {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--hair) 12%, var(--hair) 88%, transparent);
+  }
+
   /* --- crosshair ------------------------------------------------------ */
   #reticle {
     position: absolute;
@@ -44,109 +93,394 @@
   }
   #reticle.hot { transform: scale(1.9); background: var(--brass); }
 
-  /* --- top-left run state --------------------------------------------- */
-  #run {
-    position: absolute;
-    top: 22px; left: 26px;
-    line-height: 1.35;
-  }
+  /* --- top-left: the run register -------------------------------------- */
+  #run { top: 22px; left: 26px; }
   #timer {
-    font-size: 38px;
+    font-size: 40px;
     font-weight: 600;
-    letter-spacing: .02em;
+    letter-spacing: .01em;
     font-variant-numeric: tabular-nums;
-    text-shadow: 0 2px 10px rgba(0, 0, 0, .55);
+    /* Brass-plated numerals. The clip keeps the metal inside the glyphs so the
+       timer reads as engraved rather than as coloured text. */
+    background: var(--plate);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .8));
+    line-height: 1.05;
+  }
+  #run .hair { width: 176px; margin: 5px 0 6px; }
+
+  /* Checkpoint pips: a punched register strip. Counting three filled holes in
+     peripheral vision is faster than reading "3 / 7". */
+  #cppips { display: flex; gap: 5px; height: 9px; align-items: center; margin-bottom: 5px; }
+  #cppips.empty { display: none; }
+  #cppips b {
+    width: 9px; height: 9px;
+    transform: rotate(45deg);
+    border: 1px solid rgba(217, 164, 65, .5);
+    background: rgba(20, 16, 12, .45);
+    box-shadow: inset 0 0 3px rgba(0, 0, 0, .7);
+    transition: background .2s, box-shadow .2s, border-color .2s;
+  }
+  #cppips b.hit {
+    background: var(--plate);
+    border-color: var(--brass-hi);
+    box-shadow: 0 0 8px rgba(217, 164, 65, .75);
   }
   #splits {
-    font-size: 12px;
-    opacity: .62;
-    letter-spacing: .09em;
+    font-size: 11px;
+    opacity: .6;
+    letter-spacing: .12em;
     text-transform: uppercase;
-    margin-top: 2px;
     font-variant-numeric: tabular-nums;
+  }
+  #hud.finished #splits { opacity: .95; color: var(--brass); }
+
+  /* --- top-right: bearing rose ----------------------------------------- */
+  /* The precise instrument. The edge chevron is what you catch at speed; this
+     is what you read when you want the actual number. */
+  #compass {
+    top: 20px; right: 26px;
+    width: 116px;
+    text-align: center;
+    opacity: 0;
+    transition: opacity .35s;
+  }
+  #compass.live { opacity: 1; }
+  #crose { position: relative; width: 96px; height: 96px; margin: 0 auto; }
+  #crose svg { position: absolute; inset: 0; width: 96px; height: 96px; overflow: visible; }
+  #cneedle { transform-origin: 50% 50%; }
+  #cread {
+    margin-top: 4px;
+    font-size: 17px;
+    font-variant-numeric: tabular-nums;
+    color: var(--sand);
+    letter-spacing: .02em;
+  }
+  #cread small { font-size: 10px; opacity: .55; letter-spacing: .14em; margin-left: 3px; }
+  #cvert {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--brass);
+    letter-spacing: .1em;
+    min-height: 14px;
+    opacity: .85;
   }
 
-  /* --- bottom-left speed ---------------------------------------------- */
-  #speedwrap {
-    position: absolute;
-    left: 26px; bottom: 30px;
-    width: 190px;
+  /* --- right edge: altimeter tape -------------------------------------- */
+  /* A moving tape read against a fixed index, like a real altimeter drum. The
+     world now spans y -20..+90, so "how high am I, and is the next drop
+     survivable" is a question the HUD has to answer without a glance away. */
+  #alt {
+    top: 50%; right: 24px;
+    transform: translateY(-50%);
+    width: 78px;
+    text-align: right;
+    opacity: 0;
+    transition: opacity .35s;
   }
-  #speedval {
-    font-size: 26px;
+  #alt.live { opacity: 1; }
+  #altwin {
+    position: relative;
+    height: 190px;
+    overflow: hidden;
+    /* Fade the tape out at both ends so it reads as a drum turning behind a
+       window rather than a list that got cut off. */
+    -webkit-mask-image: linear-gradient(180deg, transparent, #000 22%, #000 78%, transparent);
+    mask-image: linear-gradient(180deg, transparent, #000 22%, #000 78%, transparent);
+  }
+  #alttape { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+  #alttape .t {
+    position: absolute;
+    right: 0;
+    height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    font-size: 10px;
     font-variant-numeric: tabular-nums;
-    text-shadow: 0 2px 10px rgba(0, 0, 0, .55);
+    color: rgba(244, 234, 216, .72);
+    letter-spacing: .06em;
+  }
+  #alttape .t::after {
+    content: "";
+    width: 9px; height: 1px;
+    background: rgba(244, 234, 216, .45);
+  }
+  #alttape .t.major { color: var(--sand); opacity: 1; }
+  #alttape .t.major::after { width: 17px; height: 1px; background: var(--brass); }
+  #alttape .t.minor { opacity: .42; font-size: 0; }
+  #alttape .t.datum::after { background: var(--verdigris); width: 21px; height: 2px; }
+  /* Where the next objective sits on the tape — the vertical half of wayfinding. */
+  #altmark {
+    position: absolute;
+    right: 0;
+    height: 0;
+    z-index: 2;
+    display: none;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  #altmark.on { display: flex; }
+  #altmark::after {
+    content: "";
+    width: 0; height: 0;
+    border: 5px solid transparent;
+    border-right-color: var(--brass-hi);
+    filter: drop-shadow(0 0 4px rgba(217, 164, 65, .9));
+  }
+  /* The fixed index the tape is read against. */
+  #altidx {
+    position: absolute;
+    right: 0; top: 50%;
+    width: 34px; height: 0;
+    margin-top: -1px;
+    border-top: 2px solid var(--brass-hi);
+    box-shadow: 0 0 7px rgba(217, 164, 65, .7);
+  }
+  #altidx::before {
+    content: "";
+    position: absolute;
+    left: -7px; top: -5px;
+    border: 5px solid transparent;
+    border-left-color: var(--brass-hi);
+  }
+  #altval {
+    margin-top: 7px;
+    font-size: 20px;
+    font-variant-numeric: tabular-nums;
+    color: var(--sand);
+  }
+  #altval small { font-size: 10px; opacity: .55; letter-spacing: .14em; margin-left: 3px; }
+
+  /* --- next-objective chevron (rides the screen edge) ------------------- */
+  /* Deliberately never enters the middle of the frame: the centre is where the
+     route is read (docs/taste.md — "read the route without a tutorial"). This
+     orbits the periphery like a bearing pointer on a bezel, so it is caught
+     without ever being looked at. */
+  #nav {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 0; height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    opacity: 0;
+    transition: opacity .3s;
+    will-change: transform;
+  }
+  #nav.live { opacity: 1; }
+  #navchev {
+    width: 46px; height: 46px;
+    /* #nav is a zero-size point placed on the perimeter; pull the chevron up by
+       half its height so the glyph is centred on that point rather than hanging
+       below it. */
+    margin-top: -23px;
+    transform-origin: 50% 50%;
+    will-change: transform;
+  }
+  #navchev svg { display: block; width: 46px; height: 46px; overflow: visible; }
+  #navpulse { animation: navbreath 1.9s ease-in-out infinite; transform-origin: 23px 23px; }
+  @keyframes navbreath {
+    0%, 100% { transform: scale(1); opacity: .92; }
+    50%      { transform: scale(1.13); opacity: 1; }
+  }
+  #navdist {
+    position: absolute;
+    left: 50%;
+    top: 27px;
+    transform: translateX(-50%);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .08em;
+    color: var(--sand);
+    white-space: nowrap;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .95), 0 0 10px rgba(0, 0, 0, .8);
+  }
+
+  /* --- bottom-left: the drive gauge ------------------------------------ */
+  #speedwrap { left: 26px; bottom: 28px; width: 208px; }
+  #verb {
+    font-size: 11px;
+    letter-spacing: .34em;
+    text-transform: uppercase;
+    color: var(--brass);
+    opacity: 0;
+    height: 15px;
+    transition: opacity .18s;
+    text-indent: .34em;
+  }
+  #verb.on { opacity: .95; }
+  #speedval {
+    font-size: 30px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    background: var(--plate);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .8));
   }
   #speedval small {
-    font-size: 11px;
-    opacity: .55;
-    letter-spacing: .14em;
-    margin-left: 4px;
+    font-size: 10px;
+    letter-spacing: .16em;
+    margin-left: 5px;
+    -webkit-text-fill-color: rgba(232, 211, 173, .5);
+    color: rgba(232, 211, 173, .5);
   }
+  /* An engraved channel with a machined scale, not a progress bar. */
   #speedbar {
-    height: 3px;
-    margin-top: 7px;
-    background: rgba(244, 234, 216, .16);
-    border-radius: 2px;
+    position: relative;
+    height: 7px;
+    margin-top: 6px;
+    background: rgba(14, 11, 8, .55);
+    border-radius: 1px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, .85), 0 1px 0 rgba(247, 226, 171, .12);
     overflow: hidden;
   }
   #speedfill {
-    height: 100%;
+    position: absolute;
+    inset: 0 auto 0 0;
     width: 0%;
-    background: var(--brass);
-    border-radius: 2px;
-    transition: width .06s linear, background .2s;
+    background: linear-gradient(180deg, var(--brass-hi), var(--brass) 45%, var(--brass-lo));
+    transition: width .06s linear, box-shadow .2s, filter .2s;
+  }
+  /* Past sprint speed the needle runs hot — the moment you stopped merely
+     running and started carrying momentum. */
+  #speedbar.hot #speedfill {
+    background: linear-gradient(180deg, #fff6e2, var(--brass-hi) 45%, var(--brass));
+    box-shadow: 0 0 10px rgba(247, 226, 171, .8);
+  }
+  #speedticks {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(90deg,
+      rgba(14, 11, 8, .8) 0 1px, transparent 1px 20.8px);
+    opacity: .7;
+  }
+  /* The sprint threshold, stamped on the scale. */
+  #redline {
+    position: absolute;
+    top: -2px; bottom: -2px;
+    left: 68.75%;
+    width: 1px;
+    background: var(--terracotta);
+    opacity: .85;
   }
 
   /* --- ability charges -------------------------------------------------- */
-  #charges { display: flex; gap: 12px; margin-top: 12px; }
+  /* These fixed a real "is this ability broken?" report — an unlit lamp is the
+     difference between spent and broken. They stay, dressed as panel lamps. */
+  #charges { display: flex; gap: 10px; margin-top: 11px; }
   .chip {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 10px;
+    font-size: 9px;
     letter-spacing: .16em;
-    opacity: .28;
-    transition: opacity .14s;
+    padding: 3px 7px 3px 5px;
+    color: rgba(232, 211, 173, .55);
+    border: 1px solid rgba(217, 164, 65, .16);
+    border-radius: 1px;
+    background: rgba(14, 11, 8, .32);
+    opacity: .5;
+    transition: opacity .14s, color .14s, border-color .18s, background .18s;
   }
   .chip i {
     width: 7px; height: 7px;
     border-radius: 50%;
     background: currentColor;
-    box-shadow: 0 0 0 rgba(217, 164, 65, 0);
-    transition: box-shadow .18s, transform .18s;
+    box-shadow: inset 0 0 2px rgba(0, 0, 0, .8);
+    transition: box-shadow .18s, transform .18s, background .18s;
   }
-  .chip.ready { opacity: .95; color: var(--brass); }
-  .chip.ready i { box-shadow: 0 0 9px rgba(217, 164, 65, .9); }
+  .chip.ready {
+    opacity: 1;
+    color: var(--brass-hi);
+    border-color: rgba(217, 164, 65, .5);
+    background: rgba(58, 40, 16, .38);
+  }
+  .chip.ready i {
+    background: radial-gradient(circle at 35% 32%, #fff6e2, var(--brass) 62%, var(--brass-lo));
+    box-shadow: 0 0 9px rgba(247, 226, 171, .95);
+  }
   .chip.fired i { transform: scale(1.9); }
 
-  /* --- state verb ------------------------------------------------------ */
-  #verb {
-    position: absolute;
-    left: 50%; bottom: 84px;
-    transform: translateX(-50%);
-    font-size: 12px;
-    letter-spacing: .3em;
-    text-transform: uppercase;
-    opacity: 0;
-    transition: opacity .18s;
-    color: var(--brass);
-    text-shadow: 0 2px 12px rgba(0, 0, 0, .8);
-  }
-  #verb.on { opacity: .9; }
-
-  /* --- toast ----------------------------------------------------------- */
+  /* --- toasts: splits and the arrival ---------------------------------- */
   #toast {
     position: absolute;
-    left: 50%; top: 26%;
+    left: 50%; top: 24%;
     transform: translateX(-50%);
     text-align: center;
     opacity: 0;
     transition: opacity .3s;
+    white-space: nowrap;
   }
   #toast.on { opacity: 1; }
-  #toast .big { font-size: 24px; letter-spacing: .18em; text-transform: uppercase; }
-  #toast .sub { font-size: 13px; opacity: .7; margin-top: 5px; font-variant-numeric: tabular-nums; }
+  #toast .big {
+    font-size: 22px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    text-indent: .2em;
+    background: var(--plate);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, .85));
+  }
+  #toast .rule2 {
+    width: 60%;
+    height: 1px;
+    margin: 7px auto;
+    background: linear-gradient(90deg, transparent, var(--hair), transparent);
+  }
+  #toast .sub {
+    font-size: 12px;
+    color: var(--sand);
+    opacity: .8;
+    letter-spacing: .08em;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, .9);
+  }
+  #toastseal { display: none; }
+
+  /* A split is a passing note: light, quick, above the route. */
+  #toast.split .big { font-size: 19px; }
+  #toast.split.on { animation: splitin .4s ease-out; }
+  @keyframes splitin {
+    from { opacity: 0; transform: translateX(-50%) translateY(9px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
+
+  /* An arrival is an event: the courier's seal stamped on the delivery. */
+  #toast.hold {
+    top: 30%;
+    padding: 30px 54px 26px;
+    background:
+      radial-gradient(ellipse 110% 120% at 50% 50%, rgba(30, 22, 14, .72), rgba(20, 15, 10, 0) 74%);
+  }
+  #toast.hold::before, #toast.hold::after {
+    content: "";
+    position: absolute;
+    left: 12%; right: 12%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--brass) 20%, var(--brass-hi) 50%, var(--brass) 80%, transparent);
+    opacity: .75;
+  }
+  #toast.hold::before { top: 0; }
+  #toast.hold::after { bottom: 0; }
+  #toast.hold #toastseal { display: block; margin: 0 auto 12px; width: 54px; height: 54px; }
+  #toast.hold .big { font-size: 30px; letter-spacing: .26em; text-indent: .26em; }
+  #toast.hold .sub { font-size: 13px; opacity: .92; }
+  #toast.hold.on { animation: arrive .8s cubic-bezier(.16, .9, .3, 1); }
+  @keyframes arrive {
+    0%   { opacity: 0; transform: translateX(-50%) scale(.93); }
+    60%  { opacity: 1; }
+    100% { opacity: 1; transform: translateX(-50%) scale(1); }
+  }
+  #toast.hold #sealspin { transform-origin: 27px 27px; animation: sealturn 26s linear infinite; }
+  @keyframes sealturn { to { transform: rotate(360deg); } }
 
   /* --- start / pause overlay ------------------------------------------- */
   /* The overlay sits over a live 3D frame, so it stays translucent enough to
@@ -158,7 +492,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 40px;
+    gap: 36px;
     text-align: center;
     padding: 40px 24px 72px;
     /* Warm rather than blue-black, so the menu belongs to the same world as
@@ -197,19 +531,28 @@
     text-indent: .5em;
   }
   .rule {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
     width: min(340px, 60vw);
-    height: 1px;
-    margin-top: 22px;
-    background: linear-gradient(90deg, transparent, rgba(217, 164, 65, .55), transparent);
+    margin-top: 20px;
   }
+  .rule span {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(217, 164, 65, .55));
+  }
+  .rule span:last-child { background: linear-gradient(90deg, rgba(217, 164, 65, .55), transparent); }
+  .rule svg { width: 22px; height: 22px; opacity: .8; }
 
   #keys {
     display: grid;
     grid-template-columns: max-content 1fr;
-    gap: 11px 26px;
+    gap: 10px 26px;
     font-size: 13px;
     text-align: left;
-    max-width: 460px;
+    max-width: 500px;
   }
   #keys b {
     color: var(--brass);
@@ -218,6 +561,18 @@
     white-space: nowrap;
   }
   #keys span { opacity: .68; }
+  #keys .sec {
+    grid-column: 1 / -1;
+    font-size: 9px;
+    letter-spacing: .34em;
+    text-transform: uppercase;
+    color: var(--brass);
+    opacity: .5;
+    margin-top: 8px;
+    border-top: 1px solid rgba(217, 164, 65, .18);
+    padding-top: 10px;
+  }
+  #keys .sec:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
 
   #cta {
     font-size: 13px;
@@ -242,42 +597,168 @@
     text-transform: uppercase;
     opacity: .3;
   }
+
+  /* Motion sickness is a failure state here (docs/taste.md), and that applies
+     to the overlay as much as to the camera. Everything decorative stops; every
+     readout keeps its value. */
+  @media (prefers-reduced-motion: reduce) {
+    #navpulse, #cta, #toast.hold #sealspin, #toast.split.on, #toast.hold.on {
+      animation: none !important;
+    }
+    #reticle, #speedfill, .chip, #verb, #toast, #compass, #alt, #nav, #cppips b {
+      transition: none !important;
+    }
+  }
 </style>
 
 <div id="hud">
+  <!-- One alloy for the whole panel. Declared once and referenced by every
+       instrument's SVG, so the compass, the chevron and the seal are visibly
+       the same metal rather than three separate golds. -->
+  <svg id="hud-defs" width="0" height="0" aria-hidden="true">
+    <defs>
+      <linearGradient id="gbrass" x1="0" y1="0" x2="0.4" y2="1">
+        <stop offset="0" stop-color="#f7e2ab" />
+        <stop offset=".45" stop-color="#d9a441" />
+        <stop offset="1" stop-color="#8a6224" />
+      </linearGradient>
+    </defs>
+  </svg>
+
   <div id="reticle"></div>
-  <div id="run">
+
+  <!-- the run register ------------------------------------------------- -->
+  <div id="run" class="inst">
+    <div class="cap">elapsed</div>
     <div id="timer">0.00</div>
+    <div class="hair"></div>
+    <div id="cppips" class="empty"></div>
     <div id="splits">checkpoint 0 / 0</div>
   </div>
-  <div id="speedwrap">
-    <div id="speedval">0<small>KM/H</small></div>
-    <div id="speedbar"><div id="speedfill"></div></div>
+
+  <!-- bearing rose ------------------------------------------------------ -->
+  <div id="compass" class="inst">
+    <div id="crose">
+      <svg viewBox="0 0 96 96" aria-hidden="true">
+        <!-- bezel -->
+        <circle cx="48" cy="48" r="42" fill="rgba(14,11,8,.42)" />
+        <circle cx="48" cy="48" r="42" fill="none" stroke="url(#gbrass)" stroke-width="2" opacity=".85" />
+        <circle cx="48" cy="48" r="36.5" fill="none" stroke="rgba(217,164,65,.28)" stroke-width="1" />
+        <!-- graduations, every 15 degrees, majors on the quarters -->
+        <g stroke="rgba(232,211,173,.55)" stroke-width="1">
+          <path d="M48 8.5v5M48 87.5v-5M8.5 48h5M87.5 48h-5" stroke="#f7e2ab" stroke-width="2" />
+          <path d="M48 10v3.5" transform="rotate(15 48 48)" /><path d="M48 10v3.5" transform="rotate(30 48 48)" />
+          <path d="M48 10v3.5" transform="rotate(60 48 48)" /><path d="M48 10v3.5" transform="rotate(75 48 48)" />
+          <path d="M48 10v3.5" transform="rotate(105 48 48)" /><path d="M48 10v3.5" transform="rotate(120 48 48)" />
+          <path d="M48 10v3.5" transform="rotate(150 48 48)" /><path d="M48 10v3.5" transform="rotate(165 48 48)" />
+          <path d="M48 10v3.5" transform="rotate(195 48 48)" /><path d="M48 10v3.5" transform="rotate(210 48 48)" />
+          <path d="M48 10v3.5" transform="rotate(240 48 48)" /><path d="M48 10v3.5" transform="rotate(255 48 48)" />
+          <path d="M48 10v3.5" transform="rotate(285 48 48)" /><path d="M48 10v3.5" transform="rotate(300 48 48)" />
+          <path d="M48 10v3.5" transform="rotate(330 48 48)" /><path d="M48 10v3.5" transform="rotate(345 48 48)" />
+        </g>
+        <!-- fixed lubber line: straight ahead is up -->
+        <path d="M48 2.5l4.6 7.6h-9.2z" fill="#f7e2ab" opacity=".95" />
+      </svg>
+      <svg viewBox="0 0 96 96" aria-hidden="true">
+        <g id="cneedle">
+          <path d="M48 15l7 26-7-5-7 5z" fill="url(#gbrass)" stroke="rgba(60,40,14,.85)" stroke-width="1" stroke-linejoin="round" />
+          <path d="M48 81l-4.4-18h8.8z" fill="rgba(232,211,173,.3)" />
+        </g>
+        <circle cx="48" cy="48" r="3.4" fill="url(#gbrass)" stroke="rgba(60,40,14,.8)" stroke-width="1" />
+      </svg>
+    </div>
+    <div id="cread">—<small>M</small></div>
+    <div id="cvert"></div>
+    <div class="cap">next drop</div>
+  </div>
+
+  <!-- altimeter --------------------------------------------------------- -->
+  <div id="alt" class="inst">
+    <div id="altwin">
+      <div id="alttape"><div id="altmark"></div></div>
+    </div>
+    <div id="altidx"></div>
+    <div id="altval">0<small>M</small></div>
+    <div class="cap">altitude</div>
+  </div>
+
+  <!-- next-objective chevron -------------------------------------------- -->
+  <div id="nav">
+    <div id="navchev">
+      <svg viewBox="0 0 46 46" aria-hidden="true">
+        <g id="navpulse">
+          <path d="M23 6l15 17h-8.4L23 14.6 15.4 23H7z"
+                fill="url(#gbrass)" stroke="rgba(45,30,10,.9)" stroke-width="1.6" stroke-linejoin="round" />
+          <path d="M23 23l11 12.4h-6.2L23 29.6l-4.8 5.8H12z"
+                fill="url(#gbrass)" stroke="rgba(45,30,10,.9)" stroke-width="1.6" stroke-linejoin="round" opacity=".72" />
+        </g>
+      </svg>
+    </div>
+    <div id="navdist"></div>
+  </div>
+
+  <div id="speedwrap" class="inst">
+    <div id="verb"></div>
+    <div id="speedval"><b id="speednum">0</b><small>KM/H</small></div>
+    <div id="speedbar">
+      <div id="speedfill"></div>
+      <div id="speedticks"></div>
+      <div id="redline"></div>
+    </div>
     <div id="charges">
       <div class="chip" id="chip-dash"><i></i>DASH</div>
       <div class="chip" id="chip-air"><i></i>AIR</div>
       <div class="chip" id="chip-hook"><i></i>HOOK</div>
     </div>
   </div>
-  <div id="verb"></div>
-  <div id="toast"><div class="big"></div><div class="sub"></div></div>
+
+  <div id="toast">
+    <svg id="toastseal" viewBox="0 0 54 54" aria-hidden="true">
+      <g id="sealspin" fill="none" stroke="url(#gbrass)">
+        <circle cx="27" cy="27" r="23" stroke-width="1.6" opacity=".8" />
+        <circle cx="27" cy="27" r="16" stroke-width="1" opacity=".5" />
+        <g stroke-width="2" stroke-linecap="round">
+          <path d="M27 2.5v6M27 51.5v-6M2.5 27h6M51.5 27h-6" />
+          <path d="M9.6 9.6l4.3 4.3M44.4 44.4l-4.3-4.3M44.4 9.6l-4.3 4.3M9.6 44.4l4.3-4.3" opacity=".65" />
+        </g>
+      </g>
+      <circle cx="27" cy="27" r="8" fill="url(#gbrass)" opacity=".9" />
+    </svg>
+    <div class="big"></div>
+    <div class="rule2"></div>
+    <div class="sub"></div>
+  </div>
 </div>
 
 <div id="overlay">
   <div class="title">
     <h1>Skyline <span>Courier</span></h1>
     <div class="tag">carry the speed</div>
-    <div class="rule"></div>
+    <div class="rule">
+      <span></span>
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#d9a441" stroke-width="1.3">
+        <circle cx="12" cy="12" r="9.2" />
+        <circle cx="12" cy="12" r="4.4" opacity=".6" />
+        <path d="M12 1.6v3.4M12 22.4v-3.4M1.6 12h3.4M22.4 12h-3.4" stroke-linecap="round" />
+        <path d="M12 6.4l2.3 5.6L12 17.6 9.7 12z" fill="#d9a441" stroke="none" opacity=".85" />
+      </svg>
+      <span></span>
+    </div>
   </div>
   <div id="keys">
+    <div class="sec">movement</div>
     <b>WASD</b><span>run</span>
     <b>SHIFT</b><span>sprint</span>
-    <b>SPACE</b><span>jump &middot; double jump &middot; wall-jump</span>
-    <b>CTRL</b><span>slide &mdash; jump out to keep the speed</span>
-    <b>Q / RIGHT-CLICK</b><span>air dash &mdash; recharges on landing</span>
-    <b>F</b><span>grapple &mdash; hold, aim at any brass lantern</span>
-    <b>MOUSE</b><span>look</span>
-    <b>R</b><span>restart from checkpoint</span>
+    <b>SPACE</b><span>jump &middot; double jump in the air &middot; wall-jump off a wall</span>
+    <b>CTRL</b><span>slide &mdash; jump out of it to keep the speed</span>
+    <b>MOUSE</b><span>look &mdash; run along a brass wall to wall-run</span>
+    <div class="sec">charges</div>
+    <b>Q / RIGHT-CLICK</b><span>air dash &mdash; one charge, recharges on landing</span>
+    <b>F</b><span>grapple &mdash; hold, aimed at any brass lantern in range</span>
+    <div class="sec">route</div>
+    <b>CHEVRON</b><span>the brass arrow on the screen edge points at your next drop</span>
+    <b>R</b><span>restart from the last checkpoint</span>
+    <b>ESC</b><span>release the cursor</span>
   </div>
   <div id="cta">click to run</div>
   <div id="esc">escape releases the cursor at any time</div>

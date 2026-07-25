@@ -49,6 +49,11 @@ player.anchors = level.anchors
 const rig = new CameraRig(camera)
 const audio = new Audio()
 const hud = new Hud()
+// Wayfinding needs the camera (for bearing) and the level (for the next
+// objective). Read-only on both. Without this the HUD still works, it just
+// cannot point anywhere — and with an archipelago instead of a corridor,
+// "which way" stopped being answerable from the geometry alone.
+hud.setNav(camera, level)
 const speedFX = new SpeedFX(scene)
 speedFX.setSize(window.innerWidth, window.innerHeight)
 const grappleFX = new GrappleFX(scene)
