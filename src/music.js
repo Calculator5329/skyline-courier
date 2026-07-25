@@ -162,9 +162,26 @@ export class Music {
     // `currentTime` means both `start()` calls land on the same sample frame
     // instead of on whenever each one happened to be executed.
     const t0 = this.ctx.currentTime + 0.02
-    const calm = 1 - this._intensity
-    this._start('run', { loop: true, gain: calm, fade: FADE, when: t0 })
-    this._start('flow', { loop: true, gain: this._intensity, fade: FADE, when: t0 })
+
+    // Both files are cut to the same sample count, but `decodeAudioData` does
+    // not necessarily hand them back that way: when the file's rate differs
+    // from the context's, the browser resamples, and its handling of Vorbis
+    // padding can leave the two buffers a few samples apart. A few samples per
+    // pass is nothing on its own and everything cumulatively — the layers
+    // would slide out of phase over a long session. Pinning both sources to
+    // one explicit loopEnd makes the loop length identical by construction,
+    // whatever the decoder did.
+    // If only one layer decoded, that layer still plays on its own; the
+    // crossfade just has nothing to fade to.
+    const br = this.buffers.run, bf = this.buffers.flow
+    const loopEnd = (br && bf) ? Math.min(br.duration, bf.duration)
+                  : (br ? br.duration : (bf ? bf.duration : 0))
+    if (!loopEnd) { this._mode = 'none'; return }
+
+    const calm = Math.cos(this._intensity * Math.PI * 0.5)
+    const fast = Math.sin(this._intensity * Math.PI * 0.5)
+    this._start('run', { loop: true, gain: calm, fade: FADE, when: t0, loopEnd })
+    this._start('flow', { loop: true, gain: fast, fade: FADE, when: t0, loopEnd })
   }
 
   /**
@@ -233,11 +250,11 @@ export class Music {
       src.buffer = buf
       src.loop = !!opts.loop
       if (opts.loop) {
-        // Explicit full-buffer loop points. The defaults would do the same
-        // thing, but being explicit documents that the file is cut to loop
-        // end-to-end with nothing trimmed.
+        // Explicit loop points. The default would be the whole buffer, but
+        // callers layering two tracks pass a shared loopEnd so both wrap at
+        // exactly the same instant.
         src.loopStart = 0
-        src.loopEnd = buf.duration
+        src.loopEnd = opts.loopEnd || buf.duration
       }
 
       const g = this.ctx.createGain()

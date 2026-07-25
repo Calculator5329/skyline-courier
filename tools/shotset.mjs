@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+/**
+ * Capture every named shot into one directory, in one browser launch.
+ *
+ *   node tools/shotset.mjs --out /path/to/dir
+ *     [--port 5199] [--width 1600] [--height 900] [--frames 90] [--hud]
+ *     [--only terrace,vista] [--no-build] [--json]
+ *
+ * One launch, one build, one server: a shot set captured across several
+ * processes is a shot set whose frames are not comparable with each other,
+ * which defeats the point of having a set.
+ *
+ * Every shot is analysed immediately and gets a verdict. A capture that is a
+ * uniform sky-only or inside-a-wall frame FAILS, as does any console error, and
+ * the process exits non-zero — the harness is only useful if it can say no.
+ */
+
+import { mkdir, stat } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { SHOTS, SHOT_NAMES } from './shots.mjs'
+import { analyzeFile } from './analyze.mjs'
+import {
+  DEFAULTS, REPO, buildDist, glRenderer, hideChrome, launchBrowser, num,
+  openGame, parseArgs, pumpShot, startStaticServer,
+} from './harness.mjs'
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2))
+  const outDir = resolve(args.out || 'shots')
+  const port = num(args.port, DEFAULTS.port)
+  const width = num(args.width, DEFAULTS.width)
+  const height = num(args.height, DEFAULTS.height)
+  const frames = num(args.frames, DEFAULTS.frames)
+
+  const names = args.only && args.only !== true
+    ? String(args.only).split(',').map((s) => s.trim()).filter(Boolean)
+    : SHOT_NAMES
+  const unknown = names.filter((n) => !SHOTS[n])
+  if (unknown.length) {
+    console.error(`unknown shots: ${unknown.join(', ')}`)
+    process.exit(2)
+  }
+
+  if (!args['no-build']) buildDist()
+  await mkdir(outDir, { recursive: true })
+
+  const server = await startStaticServer(resolve(REPO, 'dist'), port)
+  let browser = null
+  const results = []
+  let gl = null
+  try {
+    browser = await launchBrowser()
+    const { page, errors } = await openGame(browser, server.url, { width, height })
+    await hideChrome(page, { hud: !!args.hud })
+    gl = await glRenderer(page)
+
+    for (const name of names) {
+      const file = join(outDir, `${name}.png`)
+      const before = errors.length
+      const info = await pumpShot(page, name, { frames, dt: DEFAULTS.dt })
+      await page.screenshot({ path: file, type: 'png' })
+
+      const bytes = (await stat(file)).size
+      const image = analyzeFile(file)
+      const shotErrors = errors.slice(before)
+      const fail = []
+      if (bytes < 1024) fail.push('empty-png')
+      if (image.uniform) fail.push('uniform-frame')
+      if (shotErrors.length) fail.push('page-error')
+
+      results.push({
+        shot: name, file, bytes, note: SHOTS[name].note,
+        render: info, image, errors: shotErrors,
+        pass: fail.length === 0, fail,
+      })
+    }
+  } finally {
+    if (browser) await browser.close()
+    await server.close()
+  }
+
+  if (args.json) {
+    console.log(JSON.stringify({ outDir, width, height, frames, gl, results }, null, 2))
+  } else {
+    report(outDir, width, height, frames, gl, results)
+  }
+  if (results.some((r) => !r.pass)) process.exitCode = 1
+}
+
+function report(outDir, width, height, frames, gl, results) {
+  console.log(`\nshot set → ${outDir}   ${width}x${height}, ${frames} pumped frames`)
+  console.log(`GL: ${gl ? gl.renderer : 'unknown'}\n`)
+  const head = ['shot', 'ok', 'lum', 'sat', 'p1/p50/p99', 'spread', 'clip hi/lo', 'draws', 'tris', 'ms/f']
+  const rows = results.map((r) => [
+    r.shot,
+    r.pass ? 'yes' : `NO(${r.fail.join(',')})`,
+    String(r.image.luminance),
+    String(r.image.saturation),
+    `${r.image.percentiles.p1}/${r.image.percentiles.p50}/${r.image.percentiles.p99}`,
+    String(r.image.regionSpread),
+    `${r.image.clipped.highPct}%/${r.image.clipped.lowPct}%`,
+    String(r.render.drawCalls),
+    String(r.render.triangles),
+    String(r.render.frameMs),
+  ])
+  const w = head.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)))
+  const line = (cells) => cells.map((c, i) => c.padEnd(w[i])).join('  ')
+  console.log(line(head))
+  console.log(w.map((n) => '-'.repeat(n)).join('  '))
+  for (const row of rows) console.log(line(row))
+  for (const r of results) {
+    if (r.errors.length) console.log(`\n${r.shot} errors:\n  ${r.errors.join('\n  ')}`)
+  }
+  console.log('')
+}
+
+main().catch((e) => { console.error(e); process.exit(1) })

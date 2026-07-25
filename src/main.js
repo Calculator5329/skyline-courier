@@ -9,6 +9,7 @@ import { Hud, formatTime } from './hud.js'
 import { SpeedFX } from './fx/speed.js'
 import { GrappleFX } from './fx/grapple.js'
 import { RenderPipeline } from './render/index.js'
+import { Music } from './music.js'
 
 /**
  * Bootstrap and the game loop.
@@ -51,6 +52,8 @@ const hud = new Hud()
 const speedFX = new SpeedFX(scene)
 speedFX.setSize(window.innerWidth, window.innerHeight)
 const grappleFX = new GrappleFX(scene)
+/** Built on first click, once an AudioContext legally exists. */
+let music = null
 
 // HDR pipeline: physical auto-exposure → Karis bloom → AgX + procedural
 // grade LUT. The scene never touches the default framebuffer directly.
@@ -148,13 +151,28 @@ const canvas = renderer.domElement
 
 hud.overlay.addEventListener('click', () => {
   audio.init()
+  // Music has to be built after the AudioContext exists, and the context can
+  // only be created from a real user gesture — so this is the earliest
+  // possible moment, not a lazy choice.
+  if (!music && audio.ctx) {
+    music = new Music(audio.ctx, audio.master)
+    music.load()
+  }
+  music?.playMenu()
   canvas.requestPointerLock()
 })
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas
   hud.setOverlay(!locked)
-  if (!locked) { keys.clear(); input.jumpHeld = false }
+  if (locked) {
+    if (!run.finished) music?.playGameplay()
+  } else {
+    keys.clear()
+    input.jumpHeld = false
+    input.grappleHeld = false
+    music?.playMenu()
+  }
 })
 
 document.addEventListener('mousemove', (e) => {
@@ -362,4 +380,59 @@ window.__game = {
   jump() { input.jumpPressed = true; input.jumpHeld = true },
 }
 
+// ------------------------------------------------- headless capture hooks
+
+const _shotPos = new THREE.Vector3()
+
+/**
+ * Park the game on a named pose (see `tools/shots.mjs`).
+ *
+ * The harness calls this once per pumped frame rather than once per shot: a
+ * mid-air pose left to itself falls for the whole pump and lands somewhere
+ * else, so the pose has to be re-asserted, not merely set. Re-applying is
+ * cheap and idempotent, and because velocity is restored too, the rig's
+ * speed-driven FOV settles where it would in play instead of at a standstill.
+ *
+ * `shot` is either a table entry or the name of one in `window.__SHOTS__`,
+ * which the harness injects — the table stays in tools/ so shipped code carries
+ * no shot data.
+ */
+window.__SHOT__ = function (shot, reset = false) {
+  const s = typeof shot === 'string' ? (window.__SHOTS__ || {})[shot] : shot
+  if (!s || !s.pos) throw new Error(`__SHOT__: unknown shot ${JSON.stringify(shot)}`)
+
+  _shotPos.set(s.pos[0], s.pos[1], s.pos[2])
+  player.teleport(_shotPos)                       // also clears wall/slide state
+  if (s.vel) player.velocity.set(s.vel[0], s.vel[1], s.vel[2])
+
+  rig.yaw = s.yaw
+  rig.pitch = s.pitch || 0
+  // Zero the transient springs. They are driven by events that never happened
+  // in a teleported frame, and a capture that inherits a landing dip from the
+  // previous shot is a capture that cannot be compared with the next one.
+  rig.roll = 0; rig.rollVel = 0
+  rig.dip = 0; rig.dipVel = 0
+  rig.punch = 0; rig.shake = 0; rig.slideEase = 0
+  rig.bob.set(0, 0, 0)
+  run.started = false                             // keep the HUD timer at zero
+
+  // Only on the first application. The exposure meter must not adapt across a
+  // cut, exactly as on respawn; after this it converges over the pumped frames.
+  // Rewinding the clock and the accumulator matters just as much: every
+  // time-driven effect in the world (motes, water, foliage sway) is a function
+  // of `clock`, so without this the same shot captured twice differs by
+  // however long the page took to boot — and a harness whose output changes
+  // run to run cannot be used to detect that a change altered the picture.
+  if (reset) {
+    clock = 0
+    accumulator = 0
+    pipeline.resetExposure()
+  }
+  return s
+}
+
+// Set last, after one full tick + render has already happened below, so a
+// harness that waits on this flag is waiting for a drawn frame, not for module
+// evaluation.
 frame()
+window.__READY__ = true
