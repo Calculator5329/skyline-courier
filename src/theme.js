@@ -197,8 +197,22 @@ const voidTheme = {
      * switched back without a missing key.
      */
     voidMode: true,
-    zenith: 0x1d1230,
-    horizon: 0x2c1b45,
+    // WIDENED, AND SPLIT IN HUE. Ethan, side by side with the reference: the
+    // frame reads as "one value" and is "monochromatic".
+    //
+    // Two changes, and they are separate problems. VALUE: the ratio between
+    // these was about 2.2x, so the background was a near-uniform field and the
+    // dark masses had barely a step to silhouette against. It is now ~3.6x,
+    // which is a real gradient without becoming a horizon LINE — the ramp is
+    // still smooth over 130 degrees of dome (see `scVoidGradient`).
+    //
+    // HUE: they were the same violet at two brightnesses, which is why the
+    // whole frame came out monochromatic. The zenith now sits blue-violet and
+    // the deep sits magenta-violet, so the background alone carries two hues
+    // and anything in front of it has something to separate from. The
+    // reference does exactly this — cool above, warm-magenta below.
+    zenith: 0x120b26,
+    horizon: 0x3b2058,
     deck: 0x241a42,
     sun: 0x8b5cf6,
   },
@@ -297,7 +311,10 @@ const voidTheme = {
     // art-direction-void.md §8 calls out by name.
     shadowTint: [0.048, -0.008, 0.030],
     highlightTint: [0.016, -0.016, 0.026],
-    saturation: 1.46,
+    // Up from 1.46. §8's first named failure mode is grey murk, and a
+    // low-contrast violet haze over violet ruin is precisely the case AgX's
+    // inset desaturates hardest.
+    saturation: 1.60,
     contrast: 1.52,
     shadowFalloff: 2.80,
     highlightRise: 1.85,
