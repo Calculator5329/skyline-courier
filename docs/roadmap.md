@@ -27,6 +27,41 @@ is listed here rather than in a reviewer's head.
       as white objects. `plunge` p50 52 -> 28.4, `summit` lum 79 -> 60.9, and
       all four shots now sit inside §2's `lum` and `p50` bands. See the
       changelog.
+- [ ] **The far-band impostor cards draw over the level.** Ethan: "some of the
+      terrain is like in the wall or making it invisible" — irregular near-black
+      masses across the central great wall's face. ROOT CAUSE FOUND AND PROVEN,
+      not guessed; `node tools/blotch-probe.mjs` reproduces it, isolates it and
+      fails on it, and its header carries the full argument and the five things
+      that were ruled out. 1.75% of the `ascent` frame is covered.
+
+      `VERT_CARD` in `src/fx/voidbackdrop.js` squashes a card's clip depth so
+      cards past the 1200 m far plane fade instead of being cut:
+
+          float ndc = clip.z / clip.w;
+          if (ndc > 0.99) ndc = 0.99 + 0.00998 * (1.0 - 1.0 / (1.0 + (ndc - 0.99) * 60.0));
+
+      0.99 is not "nearly the far plane". The camera is
+      `PerspectiveCamera(76, aspect, 0.1, 1200)`, so
+      `ndc = 1.0001667 - 0.200017 / d` and ndc crosses 0.99 at **d = 19.7 m**.
+      The branch fires for every card and compresses 20 m-to-infinity into
+      [0.99, 0.99998]. Nothing else in the scene is remapped, so the scales
+      disagree: a card at 900 m lands at ndc 0.9937, which un-remapped geometry
+      does not reach until ~31 m. Everything past ~31 m therefore loses the
+      depth test to the far band. The remap is monotonic AMONG CARDS, which is
+      what its comment claims and is not the property that was needed.
+
+      THE FIX — remap only what would actually be clipped, i.e. `ndc > 1.0`,
+      keeping the same monotonic squash so cards past the far plane still do not
+      tie with each other:
+
+          if (ndc > 1.0) ndc = 1.0 - 1.0e-5 / (1.0 + (ndc - 1.0) * 60.0);
+
+      NOT APPLIED HERE: `src/fx/voidbackdrop.js` is held by another lane this
+      session, and this is a one-line change inside a shader string that lane is
+      actively editing. Verified by patching the live material instead — see the
+      probe's `no-depth-squash` mode and
+      `docs/captures/blotch/ascent-no_depth_squash.png`, which is the same frame
+      with every card still drawn and the wall clean.
 - [ ] `summit` still measures lum 60.9 against §2's 28-55 and 3.2% clipped high
       against 0.3-2.5%. Both come from the shot itself rather than the theme:
       the 26 m finish plaza fills 60% of the frame at 5 m and its rune inlay is
