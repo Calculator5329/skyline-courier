@@ -30,6 +30,8 @@
  * gets quieter and nothing else changes. Callers never have to check a flag.
  */
 
+import { getTheme } from './theme.js'
+
 const TRACKS = ['menu', 'run', 'flow', 'finish']
 
 /** Gain ramp for track starts/stops. Long enough to not click, short enough
@@ -62,7 +64,21 @@ export class Music {
       try {
         if (import.meta.env && import.meta.env.BASE_URL) root = import.meta.env.BASE_URL
       } catch (_) { /* non-vite host; relative is fine */ }
-      base = root + 'audio/'
+      // PER THEME. Ethan: "in like skyline-courier the music is the same in
+      // void". The void got a whole rebuilt soundscape — drone, 4.1 s reverb,
+      // footsteps on void rock, beam hum, rune chimes — and then the warm
+      // archipelago melody played over it, because the four generated tracks
+      // were committed to public/audio/void/ and never wired.
+      //
+      // A subdirectory rather than a filename prefix, so a theme either has a
+      // complete set or falls back to the shipped one as a whole. A half-swapped
+      // score is worse than either.
+      let dir = 'audio/'
+      try {
+        const t = getTheme()
+        if (t && t.music) dir = t.music
+      } catch (_) { /* no theme selected (harness/node) */ }
+      base = root + dir
     }
     this.basePath = base
 

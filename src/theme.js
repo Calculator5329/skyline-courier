@@ -70,6 +70,9 @@ const skyline = {
   /** Energy beams are a void element (art-direction-void.md §4.4). */
   beams: false,
 
+  /** Where this theme's four music tracks live, under the site root. */
+  music: 'audio/',
+
   /**
    * The distant scenery layer (`src/fx/voidbackdrop.js`). Off here: the sunset
    * archipelago already carries its own far band as real ghost islands in
@@ -771,6 +774,9 @@ const voidTheme = {
    * theme.js is already long. See src/audio/void.js.
    */
   audio: VOID_AUDIO,
+
+  /** Its own score — see the commit that generated these. */
+  music: 'audio/void/',
 
   foliage: false,
 }
