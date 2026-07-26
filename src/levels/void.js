@@ -682,20 +682,43 @@ export function buildVoidCourse(collision) {
    * opposite direction. Only orbs near the route are registered.
    */
   const ORB_ANCHOR_REACH = 55
-  const orb = (x, y, z, k = 0) => {
+  // Thinned. Ethan: "I would say reduce overall number please... we cant have
+  // decorations resembling them even if the colors differ."
+  let orbSeq = 0
+  const ORB_KEEP = 3        // one orb in three survives
+
+  /**
+   * AN ORB IS AN ANCHOR. There is no decorative orb any more, at any colour.
+   *
+   * The history is worth keeping because it took three passes to land. First
+   * there were ~600 decorative orbs sharing the anchors' violet, and aiming at
+   * a glowing point was a ten-to-one bet — Ethan: "the fake lanterns (blue and
+   * purple) in the void suck because they are hard to distinguish". So I split
+   * them by colour and size. He came back: "blue orbs still exist and don't let
+   * me grapple" — a distinction legible in a still frame is not legible at
+   * 12 m/s. So every orb became an anchor. He came back again, with the rule
+   * that actually settles it: "we cant have decorations resembling them EVEN IF
+   * THE COLORS DIFFER."
+   *
+   * That is the correct generalisation and it is stricter than anything I
+   * proposed: the shape is the signal. A glowing sphere means "hook me", and
+   * nothing else in the level may be one. Colour was never going to carry that
+   * load at speed.
+   *
+   * So an orb out of the cuff's reach is not drawn at all, and the survivors
+   * are thinned to a third — a hook every few metres is noise, and noise is
+   * what made the original 600 unreadable.
+   */
+  const orb = (x, y, z) => {
     let near = false
     for (const n of nodes.values()) {
       if (Math.abs(n.y - y) > ORB_ANCHOR_REACH) continue
       if (Math.hypot(n.x - x, n.z - z) <= ORB_ANCHOR_REACH) { near = true; break }
     }
-    voidOrb(L, x, y, z, {
-      radius: near ? ORB_R[k % ORB_R.length] + 0.16 : ORB_R[k % ORB_R.length],
-      color: colors.cool,
-      // Reachable ones read a little brighter and a little bigger — not as a
-      // rule the player has to learn, just so a usable hook is easy to SEE.
-      intensity: near ? 1.15 : 0.5,
-    })
-    if (near) L.anchors.push(new THREE.Vector3(x, y, z))
+    if (!near) return                     // out of reach: draw nothing at all
+    if (orbSeq++ % ORB_KEEP !== 0) return  // thinned
+    voidOrb(L, x, y, z, { radius: 0.42, color: colors.cool, intensity: 1.25 })
+    L.anchors.push(new THREE.Vector3(x, y, z))
   }
 
   /**
