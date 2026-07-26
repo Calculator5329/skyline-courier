@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-07-26 — the backdrop stops being pale flat origami
+
+A harsh review of the rendered frames, on the band above the deck in
+`summit.png` and the upper-left quadrant of `plunge.png`:
+
+> "large pale-lavender flat-shaded polygons with no internal structure, no
+> windows, no fracture, no edge glow — literally paper triangles... A ratio
+> above 1.0 is a fog bank with lumps in it, which is exactly failure mode §8.3."
+
+This is Ethan's "less depth and detail in the backdrop" complaint, second time
+of asking, and the cause was structural rather than a tuning miss. All of it is
+in `src/fx/voidbackdrop.js`.
+
+- **The value ladder was inverted, and is now the right way up.** The three
+  bands were authored at 0.95 / 1.50 / 1.85 of the dome's value — the far band
+  deliberately LIGHTER than the sky, on the reasoning that a distant mass is
+  mostly the lit haze in front of it. True in a daylit valley, false in a void
+  whose haze is lit from below and behind: the reference shows dark spires
+  standing in front of a glowing violet volume. Now 0.55 / 0.66 / 0.78 —
+  contrast still falls with distance, it just never crosses over.
+- **The body brightness was the real culprit and it took three passes to find.**
+  At these ranges the mass is ~30% of the pixel and the inscatter ~70%, so
+  winding the inscatter gain down did almost nothing while `uHazeParams.w` was
+  high. Body is now 0.035-0.05, and the surface detail multiplies the
+  COMPOSITE through a `shade` term that only ever darkens — so a groove can
+  never come out lighter than the haze it sits in.
+- **Four silhouette archetypes replace one cone.** `towerCluster` (gothic
+  towers with needles), `hangingRuin` (a plateau over a fractured plinth with
+  five to eight drips of different lengths), `slabStack` (setback ziggurat with
+  masts) and `shardCluster` (the drifting fragments). Each is a CLUSTER of
+  6-14 tapered prisms, so one instance reads as a district. Every archetype is
+  authored inside a unit cell and `assertBounds()` throws if one escapes it,
+  because `clearanceOf()` bounds instances by that cell.
+- **Internal structure, as a shader rather than a texture:** storey grooves and
+  panel breaks on near-vertical faces, a per-face value break, a narrow edge
+  glow, sparse emissive fracture seams, and a world-space glint grid — violet
+  with a rare red, one cell in ~35. That last one closes the roadmap item "the
+  far bands carry no light of their own". Every feature is sized in METRES and
+  sized above the pixel it lands on (9-15 m grooves, 6-10 m glint cells);
+  finer than that is not detail, it is noise that crawls.
+- **Cost.** 3 draw calls and 29k triangles → 10 draw calls and 176k, against a
+  scene that is already 2.9 M. Measured `ms/f` across the void shot set is
+  3.5-5.2 against a 3.5-5.5 baseline: no change outside run-to-run noise. The
+  old budget was a false economy — one percent of the frame's triangles for
+  half of the frame's area, spent on one cone repeated a thousand times.
+
+Measured, void shot set, before → after: `summit` lum 54.5 → 47.5 with spread
+55.6 → 64.8; `plunge` 51.5 → 41.1; `midclimb` 46.5 → 34.0; `ascent` 28.9 →
+25.6. `ascent` now sits 2.4 under §2's `lum` floor of 28, and the honest
+reading of that is unwelcome: rendering with the backdrop disabled entirely
+measures 27.3, so the old frame only cleared the floor BECAUSE the backdrop
+was paler than the sky it covered. The metric was being met by the defect.
+Skyline is untouched — `closeup` still measures lum 111.1, sat 0.807.
+
 ## 2026-07-25 — the void gets dense
 
 Ethan, with the build beside the reference image:

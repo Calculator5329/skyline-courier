@@ -26,12 +26,12 @@ is listed here rather than in a reviewer's head.
       the motes. A real answer is a cheap per-fissure point light or an
       irradiance-volume term, and both are a lighting-budget decision (§7.3)
       rather than a surface one.
-- [ ] The far bands carry no light of their own. `src/fx/voidbackdrop.js` puts
-      three distance bands behind the course, but every mass in them is unlit
-      rock seen through haze. The reference has pinpricks out there — distant
-      sigils and crystal glints — and they are most of what sells the scale.
-      Wants an emissive speckle channel on the backdrop shader, kept rare
-      enough that §3's "red must stay rare" still holds at a kilometre.
+- [x] The far bands carry no light of their own. (2026-07-26 — a world-space
+      glint grid on the backdrop shader: one cell in ~35 carries a soft dot,
+      violet with a rare red at 14% of glints, plus sparse violet fracture
+      seams. Sized in metres, 6-10 m cells, so it does not crawl at a
+      kilometre. Landed with the archetype/value-ladder rewrite; see
+      `docs/changelog.md`.)
 - [ ] Emissives in the emissive-poor shots. `tower`, `deckstrip` and
       `edgefeet` miss §2's `p99 > 215` and `clip hi 0.3-2.5%` for one reason:
       there is nothing bright in frame. This is §4.1-4.3 work — sigil rings on
