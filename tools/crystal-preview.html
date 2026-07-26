@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>crystal scratch shot</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block}</style>
+</head>
+<body>
+<!--
+  SCRATCH SHOT PAGE for the crystal lane. Not part of the game bundle: vite
+  builds `index.html` only, so nothing here reaches `dist/`.
+
+  It exists because `tools/shotset.mjs` photographs the LEVEL, and the crystals
+  are not in the level yet — placing them there is another agent's lane
+  (`src/level.js` is off limits in this one). Without a page like this the only
+  verification available would be "it compiled", which is exactly the mistake
+  docs/purpose.md parked the predecessor over.
+
+  It reuses the REAL rig: `buildWorld` with the void theme (so the same lights,
+  the same fog, the same sky) and the real `RenderPipeline` (so the same
+  auto-exposure, the same 0.78 max-channel bloom threshold, the same AgX and
+  grade LUT). A crystal judged under an ad-hoc renderer would be judged under a
+  renderer the game does not have.
+-->
+<script type="module">
+import * as THREE from 'three'
+import { buildWorld } from '/src/world.js'
+import { selectTheme } from '/src/theme.js'
+import { RenderPipeline } from '/src/render/index.js'
+import { CrystalField } from '/src/crystals.js'
+import { blob, chamferBox, FAR, MID, NEAR } from '/src/props.js'
+import { surfaceMaterial } from '/src/materials.js'
+
+const q = new URLSearchParams(location.search)
+const num = (k, d) => (q.has(k) ? Number(q.get(k)) : d)
+
+const W = num('w', 1600), H = num('h', 900)
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' })
+renderer.setPixelRatio(1)
+renderer.setSize(W, H)
+document.body.appendChild(renderer.domElement)
+
+const scene = new THREE.Scene()
+const camera = new THREE.PerspectiveCamera(76, W / H, 0.1, 1200)
+
+const theme = selectTheme('void')
+const world = buildWorld(scene, renderer, theme)
+
+// --- something dark for the crystals to erupt from ------------------------
+// The brief's read is "dark mass silhouetted against glow", so a shot with no
+// rock in it cannot show whether the crystals are doing their job.
+const rockMat = surfaceMaterial('stone')
+const rock = new THREE.Group()
+const seedRocks = [
+  [0, -2.2, 0, 7.0, 0.7], [-14, -3.4, -8, 5.5, 0.55], [15, -3.0, -6, 6.0, 0.6],
+  [2, -3.0, -26, 9.0, 0.5], [-22, -4.0, -30, 8.0, 0.45],
+]
+for (let i = 0; i < seedRocks.length; i++) {
+  const [x, y, z, r, s] = seedRocks[i]
+  const m = new THREE.Mesh(blob(0x100 + i * 37, {
+    radius: r, lumpiness: 0.34, squash: s, taperY: -0.35, detail: MID,
+    color: [0.10, 0.085, 0.15],
+  }), rockMat)
+  m.position.set(x, y, z)
+  m.castShadow = true
+  m.receiveShadow = true
+  rock.add(m)
+}
+// A slab so there is a hard flat edge in frame — crystals read against
+// straight architecture, not only against lumps.
+const slab = new THREE.Mesh(chamferBox(16, 1.1, 9, 0.06, { color: [0.11, 0.095, 0.16] }), rockMat)
+slab.position.set(-1, -1.0, -3)
+slab.receiveShadow = true
+rock.add(slab)
+scene.add(rock)
+
+// --- the crystals ----------------------------------------------------------
+// Colours are the void theme's, passed in as parameters. `crystals.js` holds
+// no colour of its own; see art-direction-void.md §3 and §7.2.
+const VIOLET = 0x8b5cf6
+const BLUE = 0x3b82f6
+const MAGENTA = 0xff2d55
+
+const field = new CrystalField({ seed: 0xC0FFEE, intensity: num('intensity', 3.2) })
+
+// Hero shards, "big enough to be architecture" (§4.3).
+field.add('hero', -6.4, -0.4, -1.5, { color: VIOLET, detail: NEAR, size: 1.0, yaw: 0.4 })
+field.add('hero', 6.8, -0.8, -4.0, { color: VIOLET, detail: NEAR, size: 0.78, yaw: 2.1, tilt: 0.16 })
+field.add('hero', -1.0, -1.6, -22.0, { color: VIOLET, detail: MID, size: 1.25, yaw: 1.2 })
+field.add('hero', -21.0, -2.4, -30.0, { color: BLUE, detail: MID, size: 1.05, yaw: 0.2 })
+field.add('hero', 17.0, -2.0, -34.0, { color: VIOLET, detail: FAR, size: 1.4, yaw: 2.9 })
+
+// Scatter shards: ruin edges, fractures, undersides (§4.3). Including a
+// cluster hung UNDER the slab lip, tilted past horizontal.
+const r = (() => { let s = 0x5EED; return () => { s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0; return s / 4294967296 } })()
+for (let i = 0; i < 26; i++) {
+  const a = r() * Math.PI * 2
+  const rad = 4 + r() * 16
+  field.add('scatter', Math.cos(a) * rad, -0.5 - r() * 1.4, -3 + Math.sin(a) * rad, {
+    color: r() < 0.35 ? BLUE : VIOLET,
+    detail: rad > 12 ? FAR : MID,
+    size: 0.7 + r() * 1.5,
+  })
+}
+// Hung UNDER the slab's left lip (x = -9 is clear of the big blob), tilted past
+// horizontal so they point down: §4.3's "platform undersides".
+for (let i = 0; i < 7; i++) {
+  field.add('scatter', -8.7, -1.55, -6.4 + i * 1.2, {
+    color: i % 3 === 0 ? MAGENTA : BLUE, detail: MID, size: 0.8 + r() * 0.7,
+    tilt: 2.4 + r() * 0.6, tiltAzimuth: Math.PI * 1.5,
+  })
+}
+scene.add(field.build())
+
+// Real lights at the biggest clusters, from the field's own suggestion list.
+// `crystals.js` reports where they should go and creates none itself.
+for (const e of field.emitters(4)) {
+  const l = new THREE.PointLight(new THREE.Color(e.color[0], e.color[1], e.color[2]), 4.5, e.radius * 2.2, 2)
+  l.position.set(e.position[0], e.position[1], e.position[2])
+  scene.add(l)
+}
+
+const pipeline = new RenderPipeline(renderer, scene, camera, {
+  grade: theme.grade || undefined,
+  exposure: theme.exposure || undefined,
+  sky: theme.sky
+    ? { zenith: theme.sky.zenith, horizon: theme.sky.horizon, sunHaze: theme.sky.sun, cloud: theme.sky.deck }
+    : undefined,
+})
+pipeline.setSize(W, H)
+// Exposure compensation knob for the scratch shots. The auto-exposure meter in
+// a scene this empty is metering the sky dome, not the level: the real void
+// course fills the frame with rock. `--ev` lets a shot be pulled down to the
+// value structure of art-direction-void.md §2 so the crystals can be judged in
+// the frame they will actually live in, rather than in an over-exposed one.
+pipeline.exposureCompensation += num('ev', 0)
+
+// Camera: §5 says look UP into a receding vertical corridor.
+camera.position.set(num('cx', 0), num('cy', 1.5), num('cz', 14))
+camera.lookAt(num('lx', 0), num('ly', 5.5), num('lz', -10))
+
+let t = 0
+function frame(dt) {
+  t += dt
+  world.update(t * 1000, camera.position)
+  pipeline.render(dt)
+}
+// Deterministic pump, same contract as tools/harness.mjs: no rAF, explicit dt,
+// so the exposure meter converges to the same place every capture.
+window.__pump = (n) => { for (let i = 0; i < n; i++) frame(1 / 60) }
+window.__stats = () => ({ field: field.stats(), render: pipeline.debugInfo ? pipeline.debugInfo() : null })
+window.__pump(Number(q.get('frames') || 90))
+window.__ready = true
+</script>
+</body>
+</html>
