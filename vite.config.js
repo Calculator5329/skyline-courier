@@ -23,7 +23,17 @@ export default defineConfig({
     // session — and vite walks every one, which exhausts the system's inotify
     // watch limit and kills the dev server with ENOSPC on startup. The lanes
     // are not sources for this build; watching them is pure cost.
-    watch: { ignored: ['**/.claude/**', '**/.orc/**', '**/dist/**', '**/shots/**'] },
+    watch: {
+      ignored: ['**/.claude/**', '**/.orc/**', '**/dist/**', '**/shots/**'],
+      // POLLING, because this box's inotify budget is exhausted and the dev
+      // server dies on startup with ENOSPC — it cannot get a watch on the repo
+      // root, never mind the tree. Raising fs.inotify.max_user_watches needs
+      // root and is the real fix; polling is what works without it. Costs some
+      // idle CPU and adds up to `interval` ms of latency to HMR, which is a
+      // fair trade for a server that starts at all.
+      usePolling: true,
+      interval: 300,
+    },
   },
   build: {
     target: 'es2022',
