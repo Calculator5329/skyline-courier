@@ -8,6 +8,24 @@ energy beams landed 2026-07-25, and the distant scenery layer and the
 six-beam rewrite landed the same day (see the changelog); what is still short
 is listed here rather than in a reviewer's head.
 
+- [x] 2026-07-25 — glowing veins and cracks through the rock. The reference's
+      dark masses are threaded with magenta and violet fissures lit from
+      inside, and the build had none; it was the most conspicuous single gap
+      left. Added as an emissive mask in the ORM map's spare red channel,
+      painted on its own fault network in `paintGlowVeins`
+      (`src/materials/textures.js`), lit by `SC_VEIN` in
+      `src/materials/shader.js`, and enabled only by `theme.surfaces.veins`.
+      Zero extra draws, tris or texture fetches; skyline compiles none of it.
+      See the changelog.
+- [ ] The fissures do not move. They are a static emissive mask, so a crack
+      cannot pulse, breathe or flare as the player passes. That wants a time
+      uniform driven from the frame loop, which is `render/` and `main.js`
+      territory rather than a material's.
+- [ ] The fissures light only themselves. Nothing near a vein is lit BY it —
+      no bounce onto the rock beside it, no contribution to the crystals or
+      the motes. A real answer is a cheap per-fissure point light or an
+      irradiance-volume term, and both are a lighting-budget decision (§7.3)
+      rather than a surface one.
 - [ ] The far bands carry no light of their own. `src/fx/voidbackdrop.js` puts
       three distance bands behind the course, but every mass in them is unlit
       rock seen through haze. The reference has pinpricks out there — distant
