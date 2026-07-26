@@ -103,6 +103,20 @@ export const SKY_GRADIENT_GLSL = /* glsl */ `
 #define SC_SKY_GRADIENT
 
 /**
+ * VOID MODE. 0 = the sky above; 1 = no sky at all.
+ *
+ * Declared HERE, inside the shared include, rather than in each consumer, for
+ * the same reason the gradient itself lives here: the dome, the aerial
+ * perspective and scene.fog have to agree about what is behind the world, and
+ * a mode flag that only one of them knew about would reintroduce exactly the
+ * "distant geometry terminates against a colour the sky never reaches" bug
+ * this file was written to kill. Every shader that includes this gets the
+ * declaration; a consumer that never sets it gets WebGL's default of 0, which
+ * is the shipped skyline path unchanged.
+ */
+uniform float scSkyVoid;
+
+/**
  * The shaded side of a billow.
  *
  * 0.55 of the deck value, against a lit side that sits near 0.95 of it. The old
@@ -127,6 +141,55 @@ vec3 scCloudLit( vec3 deck, vec3 sunColor ) {
 }
 
 /**
+ * THE VOID's answer to the same question: what is behind the world?
+ *
+ * Nothing. docs/art-direction-void.md §3 is explicit — "there is no sun and no
+ * sky; anything that reads as a horizon line is wrong" — so this is not the
+ * function above with darker inputs, it is a different shape:
+ *
+ *  - NO DECK. The luminous cloud sea below the horizon is the single biggest
+ *    contributor of light in the skyline frame and there is nothing like it in
+ *    a void. Everything below eye level is more void, not a floor.
+ *  - NO BAND, NO LINE. The gradient above runs a tight bright band at h = 0
+ *    against a dark zenith, which IS a horizon. Here the ramp is one smooth
+ *    monotone function of height spread over 130 degrees of dome, so there is
+ *    no h at which the derivative spikes and therefore no edge for the eye to
+ *    latch onto.
+ *  - NO SUN TERM. No disc, no aureole, no azimuthal warming. A directional
+ *    brightening in the background of a void is a sun by any other name.
+ *
+ * The ramp is squared on purpose. A linear fade puts the mid-violet across the
+ * whole lower dome and that is the murk failure: most of the dome has to sit
+ * within a hair of the near-black zenith, with the haze colour only arriving
+ * well below eye level, where the depth of the void is. At h = 0 this returns
+ * about 15% of the way from black toward the haze — dark enough that a distant
+ * silhouette still reads against it, violet enough that it is never grey.
+ *
+ * The deck and sunColor arguments are unused here, deliberately: the signature
+ * is shared so that a caller cannot accidentally invoke one mode's parameter
+ * list against the other.
+ */
+vec3 scVoidGradient( vec3 d, vec3 zenith, vec3 haze ) {
+  // 0 at the top of the dome, 1 far below. Edges chosen so the ramp never
+  // finishes inside the frame: straight up is fully black, straight down is
+  // fully haze, and every angle between is on the curve.
+  //
+  // The window is skewed UPWARD (0.75 above, -0.55 below) because the camera
+  // in this course spends its time looking up (§5, "look up, not down"): the
+  // half of the dome the player actually reads is the half above eye level, so
+  // that is the half the ramp has to spend its resolution on.
+  float t = smoothstep( 0.75, -0.55, d.y );
+  // pow 1.2 rather than the square this started as. The square was measured
+  // and rejected: it held 85% of the dome within a hair of the near-black
+  // zenith, which read correctly as "dark" and then failed §2 in the other
+  // direction — p50 collapsed to 9 against a target of 22-45 and a tenth of
+  // every frame clipped to true black against a target of 2-8%. §2 asks for a
+  // LOW-KEY image, not an EMPTY one, and the difference between those two is
+  // exactly this exponent.
+  return mix( zenith, haze, pow( t, 1.2 ) );
+}
+
+/**
  * Low-frequency sky radiance in direction d (unit, world space).
  *
  * Above the horizon: a tight warm band running to a barely-blue zenith, warmed
@@ -138,7 +201,16 @@ vec3 scCloudLit( vec3 deck, vec3 sunColor ) {
  * because this function's other job is to be the colour distance fades into,
  * and haze integrates the whole deck.
  */
+/**
+ * The dispatcher, and the shipped skyline gradient below the branch.
+ *
+ * The mode test lives HERE rather than at each call site so that the sky is
+ * still exactly one evaluation shared by the dome, the aerial perspective and
+ * scene.fog — the property this file exists to hold.
+ */
 vec3 scSkyGradient( vec3 d, vec3 zenith, vec3 horizon, vec3 deck, vec3 sunColor, vec3 sunDir ) {
+  if ( scSkyVoid > 0.5 ) return scVoidGradient( d, zenith, horizon );
+
   float h = d.y;
   float sun = max( dot( d, sunDir ), 0.0 );
 

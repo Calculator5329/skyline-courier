@@ -1,5 +1,27 @@
 # Roadmap
 
+## Now — the Void (theme 2)
+
+Acceptance is `docs/art-direction-void.md` §2, measured by
+`node tools/shotset.mjs --theme void`. The sky, atmosphere, exposure and
+energy beams landed 2026-07-25 (see the changelog); what is still short is
+listed here rather than in a reviewer's head.
+
+- [ ] Emissives in the emissive-poor shots. `tower`, `deckstrip` and
+      `edgefeet` miss §2's `p99 > 215` and `clip hi 0.3-2.5%` for one reason:
+      there is nothing bright in frame. This is §4.1-4.3 work — sigil rings on
+      the great walls, rune inlays on platform tops, crystal clusters — not an
+      atmosphere tune, and no amount of exposure will fake it.
+- [ ] True black in the up-looking shots. `vista`, `underside` and `edgefeet`
+      come back at `clip lo 0%` against a target of 2-8%: they contain no
+      surface deep enough in shadow to reach it. Needs mass that occludes —
+      §4.1's great walls — rather than a darker grade.
+- [ ] `crossing` and `closeup` sit above §2's `lum` band (63 and 75 against
+      28-55). Both are close-range shots of lit stone, so they are measuring
+      the SURFACES, which are still the skyline theme's porcelain and marble
+      under a violet light. They should come into band with the void's own
+      rock (`#14101F`-`#2A2438`, §3) and not before.
+
 ## Now — the look, round three
 
 Two adversarial rounds took the critics' score from 24/100 (AMATEUR) to an

@@ -201,15 +201,34 @@ export class AutoExposure {
           // around 1.5-2.5; 8 is comfortably above any real surface and well
           // below the sun disc, so it only ever bites on genuine specular
           // events and the sky's solar core.
-          8.0,
+          //
+          // PER THEME, and the void needs it an order of magnitude lower. In a
+          // scene lit BY OBJECTS the brightest thing in frame is an emissive
+          // two or three orders of magnitude above the rock beside it, so a
+          // clamp set above it lets one beam swinging into view drag the
+          // weighted log-average by whole stops. That is the "metering loop
+          // hunts" failure `docs/art-direction-void.md` §7.4 names, and the
+          // clamp is the only place it can be stopped before the feedback
+          // loop: a low clamp says "an emissive counts as a bright surface,
+          // not as a sun", which is exactly the metering judgement wanted.
+          options.tapClamp ?? 8.0,
           // centreFalloff: weight = exp(-r^2 * 1.1) over ndc, so the corners get
           // ~13% of the centre's vote. Tight enough to be centre-weighted,
           // loose enough that a wall filling the left half still counts.
-          1.1,
+          options.centreFalloff ?? 1.1,
           // horizonBias: the top of the frame votes at 30%. Not zero — the sky
           // IS the key light here and ignoring it entirely makes the exposure
           // jump every time the player looks down at a ledge.
-          0.30,
+          //
+          // PER THEME. Read the comment on the term itself in METER before
+          // changing this: the bias exists to reject a BRIGHT sky, and in a
+          // void the sky is the DARKEST thing in frame, so rejecting the top
+          // of the image no longer rejects an outlier — it just discards a
+          // third of the votes for no reason and makes the meter jumpier every
+          // time the player pitches up. The void therefore runs it at 1.0 (no
+          // screen-position bias at all) and does its sky rejection entirely
+          // through the coverage mask, which knows what is actually sky.
+          options.horizonBias ?? 0.30,
           // skyWeight: a sky texel votes at 15% of a geometry texel. Negative
           // disables the mask entirely, which is what happens when there is no
           // prepass to read (no float render targets); the screen-position bias
@@ -247,7 +266,19 @@ export class AutoExposure {
           // display. 0.18/0.104 is +0.79 stops, so +0.75 lands the average
           // scene value on mid-grey instead of three-quarters of a stop under
           // it. This is the single knob to turn if the game reads dim.
-          0.75
+          //
+          // PER THEME, and it is THE knob that decides where the mass of a
+          // low-key theme sits. Auto-exposure by construction places the
+          // METERED AVERAGE at one fixed display value whatever the scene
+          // luminance is — so a theme cannot be made dark by dimming its
+          // lights, only by telling the meter to aim lower. `art-direction-
+          // void.md` §2 asks for p50 in 22-45 against a default that lands it
+          // near 120, which is about two stops, and that is what the void's
+          // compensation buys. (It was previously carried in src/theme.js and
+          // silently dropped on the floor here, which is why turning the
+          // lights down was the only lever anyone had and why the result was
+          // uniform murk rather than a low-key image.)
+          options.compensation ?? 0.75
         ),
       },
       uLimits: {

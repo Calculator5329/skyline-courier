@@ -163,6 +163,63 @@ export class RenderPipeline {
     // because it is the effect doing the most work for this art direction.
     this.patcher = new MaterialPatcher()
 
+    /**
+     * Point the HAZE at the same sky the dome and the IBL are getting.
+     *
+     * This was a genuine hole rather than a nicety: `options.sky` reached the
+     * IBL and world.js's dome, and the aerial perspective kept the module
+     * defaults from skygrad.js. A theme could therefore repaint the entire
+     * background and still have every distant surface fade into golden-hour
+     * cream — which is precisely the "islands terminating against a colour the
+     * sky never reaches" failure the shared gradient exists to prevent, only
+     * arriving through the theme rather than through a stale constant.
+     *
+     * Note the key rename: the IBL calls them {sunHaze, cloud} and the sky
+     * gradient calls them {sun, deck}. Mapped here, once, rather than asking
+     * every caller to know both vocabularies.
+     */
+    if (options.sky) {
+      this.patcher.setSkyColors({
+        zenith: options.sky.zenith,
+        horizon: options.sky.horizon,
+        deck: options.sky.cloud,
+        sun: options.sky.sunHaze,
+        voidMode: options.sky.voidMode,
+      })
+    }
+
+    /**
+     * Per-theme aerial perspective, as a partial overlay over the measured
+     * defaults in patch.js — the same contract `grade` and `exposure` use.
+     *
+     * `art-direction-void.md` §5 asks for depth in three named bands (near mass
+     * nearly black, mid ruins in violet fog, far structures washed almost to
+     * the fog colour), and the band structure is entirely a function of these
+     * numbers: density sets where the bands land, `floor` sets whether the far
+     * band keeps any identity at all, and `sunLobe` has to go to zero in a
+     * world with no sun or the haze prints a solar hotspot onto a void.
+     */
+    const aerial = options.aerial
+    if (aerial) {
+      if (aerial.density !== undefined) this.patcher.aerialDensity = aerial.density
+      if (aerial.scaleHeight !== undefined) this.patcher.aerialScaleHeight = aerial.scaleHeight
+      if (aerial.referenceHeight !== undefined) {
+        this.patcher.aerialReferenceHeight = aerial.referenceHeight
+      }
+      if (aerial.inscatter !== undefined) this.patcher.aerialInscatter = aerial.inscatter
+      if (aerial.floor !== undefined) this.patcher.aerialFloor = aerial.floor
+      if (aerial.rim !== undefined) this.patcher.aerialRim = aerial.rim
+      if (aerial.chroma !== undefined) this.patcher.aerialChroma = aerial.chroma
+      if (aerial.sunLobe !== undefined) this.patcher.aerialSunLobe = aerial.sunLobe
+      if (aerial.extinction) {
+        this.patcher.uniforms.scAerialBeta.value.set(...aerial.extinction)
+      }
+      if (aerial.hazeSun !== undefined) {
+        this.patcher.uniforms.scHazeSun.value.set(aerial.hazeSun)
+          .multiplyScalar(aerial.hazeSunBoost ?? 1.5)
+      }
+    }
+
     /** Can we build the depth/normal prepass and march it? */
     this.contactSupported = this.hdrSupported
     this.gbuffer = null

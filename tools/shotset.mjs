@@ -101,7 +101,14 @@ async function main() {
 function report(outDir, width, height, frames, gl, results) {
   console.log(`\nshot set → ${outDir}   ${width}x${height}, ${frames} pumped frames`)
   console.log(`GL: ${gl ? gl.renderer : 'unknown'}\n`)
-  const head = ['shot', 'ok', 'lum', 'sat', 'p1/p50/p99', 'spread', 'clip hi/lo', 'draws', 'tris', 'ms/f']
+  // `spread` is the 3x3 REGION spread (max region mean - min region mean) and
+  // `dyn` is p99 - p1 over the whole frame. They answer different questions and
+  // they have been confused before: docs/art-direction-void.md §2 writes
+  // "spread (p99-p1)" but quotes the sunset column's REGION numbers beside it,
+  // which sets an acceptance target of >200 against a statistic that would need
+  // a ninth of the frame to average pure white. Printing both is cheaper than
+  // arguing about which one a target meant.
+  const head = ['shot', 'ok', 'lum', 'sat', 'p1/p50/p99', 'spread', 'dyn', 'clip hi/lo', 'draws', 'tris', 'ms/f']
   const rows = results.map((r) => [
     r.shot,
     r.pass ? 'yes' : `NO(${r.fail.join(',')})`,
@@ -109,6 +116,7 @@ function report(outDir, width, height, frames, gl, results) {
     String(r.image.saturation),
     `${r.image.percentiles.p1}/${r.image.percentiles.p50}/${r.image.percentiles.p99}`,
     String(r.image.regionSpread),
+    String(r.image.dynamicRange),
     `${r.image.clipped.highPct}%/${r.image.clipped.lowPct}%`,
     String(r.render.drawCalls),
     String(r.render.triangles),

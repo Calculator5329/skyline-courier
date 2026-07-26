@@ -9,6 +9,7 @@ import { Audio } from './audio.js'
 import { Hud, formatTime } from './hud.js'
 import { SpeedFX } from './fx/speed.js'
 import { GrappleFX } from './fx/grapple.js'
+import { VoidFX } from './fx/voidfx.js'
 import { RenderPipeline } from './render/index.js'
 import { Music } from './music.js'
 import { selectTheme, getTheme } from './theme.js'
@@ -80,6 +81,10 @@ const hud = new Hud()
 // cannot point anywhere — and with an archipelago instead of a corridor,
 // "which way" stopped being answerable from the geometry alone.
 hud.setNav(camera, level)
+// The void's energy beams: one instanced draw call, no colliders, and the only
+// vertical landmarks in a course whose whole difficulty is reading height.
+// See src/fx/voidfx.js. Themes that do not ask for them pay nothing.
+const voidFX = theme.beams ? new VoidFX(scene) : null
 const speedFX = new SpeedFX(scene)
 speedFX.setSize(window.innerWidth, window.innerHeight)
 const grappleFX = new GrappleFX(scene)
@@ -95,9 +100,14 @@ const pipeline = new RenderPipeline(renderer, scene, camera, {
   // dark at all.
   grade: theme.grade || undefined,
   exposure: theme.exposure || undefined,
+  // `aerial` is the third overlay of the same shape, and it is what draws the
+  // depth bands — see src/theme.js. Without it a dark theme's distant geometry
+  // still fades into the shipped golden-hour haze.
+  aerial: theme.aerial || undefined,
   sky: theme.sky
     ? { zenith: theme.sky.zenith, horizon: theme.sky.horizon,
-        sunHaze: theme.sky.sun, cloud: theme.sky.deck }
+        sunHaze: theme.sky.sun, cloud: theme.sky.deck,
+        voidMode: !!theme.sky.voidMode }
     : undefined,
 })
 pipeline.setSize(window.innerWidth, window.innerHeight)
@@ -453,6 +463,7 @@ function tick(dt) {
   // reachable, so the effect keeps climbing through the fast part of a run.
   audio.update(player, TUNING.maxSpeed * 0.8)
   world.update(now, player.position)
+  voidFX?.update(now)
   hud.update(run.time, {
     time: run.time,
     player,
