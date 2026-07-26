@@ -411,13 +411,25 @@ const GLOW_DEFAULTS = {
   chroma: 0.85,
   /**
    * Peak of the view-dependent internal glow, facing the camera at the tip.
-   * 6.0 is ~34x display white: it clips, it blooms, and it is supposed to. This
-   * is the term that carries the shard's whole light-source read now that the
-   * body is a mid-tone, and it is what puts p99 back over §2's 215.
+   *
+   * WAS 6.0 (~34x display white). Calibrated against the shot set that is
+   * correct, and against a PLAYER's frame it was not: at the ranges you
+   * actually pass a hero cluster the core covered most of the silhouette,
+   * bloomed over its own edges, and the shards read as white smears with no
+   * facets — Ethan's screenshot beside the reference is unambiguous about it.
+   * The reference's crystals are bright AND still legibly faceted.
+   *
+   * 2.6 is ~15x display white: still far over the 1.05 bloom threshold, so it
+   * is still a light source and p99 still clears §2's 215, but the violet body
+   * and the facet steps survive around it. The lesson worth keeping: a value
+   * tuned on a distant shot is not tuned for the range the player meets it at.
    */
-  coreGain: 6.0,
+  coreGain: 2.6,
   /**
-   * 22. This is the WIDTH of the core and it is the most sensitive number in
+   * 26, up from 22 for the same reason as the gain above — a tighter core
+   * leaves more of the shard reading as crystal rather than as glow.
+   *
+   * This is the WIDTH of the core and it is the most sensitive number in
    * the file. The exponent has to be this high because the welded normal on a
    * 4-7 sided prism turns slowly: measured on the course, `dot(N,V)^2.5` lit
    * most of the shard and read as "the whole thing is white", ^10 was still a
@@ -426,7 +438,7 @@ const GLOW_DEFAULTS = {
    * it. 22 gives a core about a third of the silhouette wide with a soft
    * shoulder, which is what the reference has.
    */
-  corePower: 22.0,
+  corePower: 26.0,
   /**
    * 0.16. How much core survives at the BASE of a shard, where the light has
    * travelled furthest. Not zero, because a shard whose lower half has no
