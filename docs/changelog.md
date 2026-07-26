@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-07-25 — the void gets its own rock, and themes get a surface half
+
+Ethan, after playing the void: the rock "is nowhere close to the reference
+image". It was not — `PALETTE.stone` and the `stone` painter were SHARED with
+the sunset level, so the void's entire mass was the archipelago's cool
+grey-green limestone under a violet light. `art-direction-void.md` §2's
+value-structure table passed the whole time, which is exactly what §0 warns
+about: those numbers only say the LIGHTING is right.
+
+**The seam.** `theme.surfaces` gains two keys beside the `shade` multiplier
+`voidkit.js` was already reading:
+
+- `surfaces.kinds` — a per-theme alias map, resolved in `materials.js`
+  `resolveKind` at the point a material is built. The void maps `stone` →
+  `voidrock`, so every `L.solid(..., 'stone')` in the course comes out as void
+  rock with no change in `voidkit.js`, `levels/void.js` or `kit.js`. Aliasing at
+  material-build time rather than renaming kinds at the call site leaves
+  batching, coverage and the draw-call budget bit-identical — the batch key is
+  still the kind the caller named.
+- `surfaces.macro` — the five environment-derived colours in
+  `materials/shader.js` (`scCavityCol`, `scShadeCol`, `scSkyWarmCol`,
+  `scHorizonCol`, `scPatinaCol`), five of `scaling-plan.md`'s 48 hardcoded
+  colours and the five every lit texel passes through. Each is a claim about a
+  golden-hour sky ("a pocket sees the cool green zenith") and each is false in a
+  void. Defaults are the skyline's own values lifted verbatim, so a theme that
+  names none of them renders exactly as before.
+
+**Two new painters, structural rather than hue-rotated.** `scaling-plan.md` is
+explicit that a structurally distinct theme needs the painters parameterised by
+structure, and a violet limestone would have failed §8 on sight.
+
+- **`voidrock`** — built on a new `fracture()` primitive: a tiling
+  jittered-lattice Worley cell returning distance, cell-boundary proximity, a
+  stable per-cell id and a per-facet tilt. Two octaves (0.60 m facets, 0.22 m
+  chips) give flat facets at their own levels and their own tilts meeting along
+  hard 1.4-2.5 cm creases. There is no dome in it anywhere, which is the whole
+  point: `stone` is 46 domes and 26 crevices, the vocabulary of rock that has
+  weathered, and this rock has not. Plus mineral veins on a third, unrelated
+  fault system, and embedded blue/violet micro-crystal drawn as facets on all
+  four channels.
+- **`voidcarved`** — §4.1's machined cliff. A `PANEL_TABLE` in the spirit of
+  `COURSE_TABLE`, but describing a different act of building: one 2.38 m panel
+  per tile on an ALIGNED grid, square 1.2 cm shoulders against ashlar's 3-4 cm
+  chamfers, an incised inner border, machined index ticks at a regular pitch,
+  and violet mote dust in the grooves driven by the cavity of the height field.
+  Two corrections got it there, both recorded in the source: 0.8-1.2 m panels
+  rendered as brick, and so did 2.38 x 1.3 m panels, because the `offset` column
+  was staggering the rows into a running bond. Size was never the tell; the bond
+  was.
+
+**Calibration, and the thing most likely to be "fixed" back.** §3's `#14101F` to
+`#2A2438` is a colour read off the reference IMAGE, so it is a rendered pixel,
+not a reflectance. Painted as an albedo it is invisible — measured at rgb(1.0,
+0.9, 7.1) on `ascent.png`, i.e. black, because the void's key runs at an eighth
+of the skyline's with no sun behind it. `PALETTE.voidrock` is `0x564c68`, the
+reflectance that RENDERS to §3: a shaded face lands at rgb(25.4, 8.3, 47.2),
+hue 266.4 against §3's 268. Brass makes the same argument for the same reason.
+
+**Not fixed, and not in this lane** (both now in `docs/roadmap.md`): the lit
+faces are still tan, and it is not the surface. `scHazeSun` in
+`render/patch.js` is `0xfff0d2 * 1.5` and is added to everything as a Fresnel
+rim at the void's doubled `aerial.rim` of 0.32. With the rim off the same face
+renders at rgb(1.0, 0.9, 7.1) — the rim is supplying essentially all of the
+light on the void's mass, and supplying it warm.
+
+`skyline` is unchanged. `closeup` measures lum 111.1 / sat 0.807 / p1-p50-p99
+21.5-116.8-187.9 against a pre-change baseline of 111.1 / 0.807 /
+21.6-116.8-187.9, and `tools/ship-gate.sh` is green.
+
 ## 2026-07-25 — crystal shards: the void theme's light, as geometry
 
 `docs/art-direction-void.md` §4.3 asks for two families of jagged faceted

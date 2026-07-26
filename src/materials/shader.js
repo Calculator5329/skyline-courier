@@ -153,6 +153,56 @@ export const SHARED = {
   scHorizonCol: { value: new THREE.Color(1.55, 1.18, 0.72) },
 }
 
+/**
+ * THE FIVE SHARED COLOURS ARE THEME DATA, not constants.
+ *
+ * Every value in `SHARED` above is a statement about THIS SKY: "a pocket sees
+ * the cool green zenith", "an up face sees the warm horizon ring", "the sharp
+ * structure in this environment is the cloud sea". All five are true of a
+ * golden-hour archipelago and all five are false in a void, where there is no
+ * sun, no horizon and no cloud sea — `docs/art-direction-void.md` §1: the
+ * sunset theme is "lit BY THE SKY", the void theme is "lit BY OBJECTS".
+ *
+ * They are five of `docs/scaling-plan.md`'s 48 hardcoded colours, and they are
+ * the five with the largest reach, because every lit texel in the game passes
+ * through at least one of them. Left alone under the void they paint a warm
+ * horizon bias onto every up-facing rock and a green zenith into every crevice,
+ * which is a large part of why near-black violet rock photographed as pale
+ * chalky limestone.
+ *
+ * The defaults below are the skyline's own values, LIFTED VERBATIM, so a theme
+ * that names none of them renders exactly as before. `theme.surfaces.macro`
+ * names the ones it wants to move; `applyThemeSurfaces` in materials.js is the
+ * only caller.
+ */
+const MACRO_DEFAULTS = {
+  cavity: [0.52, 0.68, 0.64],
+  shade: [0.72, 0.94, 0.93],
+  skyWarm: [1.14, 0.90, 1.06],
+  horizon: [1.55, 1.18, 0.72],
+  patina: 0x4e8f7a,
+}
+
+/**
+ * Point the five environment-derived colours at a theme's own sky.
+ *
+ * Values are linear multipliers (or a hex, for patina, which is a substance
+ * rather than a light). Anything omitted falls back to the skyline default, so
+ * a partial block is legal and means "leave the rest alone".
+ */
+export function setMacroColors(macro = {}) {
+  const m = { ...MACRO_DEFAULTS, ...macro }
+  const set = (u, v) => {
+    if (Array.isArray(v)) u.value.setRGB(v[0], v[1], v[2])
+    else u.value.set(v)
+  }
+  set(SHARED.scCavityCol, m.cavity)
+  set(SHARED.scShadeCol, m.shade)
+  set(SHARED.scSkyWarmCol, m.skyWarm)
+  set(SHARED.scHorizonCol, m.horizon)
+  set(SHARED.scPatinaCol, m.patina)
+}
+
 /** Point the dust wedge at a different set of floor planes (max four). */
 export function setGroundLevels(levels) {
   const v = SHARED.scGroundLevels.value
