@@ -406,6 +406,44 @@ class Archipelago {
     }
   }
 
+  /**
+   * Every trigger point stands on a deck, with room to stand there.
+   *
+   * Found four real bugs the moment it was written, all the same shape: a
+   * dome, an armillary and two take-off terraces placed at the centre of the
+   * island whose checkpoint was also at the centre — so the marker the player
+   * is steering at was inside a wall. Nothing else catches this. The graph
+   * proves you can GET to an island; only the collision world knows whether
+   * the spot you are being sent to is a place a body fits.
+   */
+  static assertTriggersClear(collision, points) {
+    const R = 0.34, H = 1.75
+    const bad = []
+    for (const [label, x, z, cy] of points) {
+      let deck = -Infinity
+      for (const b of collision.boxes) {
+        if (x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z) continue
+        if (b.max.y <= cy + 0.05 && b.max.y > deck) deck = b.max.y
+      }
+      if (deck === -Infinity) { bad.push(`${label}: nothing solid under it`); continue }
+      const rise = cy - deck
+      if (rise <= 0 || rise >= 3.0) { bad.push(`${label}: trigger sits ${rise.toFixed(2)} m over its deck`); continue }
+      for (const b of collision.boxes) {
+        const dx = Math.max(b.min.x - x, 0, x - b.max.x)
+        const dz = Math.max(b.min.z - z, 0, z - b.max.z)
+        // Overlaps the capsule in plan, stands more than a step proud of the
+        // deck, and is not high enough to duck under.
+        if (dx * dx + dz * dz >= R * R) continue
+        if (b.max.y <= deck + 0.5 || b.min.y >= deck + H) continue
+        bad.push(`${label}: buried in ${b.tag} (top ${b.max.y.toFixed(2)}, deck ${deck.toFixed(2)})`)
+        break
+      }
+    }
+    if (bad.length) {
+      throw new Error(`archipelago: ${bad.length} trigger point(s) a player cannot stand on:\n  ${bad.join('\n  ')}`)
+    }
+  }
+
   /** Travelled length of a named path, through island centres. */
   pathLength(ids) {
     let sum = 0
@@ -1676,7 +1714,9 @@ export function buildCourse(collision) {
     dress(x, y, z, lx, lz, i === 2)
     A.link(i === 0 ? 'observatory' : LEG_A[i - 1][0], id, 'standard')
   })
-  K.observatoryDome(L, 333, 30.0, -47, { radius: 3.6, wallHeight: 4.2 })
+  // Off the diagonal the route takes across this island, not on it: a dome
+  // centred on the deck puts a solid wall exactly where the checkpoint is.
+  K.observatoryDome(L, 336, 30.0, -50.4, { radius: 3.2, wallHeight: 4.2 })
   L.checkpoint(333, 31.0, -47, 'the north spur')
 
   // ---- Leg B: the long west run. 190 m back down the world, descending. ----
@@ -1701,8 +1741,14 @@ export function buildCourse(collision) {
     dress(x, y, z, lx, lz, cp)
     A.link(i === 0 ? 'spur-4' : LEG_B[i - 1][0], id, 'standard')
   })
-  K.archway(L, 262, 20.5, -73, { axis: 'x', span: 6, pierWidth: 1.3, depth: 1.8, springHeight: 3.4 })
-  K.colonnade(L, 218, 10.5, -78, { count: 4, spacing: 3.4, height: 3.4, radius: 0.46 })
+  // SPANNING ACROSS THE RUN, not along it. Leg B runs -X, so `axis: 'x'`
+  // put a 1.3 m pier squarely in the running line and the harness came back
+  // with a wall three metres from the lens. An arch is a gate you run
+  // through; its piers belong either side of you.
+  K.archway(L, 262, 20.5, -73, { axis: 'z', span: 6, pierWidth: 1.3, depth: 1.8, springHeight: 3.4 })
+  // Off to the south rim: a colonnade laid down the island's centre line is
+  // four solid columns in the middle of a leg that runs along X.
+  K.colonnade(L, 218, 10.5, -81.4, { count: 4, spacing: 3.4, height: 3.4, radius: 0.46 })
   K.balustrade(L, 145, -13.0, -76, { length: 13, height: 1.05, thickness: 0.45 })
   L.checkpoint(262, 21.5, -73, 'the west run')
   L.checkpoint(205, 6.0, -79, 'the low road')
@@ -1727,7 +1773,8 @@ export function buildCourse(collision) {
     dress(x, y, z, lx, lz, cp)
     A.link(i === 0 ? 'west-9' : LEG_C[i - 1][0], id, 'standard')
   })
-  K.armillary(L, 150, -20.0, 3, { radius: 2.8 })
+  // Off the run line for the same reason: the deep's checkpoint is at x=150.
+  K.armillary(L, 145.5, -20.0, 6, { radius: 2.8 })
   K.waterfall(L, 150, -20.4, -3.5, { height: 26, width: 2.4 })
   L.checkpoint(150, -19.0, 3, 'the deep')
   L.checkpoint(156, -15.0, 38, 'the south shore')
@@ -1742,7 +1789,7 @@ export function buildCourse(collision) {
   isle('orrery-foot', 172, -14.0, 42, 16, 15, BUILT, { detail: 2, post: [-6, 0] })
   dress(172, -14.0, 42, 16, 15, true)
   A.link('deep-6', 'orrery-foot', 'standard')
-  K.colonnade(L, 167, -14.0, 46, { count: 3, spacing: 3.4, height: 3.4, radius: 0.46 })
+  K.colonnade(L, 167, -14.0, 48.6, { count: 3, spacing: 3.4, height: 3.4, radius: 0.46 })
   L.checkpoint(172, -13.0, 42, 'the foot of the orrery')
 
   const ORR = { x: 204, z: 66, r: 20, y0: -12, step: 7.6 }
@@ -1783,7 +1830,8 @@ export function buildCourse(collision) {
   rampUp(ORR.x, crownY, ORR.z, -1, -1, 3)
   A.link('orrery-5', 'orrery-crown', 'standard')
   K.observatoryDome(L, ORR.x + 4.5, crownY, ORR.z + 4.5, { radius: 4.4, wallHeight: 5 })
-  L.checkpoint(ORR.x, crownY + 1.0, ORR.z, 'the orrery')
+  // Beside the crown's take-off terrace, not inside it.
+  L.checkpoint(ORR.x, crownY + 1.0, ORR.z - 5.5, 'the orrery')
 
   // THE FAST LINE, authored by three lanterns. Each one is a bracket off the
   // shaft hanging in the air the player is already flying through, and each
@@ -1838,7 +1886,9 @@ export function buildCourse(collision) {
     K.cypress(L, sx - Math.cos(a) * 4.6, sy, sz - Math.sin(a) * 4.6, { height: 4.5 + r2() * 3, rand: r2 })
     A.link(k === 0 ? 'high-6' : `sky-${k - 1}`, id, 'standard')
   }
-  L.checkpoint(160.5, 66.2, 8.72, 'the last light')
+  // On the top course of sky-2's terrace: the natural pause point on the
+  // climb, and the one part of that deck the terrace does not cover.
+  L.checkpoint(155.0, 72.3, 8.72, 'the last light')
 
   const FIN_Y = SKY.y0 + 5 * SKY.step          // 88.0 — the top of the world
   isle('skyline', SKY.x, FIN_Y, SKY.z, 18, 18, BUILT, { detail: 2, bodyDepth: 4.5 })
@@ -1868,7 +1918,7 @@ export function buildCourse(collision) {
   // from the spawn it is 30 degrees above the horizon and dead ahead, which is
   // the whole point — one unmistakable cue that names where the route ends
   // before the player has taken a single step.
-  L.beaconAt = { x: SKY.x + 3, y: FIN_Y + 7, z: SKY.z, height: 130, radius: 4.4 }
+  L.beaconAt = { x: SKY.x + 5.5, y: FIN_Y + 8, z: SKY.z, height: 130, radius: 4.4 }
 
   // ---- The branch lines -------------------------------------------------
   //
@@ -1962,12 +2012,20 @@ export function buildCourse(collision) {
   // chain's landing on a grapple off a lantern that was already there. A
   // lantern placed for one crossing authoring a second is exactly the point of
   // "grapple range is the connectivity graph".
+  //
+  // THE ALTITUDES HERE ARE NOT FREE. `mid-3` flies directly over `deep-6` on
+  // the leg-C climb, and a drumPlatform hangs a ~13 m boulder tail under its
+  // deck — at the first altitude these were given, that tail came down to
+  // within half a metre of the deck below and the south shore checkpoint was
+  // inside it. The whole branch was lifted so the tail clears the deck under
+  // it by more than a standing capsule. `assertTriggersClear` is what caught
+  // it; the rule is that a branch crossing over a leg needs 15 m, not 14.
   const BR_R = [
     ['mid-1', 127, -1.0, 19, 13, 12],
-    ['mid-2', 138, -3.0, 32, 12, 12],
-    ['mid-3', 156, -2.0, 38, 12, 12],
-    ['mid-4', 170, 0.0, 28, 12, 12],
-    ['mid-5', 176, 1.0, 14, 12, 12],
+    ['mid-2', 138, -1.0, 32, 12, 12],
+    ['mid-3', 156, 1.0, 38, 12, 12],
+    ['mid-4', 170, 1.0, 26, 12, 12],
+    ['mid-5', 176, 2.0, 14, 12, 12],
   ]
   branch(BR_R, WILD)
   A.link('underpass', 'mid-1', 'standard')
@@ -1977,9 +2035,9 @@ export function buildCourse(collision) {
   A.link('mid-2', 'mid-3', 'standard')
   A.link('mid-3', 'mid-2', 'standard')
   A.link('mid-3', 'mid-4', 'standard')
-  A.link('mid-4', 'mid-3', 'free')
+  A.link('mid-4', 'mid-3', 'standard')
   A.link('mid-4', 'mid-5', 'standard')
-  A.link('mid-5', 'mid-4', 'free')
+  A.link('mid-5', 'mid-4', 'standard')
   A.link('mid-5', 'chain-head', 'grapple',
     { anchor: [193.5, 4.9, -4.6], note: 'the section-6 landing lantern, reused as a crossing' })
 
@@ -2112,6 +2170,11 @@ export function buildCourse(collision) {
     'skyline',
   ]
   const report = A.verify('terrace', 'skyline', SPINE)
+  Archipelago.assertTriggersClear(collision, [
+    ...L.checkpoints.map((c) => [c.label, c.position.x, c.position.z, c.position.y]),
+    ['finish', L.finish.x, L.finish.z, L.finish.y],
+    ['spawn', L.spawn.x, L.spawn.z, L.spawn.y],
+  ])
   report.routeMetres = Math.round(A.pathLength(ROUTE))
   report.checkpoints = L.checkpoints.length
   report.solidIslands = A.nodes.size
