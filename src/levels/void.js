@@ -252,14 +252,44 @@ export function buildVoidCourse(collision) {
 
   // ============================================================ THE FLIGHT
   //
-  // Twelve hero islands on a widening, rising spiral, spaced across the WHOLE
-  // band table — free hops next to 30 m grapple crossings — because a course
-  // with one characteristic distance has one characteristic feeling. The
-  // radius grows as it climbs so the space opens OUT: the reference image is
-  // vast, and a shaft of constant width reads as a corridor however tall.
-  const HEROES = 40
+  // The course used to be ONE widening spiral of forty near-identical hops.
+  // Ethan wants it "vast and expanding" and said twice it must be bigger — and
+  // a spiral of forty similar crossings at ninety similar distances is not
+  // vast, it is repetitive. So the flight is now built in SECTIONS with
+  // distinct character (docs/course-design.md: "teach, then combine, then
+  // test"), climbing higher, reaching further OUT, and — once — diving BELOW
+  // itself, the one axis the old course never used:
+  //
+  //   the ledges    a low rhythm of plain jumps, before any anchor exists
+  //   the climb     the spiral proper: grapple crossings, walls, cathedrals
+  //   the wide      the radius throws OUT to ~180 m and the walls thin to sky
+  //   the plunge    a dive off the wide arc, down into the deep and back up
+  //   the weave     the radius pulls IN and the route zig-zags, tight and fast
+  //   the approach  the final ascent, pulling toward the axis and the spire
+  //
+  // Every distance is still the band table's, and every crossing over 2.2 m of
+  // climb is a grapple whose two legs `Archipelago.link` re-proves — nothing
+  // below is placed by eye.
+  const HEROES = 44
   const heroIds = []
   const walls = []
+  const lerp = (a, b, u) => a + (b - a) * u
+  // The radius PROFILE, as keyframes in t. Out to a vast 178 m at the middle
+  // of the climb, then pulled back toward the axis for the weave and the
+  // spire. Piecewise-linear so the per-step change stays bounded well under
+  // the crossing budget: the steepest segment is ~7 m of radius per island,
+  // and the ±6 m jitter on top of it never brings a step near the 31 m cap the
+  // law-of-cosines guard enforces below.
+  const R_KEYS = [[0, 36], [0.28, 100], [0.5, 178], [0.72, 96], [1, 50]]
+  const rProfile = (u) => {
+    for (let k = 1; k < R_KEYS.length; k++) {
+      if (u <= R_KEYS[k][0]) {
+        return lerp(R_KEYS[k - 1][1], R_KEYS[k][1],
+          (u - R_KEYS[k - 1][0]) / (R_KEYS[k][0] - R_KEYS[k - 1][0]))
+      }
+    }
+    return R_KEYS[R_KEYS.length - 1][1]
+  }
 
   // ---------------------------------------------------------- COLOSSAL SCALE
   //
@@ -300,7 +330,7 @@ export function buildVoidCourse(collision) {
   //     their narrow root; the wide spray happens tens of metres overhead,
   //     offset outward, framing the vantage without ever crossing the rune the
   //     player has to read (§6).
-  const COLOSSAL_WALLS = new Set([0, 8, 16, 24, 32])
+  const COLOSSAL_WALLS = new Set([0, 12, 24, 34, 42])
   const placeColossus = (i, r, ang, yTop, axis) => {
     const alongX = axis === 'x'
     const cwx = Math.cos(ang) * (r + 26), cwz = Math.sin(ang) * (r + 26)
@@ -353,61 +383,60 @@ export function buildVoidCourse(collision) {
       })
   }
 
+  // ------------------------------------------------------------- the ledges
+  //
+  // A low rhythm of plain jumps leaving the plaza, before the flight and before
+  // any anchor exists. The old course put a grapple crossing as the player's
+  // very first move; this teaches the jump first (docs/course-design.md:
+  // "teach, then combine"). Small pads, a gentle 2 m/step rise so `connect`
+  // keeps them as hops rather than grapples, and it hands off to the spiral at
+  // the height and bearing the first hero wants.
   let prev = 'plaza'
+  const LEDGES = 6
+  for (let i = 0; i < LEDGES; i++) {
+    const u = i / (LEDGES - 1)
+    const la = 0.7 + (u - 0.5) * 0.4
+    const lr = 10 + u * 30
+    const ly = 2 + u * 10
+    const id = `ledge-${i}`
+    pad(id, Math.cos(la) * lr, ly, Math.sin(la) * lr, 5)
+    connect(prev, id, 'the ledges — a plain jump, no anchor needed')
+    prev = id
+  }
+
+  // ------------------------------------------------------------- the spiral
   let ang = 0.7
   let lastR = 0
+  let dir = 1
   for (let i = 0; i < HEROES; i++) {
     const t = i / (HEROES - 1)
-    // The radius JITTER has to be counted against the crossing budget too: the
-    // angular cap bounds the arc, but a swing of +/-12 m in radius on top of it
-    // is another 24 m of chord the cap never saw. Kept modest for that reason —
-    // the course gets its size from the growing radius and the count, not from
-    // the wobble.
-    const r = 32 + t * 106 + 7 * Math.sin(i * 1.7)
-    // THE ANGULAR STEP IS CAPPED BY GRAPPLE RANGE, not chosen for looks. A
-    // fixed step that reads well at r=18 throws the next island 43 m away at
-    // r=56, which is past the cuff and therefore unbuildable. Chord = 2r
-    // sin(step/2), so this is the largest step that keeps the next island
-    // inside a 29 m reach with slack under the 34 m limit.
+    // Radius from the phase PROFILE plus a modest jitter. The profile carries
+    // the size (out to ~184 m, back to ~50 m); the jitter only textures it.
+    const r = rProfile(t) + 6 * Math.sin(i * 1.7)
     if (i > 0) {
-      // 36 m of crossing. The midpoint anchor puts each leg at ~18 m, which is
-      // just inside the 19 m `committed` arrival and far inside the 31.9 m
-      // shot limit — so 38 m is the hard ceiling this geometry allows and 36
-      // leaves a metre of slack for the rim maths. Chord = 2r sin(step/2).
-      //
-      // Ethan: "we will have it be much longer, much bigger... we can cover
-      // more distance, both height-wise, but also distance-wise" and "release
-      // the constraints on yourself". This is the number that decides how big
-      // the course feels, and it is now at the physical limit of the cuff.
-      // THE LAW OF COSINES, not the chord formula. Consecutive islands do not
-      // share a radius — this spiral widens by up to 17 m in a step — and
-      // `2r sin(dtheta/2)` silently assumes they do. Two attempts at budgeting
-      // the radial change out of the arc still overran (39.4 m, then 38.8 m,
-      // against a 34 m cuff) because the error is not separable.
-      //
-      // CROSSING is centre-to-centre, and the 34 m cuff limit is what bounds
-      // it: the graph measures rim-to-rim (so it sees less than this) but the
-      // guard below measures centres (so it sees exactly this), and the guard
-      // is the stricter of the two. 33 leaves a metre of slack under it.
-      //
-      // Exactly: d^2 = r1^2 + r2^2 - 2 r1 r2 cos(dtheta). Solve it for the
-      // dtheta that lands d on the cap, and clamp when even dtheta = 0 is too
-      // far — which happens when the RADIAL step alone exceeds the cap, and is
-      // a real constraint on how fast the spiral may open out.
+      // THE LAW OF COSINES, not the chord formula — consecutive islands do not
+      // share a radius. Solve d^2 = r1^2 + r^2 - 2 r1 r cos(dtheta) for the
+      // dtheta that lands the crossing on CROSSING (31, a metre under the 34 m
+      // cuff), and clamp when even dtheta = 0 is too far (the radial step alone
+      // exceeds the cap). The guard measures centres, the graph measures rims,
+      // so the guard is the stricter of the two and this is what keeps every
+      // crossing physically buildable however the profile opens out.
       const r1 = lastR || r
       const cosStep = (r1 * r1 + r * r - CROSSING * CROSSING) / (2 * r1 * r)
       const maxStep = cosStep >= 1 ? 0 : cosStep <= -1 ? Math.PI : Math.acos(cosStep)
-      // Alternate the direction of travel around the shaft every few islands,
-      // so the route doubles back over itself and the player keeps seeing the
-      // space they just crossed from a new side.
-      ang += Math.min(2.1, maxStep) * (i % 5 === 0 ? -1 : 1)
+      // The route DOUBLES BACK at a phase-dependent cadence — a long smooth
+      // sweep out through the wide band, a tight zig-zag through the weave — so
+      // the player keeps seeing the space they crossed from a new side, and so
+      // each section reads differently even though the crossing budget is one.
+      const cadence = t < 0.28 ? 5 : t < 0.5 ? 999 : t < 0.72 ? 3 : 2
+      if (i % cadence === 0) dir = -dir
+      ang += Math.min(2.1, maxStep) * dir
     }
-    // The VERTICAL variance is charged against the grapple shot as well. The
-    // anchor hangs `LIFT` above the higher of the two islands, so the shot is
-    // hypot(crossing/2, rise + LIFT) — and a +/-7 m wobble on a 12.5 m rise
-    // makes some steps a 26 m climb, which put the shot at 32.6 m against a
-    // 31.9 m limit. Halved for that reason, not for looks.
-    const y = 5 + i * 12.5 + 3.5 * Math.sin(i * 2.3)
+    // Steady climb to a finish ~80 m higher than the old spire. The ±2 m jitter
+    // is charged against the grapple shot like everything else: a step never
+    // climbs more than ~17 m, which keeps the shot inside 31.9 m even on the
+    // tightest crossing and leaves the dive-spurs their own margin below.
+    const y = 18 + i * 13 + 2 * Math.sin(i * 2.3)
     const id = `hero-${i}`
     // Landing size falls as the course goes on: the difficulty curve lives in
     // the TARGET, not in the distance, so late jumps ask for precision while
@@ -426,35 +455,24 @@ export function buildVoidCourse(collision) {
     connect(prev, id, 'the flight — long crossing, swing up into the landing')
     prev = id
 
-    // PREFAB HOOK: a great wall stands beyond every other hero island, giving
-    // the flight a wall-run face and the frame a vertical (§5). Placeholder
-    // slab until src/voidkit.js lands.
-    if (i % 2 === 0) {
+    // A great wall stands beyond the island — a wall-run face and a vertical
+    // for the frame (§5). DENSE where the architecture teaches (the climb) and
+    // crowns the finish (the approach); THIN through the wide band, where the
+    // point is open sky. Both densities are variety.
+    const wallHere = (t < 0.28 || t > 0.72) ? (i % 2 === 0) : (i % 4 === 0)
+    if (wallHere) {
       const wx = Math.cos(ang) * (r + 16), wz = Math.sin(ang) * (r + 16)
       // `greatWall` only runs along X or Z, so pick whichever is more nearly
-      // tangential to the spiral here — that is the face the player travels
-      // alongside, and therefore the one they can wall-run.
+      // tangential to the spiral here — the face the player travels alongside.
       const axis = Math.abs(Math.cos(ang)) > Math.abs(Math.sin(ang)) ? 'z' : 'x'
       greatWall(L, wx, y - 14, wz, {
         height: 46, length: 40, thickness: 4, axis, detail: 2, seed: hash(`wall-${i}`),
       })
-      // Kept so the dressing pass below can build ON the walls. A wall is
-      // 40 m of cornice at 32 m over its island and it carried nothing at all;
-      // it is the largest unused surface in the level.
       walls.push({ x: wx, y: y - 14, z: wz, axis, height: 46, length: 40, i, ang })
-      // The sigil ring rides the wall face. §4.1 calls it the most memorable
-      // element after the crystals, and it doubles as a landmark for reading
-      // which way is on.
-      // SEVERAL STOREYS ACROSS, and on most walls. art-direction-void.md §4.1
-      // calls the sigil ring "the most memorable element after the crystals"
-      // and notes the largest in the reference spans several storeys — ours
-      // were 7.5 m on a 46 m wall, which reads as a decal rather than as
-      // architecture. Ethan, on the current build: "continually iterating to
-      // look more like the reference screenshot."
-      //
-      // A big one low on the face where the player passes it, and on every
+      // A big sigil low on the face where the player passes it, and on every
       // third wall a second, smaller one high up, so the wall has a hierarchy
-      // rather than one centred badge.
+      // rather than one centred badge. §4.1 calls it the most memorable element
+      // after the crystals.
       sigilRing(L, wx, y + 9, wz, {
         radius: 13 + (i % 3) * 2.5, axis, color: colors.sigil, detail: 2,
       })
@@ -470,6 +488,37 @@ export function buildVoidCourse(collision) {
     }
   }
 
+  // ------------------------------------------------------------- the plunge
+  //
+  // The one thing the old course never did: go DOWN. A dive off the wide arc
+  // into the deep, then a near-vertical climb back to the line it left. Falling
+  // is cheap — you just fall — so the dive is a chain of one-way drops; the
+  // climb out is the expensive axis, so it is a stack of near-vertical grapples
+  // — small horizontal, ~20 m of lift each, which is exactly what one anchor
+  // over a shaft buys. It loops back onto hero-22, so it can never be a trap:
+  // you arrive by dropping in and you leave by the way you climbed. Every leg
+  // was solved against the grapple maths by hand — the horizontal offsets are
+  // kept > 2·rim so the reverse shot off the higher island clears the 5 m
+  // minimum, and the climbs stay under ~24 m so the shot clears the 31.9 m max.
+  {
+    const e = nodes.get('hero-22')
+    const inv = 1 / (Math.hypot(e.x, e.z) || 1)
+    const ix = -e.x * inv, iz = -e.z * inv          // unit vector toward the axis
+    const P = (id, along, dy, w) =>
+      pad(id, e.x + ix * along, e.y + dy, e.z + iz * along, w)
+    P('plunge-0', 16, -24, 8)
+    P('plunge-1', 30, -46, 9)     // the basin — the deepest point on the course
+    P('plunge-2', 42, -24, 8)
+    P('plunge-3', 28, -4, 8)
+    drop('hero-22', 'plunge-0', 'the dive — off the wide arc, into the deep')
+    drop('plunge-0', 'plunge-1', 'deeper — the basin, 46 m below the line')
+    const b = nodes.get('plunge-1')
+    L.checkpoint(b.x, b.y + 1.0, b.z, 'the basin')
+    connect('plunge-1', 'plunge-2', 'climbing the shaft — a near-vertical hook')
+    connect('plunge-2', 'plunge-3', 'climbing the shaft')
+    connect('plunge-3', 'hero-22', 'back onto the line')
+  }
+
   // ============================================================ SIDE PATHS
   //
   // Optional, not recovery. Each branches off a hero island, sits somewhere
@@ -477,7 +526,7 @@ export function buildVoidCourse(collision) {
   // is a trap and `verify()` says so. These are where a player who is good
   // with the cuff gets rewarded for looking around, which is the whole point
   // of giving them 34 m of grapple.
-  const BRANCH_AT = [3, 8, 13, 18, 23, 28, 33, 37]
+  const BRANCH_AT = [3, 8, 13, 19, 25, 30, 36, 41]
   BRANCH_AT.forEach((h, k) => {
     const base = nodes.get(heroIds[h])
     const nxt = nodes.get(heroIds[Math.min(h + 1, HEROES - 1)])
@@ -485,12 +534,17 @@ export function buildVoidCourse(collision) {
     // hung off the parent alone kept landing outside grapple range of the
     // island it has to rejoin, which is the same physical limit as above and
     // is worth solving by construction rather than by nudging constants.
+    // Placed OUTWARD from the midpoint of the crossing, straight along its
+    // radius — no angular rotation. An earlier version rotated the spur a fixed
+    // 0.22 rad around the shaft, which was fine while the route only ever wound
+    // one way but throws the spur >34 m from its rejoin island the moment the
+    // route DOUBLES BACK (the weave does this repeatedly): the rotation then
+    // fights the step instead of following it. A pure radial offset is
+    // direction-agnostic, so `dOut` stays ~17 m however the arc is turning.
     const mx = (base.x + nxt.x) / 2, mz = (base.z + nxt.z) / 2
-    const ang = Math.atan2(mz, mx) + 0.22
-    // Bounded by the crossing budget, not by a fixed cap: the spur has to be
-    // rejoinable from where it sits, and out at r=90 a flat +5 m offset is a
-    // very different fraction of the arc than it is at r=30.
-    const rr = Math.hypot(mx, mz) + 5
+    const md = Math.hypot(mx, mz) || 1
+    const rr = md + 8
+    const ang = Math.atan2(mz, mx)
     const id = `spur-${k}`
     // Hung BELOW its parent: a dive off the main line, then a climb back. The
     // void reads as bottomless, so dropping deliberately is the boldest thing
@@ -607,10 +661,23 @@ export function buildVoidCourse(collision) {
 
   // Broken obelisks for mid-ground silhouette. Decor by placement — they stand
   // off the route, so they read as ruin rather than as something to land on.
+  //
+  // KEPT CLEAR of every landing and its checkpoint. These are solid (a monolith
+  // owns a collider) and the reshaped route reaches these radii at these
+  // heights, so an obelisk that clipped a rune slab would bury a trigger
+  // (assertTriggersClear catches it) or put a wall across a run. Checked, not
+  // assumed — a few skipped silhouettes cost nothing.
   for (let i = 0; i < 9; i++) {
     const a2 = i * 2.1
     const rr = 34 + (i % 4) * 16
-    monolith(L, Math.cos(a2) * rr, 6 + i * 22, Math.sin(a2) * rr, {
+    const mxo = Math.cos(a2) * rr, myo = 6 + i * 22, mzo = Math.sin(a2) * rr
+    let clear = true
+    for (const n of nodes.values()) {
+      if (Math.abs(n.y - myo) > 16) continue
+      if (Math.hypot(n.x - mxo, n.z - mzo) < Math.max(n.w, n.d) / 2 + 6) { clear = false; break }
+    }
+    if (!clear) continue
+    monolith(L, mxo, myo, mzo, {
       height: 11 + (i % 3) * 4, detail: 1, seed: hash(`mono-${i}`),
     })
   }
@@ -1026,10 +1093,10 @@ export function buildVoidCourse(collision) {
     const t = i / (MID - 1)
     // Follow the spiral's own opening-out, so the mid ruins sit inside the
     // course rather than in a cylinder that the course grows out of.
-    const routeR = 32 + t * 106
+    const routeR = 40 + t * 130
     const a = 1.4 + i * 2.399963          // golden angle: never repeats a spoke
     const rr = routeR * (0.20 + dr() * 0.62)
-    const y = 6 + t * 500 - (24 + dr() * 40)
+    const y = 10 + t * 560 - (24 + dr() * 40)
     const x = Math.cos(a) * rr, z = Math.sin(a) * rr
     const sh = 30 + dr() * 26
     const pick3 = i % 5
@@ -1070,15 +1137,18 @@ export function buildVoidCourse(collision) {
   // nothing was built behind it" as a specific failure mode, and that is what
   // the build was doing.
   //
-  // Four concentric rings of ruin districts, stacked over the whole 508 m of
-  // climb and well below and above it, each ring coarser than the last. At
-  // r >= 190 every one of these is over 78 m from any island, so they are ghost
-  // decor and `Archipelago.verify()` proves it.
+  // Four concentric rings of ruin districts, stacked over the whole ~590 m of
+  // climb and well below and above it, each ring coarser than the last. The
+  // inner ring sits at r >= 235, comfortably outside the widened ~184 m spiral,
+  // so every one of these is over 78 m from any island — ghost decor that
+  // `Archipelago.verify()` proves nobody can reach. (`dressFar` also drops any
+  // single piece that lands inside 78 m, so the clearance holds by construction
+  // even where a ring's jitter reaches inward.)
   const RINGS = [
-    { r: 195, count: 13, detail: 1, scale: 1.0 },
-    { r: 290, count: 15, detail: 1, scale: 1.5 },
-    { r: 400, count: 15, detail: 0, scale: 2.1 },
-    { r: 545, count: 13, detail: 0, scale: 3.0 },
+    { r: 235, count: 14, detail: 1, scale: 1.0 },
+    { r: 330, count: 16, detail: 1, scale: 1.5 },
+    { r: 440, count: 15, detail: 0, scale: 2.1 },
+    { r: 585, count: 13, detail: 0, scale: 3.0 },
   ]
   for (const ring of RINGS) {
     const prev = []
@@ -1088,7 +1158,7 @@ export function buildVoidCourse(collision) {
       const x = Math.cos(a) * rr, z = Math.sin(a) * rr
       // Spread over more than the course's own height so the district reads as
       // going on above and below the climb rather than as a wall around it.
-      const y = -160 + dr() * 820
+      const y = -180 + dr() * 940
       const s = ring.scale
       const ext = 30 * s
       dressFar(ziggurat, x, y, z, ext, {
@@ -1138,12 +1208,12 @@ export function buildVoidCourse(collision) {
   // ------------------------------------------- band 2b: drift down the axis
   //
   // The one part of the shaft the spiral never occupies: its own middle, high
-  // up, where the route has widened to 140 m and the centre line is 100 m from
-  // anything. That is the volume `ascent` looks straight up through and
+  // up, where the route has widened past 180 m and the centre line is 100 m
+  // from anything. That is the volume `ascent` looks straight up through and
   // `plunge` looks straight down through, and it was pure fog.
-  for (let i = 0; i < 34; i++) {
-    const t = i / 33
-    const y = -40 + t * 640
+  for (let i = 0; i < 38; i++) {
+    const t = i / 37
+    const y = -40 + t * 680
     const a = i * 2.399963
     const rr = (12 + dr() * 46) * Math.min(1, 0.25 + t)
     const x = Math.cos(a) * rr, z = Math.sin(a) * rr
