@@ -507,7 +507,26 @@ const voidTheme = {
    * §5, "depth in three bands". ON, and it is the thing that stops the void
    * being a course in front of flat violet fog — see `src/fx/voidbackdrop.js`.
    */
-  backdrop: true,
+  /**
+   * OFF. The geometry bands are deleted in favour of the painted dome.
+   *
+   * Ethan, three times over, looking at frames: "the random shapes in the
+   * background is very weak", "the shapes are eh if you compare to the image",
+   * and finally "all these shapes really take you out of it".
+   *
+   * He is right and it was never fixable by tuning. `voidbackdrop.js` builds
+   * its ruins from extruded prisms, so at any density and any distance they
+   * read as flat untextured wedges floating in front of the sky — abstract
+   * polygons, not architecture. That is the ceiling of generating a backdrop
+   * from the shapes this generator can make.
+   *
+   * The dome (v2) carries the far read instead, and it was prompted for the
+   * COURSE's own vocabulary — floating platforms with drip undersides, walls
+   * with panel grids, towers with window openings. Honest loss: the near and
+   * mid bands parallaxed and a dome cannot. At the distances involved that is
+   * a smaller lie than a field of purple triangles.
+   */
+  backdrop: false,
 
   /**
    * AMBIENT OCCLUSION, SIZED TO THE VOID'S ARCHITECTURE — a partial overlay on
