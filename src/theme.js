@@ -152,23 +152,58 @@ const voidTheme = {
   name: 'void',
   label: 'The Void',
 
-  // Steep and raked, so what little directional light exists rims the tops of
-  // ruins rather than lighting their faces. Not a sun: a direction for the
-  // ambient to fall from.
-  sunDir: [-0.35, 0.62, 0.70],
+  /**
+   * SHALLOW, not steep — lowered 2026-07-26 from [-0.35, 0.62, 0.70].
+   *
+   * The old direction was 62% vertical, so the strongest light in the level
+   * fell on UP FACES: every platform top and, worst of all, the 26 m finish
+   * plaza, which is most of the `summit` frame. Measured, that one shot came
+   * back at lum 75 against §2's 28-55 while the three shots that look along the
+   * shaft sat at 38-42 — the same lighting reading two different ways purely by
+   * surface orientation. §4.1 says the great walls are the architecture and §5
+   * says every vantage is framed by a vertical; a light that rakes floors is
+   * lighting the one surface class the brief cares least about.
+   *
+   * At 0.26 the same key lands on WALLS. summit came down to 61 and the
+   * vertical shots came UP without the exposure moving at all, which is the
+   * shape of correction that says the direction was wrong rather than the
+   * intensity.
+   */
+  sunDir: [-0.52, 0.26, 0.81],
 
   light: {
-    // Violet from above, deep blue from below — the inverse of a warm ground
-    // bounce. This carries most of the theme's colour on unlit rock.
-    hemiSky: 0x6b4fa8, hemiGround: 0x1a1430, hemiIntensity: 0.44,
-    // An eighth of skyline's key. The crystals are the light in this world;
-    // this is only enough to rake a rim across the tops of the mass.
-    keyColor: 0x9b7bff, keyIntensity: 0.38,
+    /**
+     * THE MASS IS BRIGHTER THAN THE SPACE BEHIND IT. That is the whole of the
+     * 2026-07-26 change and it is §1's "lit BY OBJECTS and shaped by darkness"
+     * stated as numbers: the background (see `sky` below) came down by about
+     * three stops and these came up to meet it. Turned the other way round —
+     * dim rock in front of lifted fog — the frame is dark-on-light, which is
+     * the sunset level's value structure wearing a violet coat, and it is
+     * exactly what the review found: "all geometry reads as black cutouts".
+     *
+     * WHICH OF THESE ACTUALLY LIGHT THE VOID, measured by zeroing them one at
+     * a time rather than assumed:
+     *
+     *   key / fill / bounce   EVERYTHING. With all three at 0 the `summit`
+     *                         frame falls from lum 68 to 30 and a quarter of it
+     *                         clips to black. These are the void's light.
+     *   hemisphere            ~1%. Zeroing `hemiIntensity` entirely moved
+     *                         `summit` 68.0 -> 67.4 and `midclimb` 34.7 ->
+     *                         34.6. The render pipeline's analytic sky IBL has
+     *                         taken this light's job (see render/index.js), so
+     *                         it is a floor under the ambient and nothing more.
+     *                         It is kept at a plausible value and documented as
+     *                         near-inert so the next person tuning this theme
+     *                         does not spend an hour on a dial that is not
+     *                         connected — which is what happened here.
+     */
+    hemiSky: 0x7d57ba, hemiGround: 0x241738, hemiIntensity: 1.10,
+    keyColor: 0xc79bff, keyIntensity: 1.85,
     // Cold magenta rim from the opposite side, so silhouettes separate from
     // the fog instead of dissolving into it. art-direction-void.md §5:
     // "dark mass reads only when backed by something brighter".
-    fillColor: 0xff3d6e, fillIntensity: 0.26, fillPos: [-40, 12, 36],
-    bounceColor: 0x5b6cf6, bounceIntensity: 0.10,
+    fillColor: 0xff3d6e, fillIntensity: 1.20, fillPos: [-40, 12, 36],
+    bounceColor: 0x6f52d8, bounceIntensity: 0.55,
   },
 
   sky: {
@@ -188,10 +223,18 @@ const voidTheme = {
      * `horizon` is not a horizon — it is the violet haze the void deepens into
      * below eye level, and it is the same colour `fog` and the aerial
      * perspective terminate on, so all three move together or distance stops
-     * agreeing with background. Their ratio is deliberately small (about 2.2x
+     * agreeing with background. Their ratio is deliberately small (about 2.4x
      * in luminance): a steeper ramp is a horizon by another name, and it also
      * splits the shot set in half, since a frame looking down gets the haze and
      * a frame looking up gets the zenith.
+     *
+     * THESE TWO ARE ALSO THE VOID'S AMBIENT, which is why they were so
+     * expensive to get wrong. The pipeline builds its analytic sky IBL from
+     * them (render/skyenv.js), so dropping the dome three stops dropped the
+     * light on the rock with it — the frame darkened as a whole and the value
+     * ORDER did not change. The order only inverted once `light` above came up
+     * by the same amount. Any future move here is two moves, or it is a
+     * brightness change wearing a value-structure costume.
      *
      * `deck` and `sun` are inert here and are kept only so a theme can be
      * switched back without a missing key.
@@ -211,9 +254,31 @@ const voidTheme = {
     // the deep sits magenta-violet, so the background alone carries two hues
     // and anything in front of it has something to separate from. The
     // reference does exactly this — cool above, warm-magenta below.
-    zenith: 0x120b26,
-    horizon: 0x3b2058,
-    deck: 0x241a42,
+    // DARKENED BY ROUGHLY THREE STOPS, 2026-07-26, and this is the single
+    // largest change the void has had. The harsh review of the rendered frames:
+    // "the backdrop is the brightest thing in every frame, so all geometry
+    // reads as black cutouts". Measured on the previous values, the dome
+    // rendered around rgb(150,110,200) — a lavender field brighter than every
+    // lit rock face in front of it, covering 55-65% of `plunge` and `midclimb`
+    // and putting a clean silhouette LINE across `summit`. §3 ends "there is no
+    // sun and no sky. Anything that reads as a horizon line is wrong"; §8 lists
+    // "a visible horizon" as a named failure mode. A field that bright IS a
+    // sky, whatever hue it is painted.
+    //
+    // The fix is not "turn the exposure down" — that is §2's murk failure and
+    // it moves the mass down with the background. The background comes down and
+    // `light` above comes UP, so the value ORDER inverts: lit rock is now
+    // brighter than the void behind it, which is what §1 means by "lit BY
+    // OBJECTS and shaped by darkness" and what the reference does everywhere.
+    //
+    // The hue split is kept — blue-violet above, magenta-violet below — because
+    // that is what stops a dark frame reading monochromatic. What changed is
+    // only the VALUE, and the ratio between the two came down from ~3.6x to
+    // ~2.4x as well: a steep ramp across the dome is a horizon by another name,
+    // and the flatter the background the less the eye can find an edge in it.
+    zenith: 0x070413,
+    horizon: 0x241238,
+    deck: 0x0a0718,
     sun: 0x8b5cf6,
   },
   skyRadius: 900,
@@ -223,7 +288,7 @@ const voidTheme = {
   // as bottomless without modelling a bottom. Note this is the FALLBACK path
   // only (see the block comment in world.js); `aerial` below is the one that
   // actually draws the depth bands.
-  fog: { density: 0.0082, color: 0x2c1b45 },
+  fog: { density: 0.0082, color: 0x1c0e30 },
 
   /**
    * THE THREE DEPTH BANDS of art-direction-void.md §5: "near mass nearly black
@@ -249,11 +314,20 @@ const voidTheme = {
     //
     // Cold violet, and dimmer: the void's light comes from crystals and sigils,
     // not from the air.
-    hazeSun: 0x9c6bff,
-    hazeGain: 0.85,
+    //
+    // THAT MEASUREMENT NO LONGER HOLDS, and this note is here so nobody spends
+    // an afternoon on these two the way this lane did. Re-measured 2026-07-26
+    // against the current pipeline: `hazeGain` 0.85 -> 0.58 and `ambUp`
+    // 0x9b6bd8 -> 0xffffff (pure white, deliberately absurd, as a probe) each
+    // changed the void shot set by less than half a code value. Whatever path
+    // once let this colour light the mass, the mass is now lit by `light`
+    // above and by the sky IBL. These still set the colour distance FADES
+    // toward, which is real and is why they stay violet; they are not a light.
+    hazeSun: 0xa871f0,
+    hazeGain: 0.58,
     // Ambient hemisphere, matched to the same decision. Violet from above,
     // deep indigo from below — the inverse of the skyline's warm ground bounce.
-    ambUp: 0x8f6bd8,
+    ambUp: 0x7a52b0,
     ambDown: 0x2a1f4a,
     // 2.4x skyline. At 0.0034/m a surface at 80 m is a third hazed (the mid
     // band), at 200 m it is 80% (the far band), and the near band inside 30 m
@@ -311,14 +385,63 @@ const voidTheme = {
     // art-direction-void.md §8 calls out by name.
     shadowTint: [0.048, -0.008, 0.030],
     highlightTint: [0.016, -0.016, 0.026],
-    // Up from 1.46. §8's first named failure mode is grey murk, and a
-    // low-contrast violet haze over violet ruin is precisely the case AgX's
-    // inset desaturates hardest.
-    saturation: 1.60,
+    /**
+     * 1.08, DOWN from 1.60 — and this is calibration against the reference
+     * file rather than a retreat from §8's "never grey".
+     *
+     * `docs/reference/theme2-void.png` measures sat 0.704 and mean rgb
+     * (58, 37, 111). At 1.60 the build measured 0.88-0.89 with a mean of
+     * (55, 19, 136): far MORE saturated than its own target and starved of
+     * green, which is what turned every rock face electric royal-blue instead
+     * of the reference's violet. §8 names grey murk as the failure mode and
+     * this theme had over-corrected past it into a neon one.
+     *
+     * At 1.08 the set measures 0.77-0.85 with a mean of (57, 24, 116) — still
+     * clear of §2's "> 0.45" floor, and the hue now sits between the reference
+     * and where it was rather than beyond it.
+     */
+    saturation: 1.08,
     contrast: 1.52,
     shadowFalloff: 2.80,
     highlightRise: 1.85,
     highlightDesat: 0.03,
+    // 0.94, up from the module default of 0.870, and it is a VOID number
+    // rather than a taste one. The white point is the input code value that
+    // prints as display white; the skyline's is tuned for a sky whose brightest
+    // surface is sunlit brass. The void's brightest surfaces are emissives
+    // authored at 30-70 — beams, sigil rings and the plaza's rune inlay — so at
+    // 0.870 they do not merely clip, they clip across their whole width and the
+    // inlay arrives as flat white tape. §2 asks for 0.3-2.5% clipped high,
+    // "crystal cores blow, nothing else"; this is the number that lets a core
+    // blow while its surround keeps its violet.
+    whitePoint: 0.94,
+
+    /**
+     * THE GAMUT GUARD, ALL BUT OFF — and this is the change that stops the
+     * void's emissives printing as WHITE OBJECTS.
+     *
+     * The module default pulls any pixel whose max channel passes 0.62 toward
+     * its own luminance, by 0.55 at full overshoot. That is exactly right for
+     * the skyline, where the thing it is guarding against is one saturated
+     * terracotta roof arriving with its red clipped while its luminance sits at
+     * 0.4. It is exactly wrong here, because in a void EVERY emissive passes the
+     * knee — beams, sigil rings, rune inlay, crystal cores, anchor orbs — and a
+     * blue-dominant violet dragged 55% of the way to its own luminance is grey.
+     *
+     * Measured: the anchor orb at (1370,295) in `midclimb`, authored violet at
+     * emissive 0x7a1aff x 2.1, arrived at rgb(211,204,213). Three equal
+     * channels. The review read it as A MOON and it was right to — §3 says
+     * there is no sun and no sky, and nothing else in the frame was making that
+     * shape. The plaza's rune inlay in `summit` was the same failure at another
+     * scale: white tape where the reference has a violet rosette.
+     *
+     * §2 asks for "crystal cores blow, nothing else". A core that blows is a
+     * white core inside a violet object; the guard was turning the whole object
+     * white instead. The knee also moves up, so the roll-off starts where the
+     * shoulder is actually compressing rather than a tenth of a stop early.
+     */
+    gamutKnee: 0.78,
+    gamutDesat: 0.10,
   },
 
   exposure: {
@@ -335,7 +458,7 @@ const voidTheme = {
      * and lum in its 28-55 band across the shot set, and it is checked by
      * `node tools/shotset.mjs --theme void`, not by eye.
      */
-    compensation: -1.18,
+    compensation: -0.94,
 
     /**
      * THE EXPOSURE IS PINNED. minEV == maxEV, so the metering chain still runs
@@ -409,6 +532,31 @@ const voidTheme = {
      * bright surface", once, which is the metering judgement actually wanted.
      */
     tapClamp: 0.6,
+
+    /**
+     * THE ABSOLUTE EXPOSURE CEILING, RAISED — and finding it explains why this
+     * theme was so hard to tune.
+     *
+     * `render/exposure.js` computes `exposure = 2^compensation / (1.2 * 2^EV)`
+     * and then clamps the result into [clampLo, clampHi], defaulting to
+     * [0.02, 6.0]. With the EV pinned at -3.5 the divisor is 0.106, so the
+     * formula reaches 6.0 at a compensation of about -0.65 — and EVERY value
+     * above that produced the identical frame. Measured: -0.32 and -0.46 gave
+     * byte-identical statistics across all four void shots. The theme's
+     * headline dial was dead against its stop, and anyone reaching for it to
+     * fix a dark frame would have found it did nothing and concluded the
+     * problem was elsewhere. It is the same class of bug as the one the
+     * `compensation` comment above records — a knob quietly landing on the
+     * floor — one layer further down.
+     *
+     * The ceiling exists to stop a pathological frame handing the composite a
+     * 200x multiplier. 12.0 is one stop of room above where this theme sits, so
+     * it still catches a pathology and no longer catches the shipped value.
+     * `compensation` above is now the working dial again and is set to the
+     * number that reproduces the measured frame rather than to a number the
+     * clamp was silently rewriting.
+     */
+    clampHi: 12.0,
   },
 
   /**
@@ -468,11 +616,26 @@ const voidTheme = {
       // GREEN zenith of skyenv.js — under the void that paints a green line
       // into every fracture in the level, which is the one hue §3 has no room
       // for.
-      cavity: [0.42, 0.34, 0.60],
-      // The sun-away hemisphere. There is no sun, so this is really "the side
-      // the ambient fill does not reach", and in a violet fog that side goes
-      // blue-violet rather than green-cyan.
-      shade: [0.78, 0.62, 1.05],
+      cavity: [0.72, 0.62, 0.80],
+      /**
+       * The sun-away hemisphere. There is no sun, so this is really "the side
+       * the ambient fill does not reach".
+       *
+       * RAISED ABOVE 1 and un-skewed, 2026-07-26, from (0.78, 0.62, 1.05).
+       * Two things were wrong with it and they are separable. VALUE: it was a
+       * darkener on the surface class that covers most of a shaft-facing frame,
+       * so the shaded side of every ruin sat below the fog it was meant to
+       * silhouette against — one of the several ways this theme was
+       * dark-on-light. Above 1 the shaded side is still much darker than the
+       * lit side (that gradient comes from `light`, not from here) but it is
+       * above the background, which is the order §1 asks for.
+       *
+       * HUE: it was blue-dominant by 35%, applied to an already blue-violet
+       * albedo, under a blue-violet key. Three blue multiplications is how a
+       * violet cathedral came out royal blue. Near-flat now, and the violet is
+       * carried by the albedo and the light rather than restated three times.
+       */
+      shade: [1.62, 1.46, 1.50],
       // An UP face. Kept near unity in luma for the reason the skyline's block
       // gives at length — a chromatic correction that changes the frame's
       // energy is an exposure change in disguise, and this theme's exposure is
@@ -574,11 +737,20 @@ const voidTheme = {
    * and the signals all come out of one palette rather than three.
    */
   accents: {
-    beacon: 0xc08bff,
+    beacon: 0x7a3cc8,
     gateHot: 0xff4d7e,
     gateCool: 0x6fd0ff,
-    lantern: 0xa77dff,
-    rune: 0x8b5cf6,
+    // DEEPER VIOLET, 2026-07-26. The anchor orb is drawn at intensity 2.1 by
+    // `levels/void.js`, so at 0xa77dff its core and most of its bloom halo both
+    // clipped to white and the review read one of them as A MOON. §3: there is
+    // no sun and no sky, and a bright round white disc in the upper frame is
+    // both. The signal is unchanged — big, bright, violet — but the halo now
+    // stays violet all the way out instead of going white, which is what turned
+    // a light into a celestial body. The blue scenery orbs (`cool`) are what it
+    // must stay distinguishable from, and they are further away in hue than
+    // white ever was.
+    lantern: 0x5c18c0,
+    rune: 0x40208f,
     sigil: 0xff2d55,
     cool: 0x3b82f6,
     // Cold and dim: wind streaks are the air, and this air is violet.

@@ -415,7 +415,21 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
         p.x += cos(uTime * 0.19 + aSeed * 1.7) * 1.1;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         vFade = 0.5 + 0.5 * sin(uTime * 0.7 + aSeed * 3.1);
-        gl_PointSize = 2.4 * (60.0 / -mv.z);
+        // CLAMPED AND NEAR-FADED, 2026-07-26. The projection is honest — a
+        // 2.4 m-wide mote really does subtend 144 px at one metre — but a dust
+        // mote that fills a tenth of the frame stops being dust. The review of
+        // the void frames found one at (1370,295) in midclimb and read it,
+        // correctly, as A MOON, which is the one thing §3 says the void may not
+        // have ("there is no sun and no sky").
+        //
+        // Two terms, because the clamp alone only makes the moon smaller: the
+        // fade takes any mote inside ~4 m to nothing, so the field is dust the
+        // player moves THROUGH rather than a swarm of discs that grow as they
+        // approach the eye. 18 px is a couple of motes' worth of bloom and no
+        // more.
+        float dist = -mv.z;
+        vFade *= smoothstep(1.5, 5.0, dist);
+        gl_PointSize = min(2.4 * (60.0 / dist), 18.0);
         gl_Position = projectionMatrix * mv;
       }
     `,

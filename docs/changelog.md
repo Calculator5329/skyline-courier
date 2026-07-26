@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-07-26 — the void stops being dark-on-light
+
+A harsh review of the rendered frames, and it was right about the biggest thing
+in the theme:
+
+> The void has a sky and a horizon: the backdrop is the brightest thing in
+> every frame, so all geometry reads as black cutouts.
+
+`summit.png` was the proof — the top 45% a flat lavender gradient with a clean
+silhouette line across it at y≈380. That is a horizon, and §3 ends "there is no
+sun and no sky. Anything that reads as a horizon line is wrong"; §8 lists "a
+visible horizon" among the named failure modes. `plunge` and `midclimb` were
+the same inversion at lower contrast: 55-65% uniform bright violet with every
+object darker than it.
+
+The reference is the opposite, and measuring it settled the argument —
+`docs/reference/theme2-void.png` comes back at lum 47.1, p50 41.1, p1 4.2,
+sat 0.704. The mass is LIT and the space behind it is dark. §1 says so in
+words: "lit BY OBJECTS and shaped by darkness".
+
+- **The background came down about three stops** (`sky.zenith` 0x120b26 ->
+  0x040310 -> 0x070413, `sky.horizon` 0x3b2058 -> 0x241238) and **the light on
+  the mass came up to meet it**. Both halves are required: the dome is also the
+  source of the pipeline's analytic sky IBL, so darkening it alone darkens the
+  rock with it and the value ORDER never changes.
+- **The key light is raked shallow** — `sunDir` [-0.35, 0.62, 0.70] ->
+  [-0.52, 0.26, 0.81]. At 62% vertical the strongest light in the level fell on
+  platform tops and on the finish plaza, which is most of `summit`; that one
+  shot measured lum 75 while the three that look along the shaft sat at 38-42.
+- **The grade's gamut guard is all but off** (`gamutDesat` 0.55 -> 0.10,
+  `gamutKnee` 0.62 -> 0.78). It pulls any over-knee pixel toward its own
+  luminance, which is right for one clipped terracotta roof and catastrophic in
+  a world where every beam, sigil, rune and orb passes the knee. The anchor orb
+  authored violet was arriving at rgb(211,204,213) — the review read it as a
+  moon, correctly.
+- **Saturation 1.60 -> 1.08.** Measured against the reference the build was
+  MORE saturated than its target (0.88 against 0.704) and starved of green,
+  which is what made every rock face electric royal-blue instead of violet.
+  `surfaces.macro.shade` lost its 35% blue skew for the same reason.
+- **The far bands stop being fog banks.** `src/fx/voidbackdrop.js` ran its
+  inscatter gains at 0.95/1.50/1.85 so the layer rendered LIGHTER than the dome
+  at every range — correct only while the dome was the brightest thing in the
+  frame. Gains are now at or below 1.0 and the bands carry their own body
+  brightness, so they read as mass receding rather than as a lit backdrop.
+- **The drifting motes are clamped and near-faded** (`src/world.js`). The
+  projection was honest and unbounded, so a mote at one metre subtended 144 px.
+- **`exposure.clampHi` raised 6.0 -> 12.0.** Found while tuning: with the EV
+  pinned at -3.5, `exposure = 2^compensation / (1.2 * 2^EV)` hits the default
+  ceiling of 6.0 at a compensation of about -0.65, so every value above that
+  produced a byte-identical frame. The theme's headline dial was dead against
+  its stop. It is live again.
+
+Measured, void shot set, before -> after:
+
+| shot | lum | p50 | clip lo | clip hi |
+| --- | --- | --- | --- | --- |
+| ascent | 28.9 -> 38.7 | 11.8 -> 23.0 | 2.62% -> 0.01% | 0.82% -> 0.30% |
+| midclimb | 46.5 -> 34.9 | 36.0 -> 22.7 | 0.33% -> 0% | 0.25% -> 0.30% |
+| plunge | 51.5 -> 34.8 | 52.0 -> 28.4 | 1.83% -> 0% | 0.42% -> 0.28% |
+| summit | 54.5 -> 60.9 | 34.2 -> 35.5 | 0.56% -> 0% | 3.49% -> 3.17% |
+
+All four now sit inside §2's `p50` band and three of four inside its `lum`
+band. `clip lo` moved AWAY from §2's stated 2-8% and toward the reference,
+which measures 0.21% — that row of the table is not a number read off the
+image, whatever §2 claims, and the frames are judged against the file.
+
+Skyline unchanged: `closeup` lum 111.1, sat 0.807, and `bash tools/ship-gate.sh`
+exits 0. Draws 85-119, 2.94M triangles, 3.2-4.9 ms/f — unchanged from before.
+
 ## 2026-07-25 — the void gets dense
 
 Ethan, with the build beside the reference image:

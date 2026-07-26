@@ -17,6 +17,27 @@ is listed here rather than in a reviewer's head.
       `src/materials/shader.js`, and enabled only by `theme.surfaces.veins`.
       Zero extra draws, tris or texture fetches; skyline compiles none of it.
       See the changelog.
+- [x] 2026-07-26 — the void was dark-on-light. The backdrop was the brightest
+      thing in every frame, so all geometry read as black cutouts and `summit`
+      carried a clean horizon line across it — §3's "anything that reads as a
+      horizon line is wrong" and §8's named failure mode, both. The background
+      came down about three stops, the light on the mass came up to meet it,
+      the key was raked shallow so it lands on walls instead of floors, and the
+      grade's gamut guard was all but switched off so emissives stop printing
+      as white objects. `plunge` p50 52 -> 28.4, `summit` lum 79 -> 60.9, and
+      all four shots now sit inside §2's `lum` and `p50` bands. See the
+      changelog.
+- [ ] `summit` still measures lum 60.9 against §2's 28-55 and 3.2% clipped high
+      against 0.3-2.5%. Both come from the shot itself rather than the theme:
+      the 26 m finish plaza fills 60% of the frame at 5 m and its rune inlay is
+      an emissive at that range. §5 says "look up, not down"; the fix is either
+      a recomposed `summit` in `tools/shots.mjs` or a quieter inlay intensity in
+      `src/levels/void.js`, and both belong to the lanes that own those files.
+- [ ] The grapple-anchor orb still blooms to near-white. `levels/void.js`
+      draws it at `intensity: 2.1`, which rides far enough up AgX's log range
+      that its hue is gone before any grade runs; pulling `accents.lantern`
+      down to 0x5c18c0 moved it from rgb(211,204,213) to rgb(210,185,213) and
+      no further. The intensity is the dial and it lives in `src/levels/void.js`.
 - [ ] The fissures do not move. They are a static emissive mask, so a crack
       cannot pulse, breathe or flare as the player passes. That wants a time
       uniform driven from the frame loop, which is `render/` and `main.js`
