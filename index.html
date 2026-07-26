@@ -41,7 +41,266 @@
     inset: 0;
     pointer-events: none;
     user-select: none;
+    /* Explicit rather than inherited from body, so the alloy below owns every
+       glyph in the panel. In the skyline theme this is the same value body
+       already had, so nothing moves. */
+    color: var(--cream);
   }
+
+  /* --- the instrument alloy -------------------------------------------- */
+  /*
+   * THE PANEL IS MILLED FROM A THEME ALLOY, NOT FROM BRASS.
+   *
+   * It used to be fixed brass over any world, on the theory that the HUD is
+   * the courier's cuff and travels with the player. Ethan, playing the void:
+   * "HUD is wrong for a dark level." He is right, and the reason is value, not
+   * taste — every contrast decision in the rules below was tuned against a
+   * blown-out golden sky. A warm plate whose ramp bottoms out at #8a6224, a
+   * scrim that DARKENS, and hairlines at .34 alpha all work by being the dark
+   * thing on a bright field. Over near-black violet each one inverts: the
+   * scrim does nothing, the dark half of every numeral falls into the
+   * background, and the hairlines vanish. It also left the panel as the only
+   * warm object in a frame whose beacon, gates and lanterns are all themed.
+   *
+   * These are the SAME custom-property names the instrument rules already use,
+   * redeclared here on #hud. Because #hud is an ancestor of every instrument,
+   * a theme can shadow the whole panel from this one block without a single
+   * rule below being touched — and anything added to the HUD later gets the
+   * re-tone for free as long as it reaches for these tokens. :root keeps the
+   * originals for anything outside the HUD.
+   *
+   * This block is skyline's values, verbatim. skyline is the regression
+   * baseline (docs/purpose.md); it must render identically to before.
+   */
+  #hud {
+    --cream: #f4ead8;
+    --sand: #e8d3ad;
+    --brass: #d9a441;
+    --brass-hi: #f7e2ab;
+    --brass-lo: #8a6224;
+    --brass-deep: #5d411a;
+    --verdigris: #6f9a8d;
+    --terracotta: #c8724c;
+    --plate: linear-gradient(158deg, var(--brass-hi) 0%, var(--brass) 30%,
+                             var(--brass-lo) 58%, var(--brass) 78%, var(--brass-hi) 100%);
+    --scrim: radial-gradient(ellipse 130% 130% at 50% 50%, rgba(18, 14, 11, .52), rgba(18, 14, 11, 0) 72%);
+    --hair: rgba(217, 164, 65, .34);
+    /* The engraved caption. Split out because a caption's legibility floor is
+       a function of the alloy's chroma, not of the alloy: dropping a violet to
+       .58 of a violet field is murk, where brass at .58 on tan still reads. */
+    --cap-ink: var(--brass);
+    --cap-dim: .58;
+  }
+
+  /*
+   * VOID — the same instrument, cast in cold metal and lit from inside.
+   *
+   * The alloy follows the world's own signal language rather than inventing a
+   * second one: the mid accent is the menu's violet (src/theme.js accents
+   * .lantern #a77dff), the altimeter datum is the checkpoint gate's cool cyan
+   * (accents.gateCool), and the sprint redline is the gate's hot magenta
+   * (accents.gateHot). The HUD then says "usable" and "hot" in exactly the
+   * colours the level says them in.
+   *
+   * THREE VALUE DECISIONS CARRY THE LEGIBILITY, and each was measured off
+   * `node tools/hud-shots.mjs` rather than guessed — that tool exists because
+   * the normal capture harness calls `hideChrome()` and so can never
+   * photograph this panel at all:
+   *
+   *  1. The plate ramp's floor is lifted, but the mids stay CHROMATIC. The
+   *     first pass raised the floor and washed the whole ramp toward white on
+   *     the theory that a dark world wants a light panel. It photographed as
+   *     grey: this world's background is violet, so a pale violet panel has
+   *     neither value nor hue separation from it, and the verb, the captions
+   *     and the nav chevron all disappeared. Brass works over the skyline
+   *     because it is SATURATED against a desaturated tan haze, and that is
+   *     the property to preserve, not the value. So the ramp keeps a real
+   *     violet in the mids and only the specular ends go near-white.
+   *  2. The scrim stays a darkener, with a lift inside it. It has to stay a
+   *     darkener because the void is not uniformly dark — the mid-band haze is
+   *     a bright lavender across most of the upper frame, and beams and
+   *     crystal cores are authored at 30-70 emissive and pass right behind the
+   *     panel. But its ramp now dies at 44% instead of 72%, so on a genuinely
+   *     black frame the instrument gets a small pool of violet light to sit in
+   *     without the lift reaching the edge of its own box and drawing a
+   *     rectangle. Both halves of the world, one instrument.
+   *  3. Captions and the verb are pulled UP the ramp rather than down it. See
+   *     `--cap-ink`: dimming a low-chroma colour is how a label becomes murk.
+   */
+  :root[data-theme="void"] #hud {
+    --cream: #ece7ff;
+    --sand: #cfc0ff;
+    --brass: #a67dff;
+    --brass-hi: #e6dcff;
+    --brass-lo: #6f4fc4;
+    --brass-deep: #3a2a72;
+    --verdigris: #6fd0ff;                 /* accents.gateCool — the altimeter datum */
+    --terracotta: #ff4d7e;                /* accents.gateHot  — the sprint redline */
+    /* THE RAMP IS THE SAME SHAPE, LIFTED WHOLE AND ROTATED — same five stops
+       at the same offsets, same ~120 of spread between its brightest and
+       darkest, every value about 20 higher, and violet instead of gold. Two
+       measured corrections got it here:
+         - Skyline's ramp works by making the glyph DARKER than the sky. Over
+           the void the glyph has to be lighter than the field, so the ramp may
+           not descend; a version with a #6a48c0 trough photographed bitten,
+           the right-hand digits swallowed by their own dark band.
+         - But it also may not simply go pale. A version that ran near-white
+           through the mids photographed as plain silver — a numeral with no
+           hue is a web page's numeral, not a machined one, and the ends carry
+           most of a 40px glyph's area, so they have to be tinted too.
+       Light AND chromatic, therefore, at every stop.
+       DO NOT JUDGE THESE STOPS BY READING THEM. At 158deg across a 176x42 box
+       the gradient line is only ~105px long, so the 0%/100% stops land in
+       corner slivers and what you actually see is the 58% stop flanked by the
+       30/78 bands — and the black text-shadow under the glyph then pulls the
+       result down to roughly two thirds of the nominal value. A stop that
+       looks right in the source is not the colour that reaches the screen.
+       Judge them the way these were judged: `node tools/hud-shots.mjs`, then
+       look at `hud-flat-void` and `hud-flat-skyline` side by side, which put
+       the same panel on the two worlds' extreme fields with the world itself
+       removed. */
+    --plate: linear-gradient(158deg, #ece2ff 0%, #bfa3ff 30%,
+                             #9a70ff 58%, #bfa3ff 78%, #ece2ff 100%);
+    --scrim:
+      radial-gradient(ellipse 130% 130% at 50% 50%,
+                      rgba(150, 120, 255, .14), rgba(150, 120, 255, 0) 44%),
+      radial-gradient(ellipse 130% 130% at 50% 50%,
+                      rgba(14, 9, 30, .60), rgba(14, 9, 30, 0) 72%);
+    --hair: rgba(180, 152, 255, .52);
+    --cap-ink: var(--brass-hi);
+    --cap-dim: .62;
+  }
+
+  /*
+   * ...and the parts of the panel whose colour was written down rather than
+   * tokenised. Everything below is a straight re-tone of a value that is
+   * hardcoded in a rule further down or in an SVG attribute — no layout, no
+   * new elements. Grouped here so the void treatment is one thing to read and
+   * one thing to delete, and matched on the exact literal so a rule that later
+   * moves to a token silently stops needing its line here.
+   *
+   * The recurring correction: every surface the skyline draws as a dark
+   * recess (the speed channel, an unlit pip, a chip) is invisible against
+   * near-black and has to be drawn as a faint LIFT instead. An empty gauge
+   * still has to read as an empty gauge.
+   */
+
+  /* Instrument glyphs get an outer bloom. The black drop shadow stays — it is
+     what survives a beam passing behind the panel — but on the common frame it
+     does nothing, and a glow is what separates a light glyph from a dark
+     field. Same job the shadow does over the golden sky, inverted. */
+  :root[data-theme="void"] .inst {
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .85), 0 0 14px rgba(124, 92, 226, .55);
+  }
+  :root[data-theme="void"] #reticle { background: rgba(236, 231, 255, .8); }
+
+  /* The plated numerals carry a `filter: drop-shadow`, not a text-shadow — the
+     metal is inside the glyph, so the separation has to be too. Glyph-shaped
+     and therefore never a rectangle, which is why the bloom goes here rather
+     than into the scrim. */
+  :root[data-theme="void"] #timer,
+  :root[data-theme="void"] #speedval,
+  :root[data-theme="void"] #toast .big {
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .85)) drop-shadow(0 0 12px rgba(166, 125, 255, .45));
+  }
+
+  /* Run register. An unlit pip is a punched hole in a plate: over cream that
+     is a dark hole, over near-black it can only be a lit rim. */
+  :root[data-theme="void"] #cppips b {
+    border-color: rgba(169, 139, 255, .58);
+    background: rgba(32, 24, 62, .5);
+  }
+  :root[data-theme="void"] #cppips b.hit { box-shadow: 0 0 9px rgba(169, 139, 255, .85); }
+
+  /* Bearing rose. The bezel, needle and hub already draw from #gbrass below;
+     these are the pieces that named a colour directly. */
+  :root[data-theme="void"] #crose circle[fill="rgba(14,11,8,.42)"] { fill: rgba(74, 56, 140, .30); }
+  :root[data-theme="void"] #crose circle[stroke="rgba(217,164,65,.28)"] { stroke: rgba(169, 139, 255, .38); }
+  :root[data-theme="void"] #crose g[stroke="rgba(232,211,173,.55)"] { stroke: rgba(214, 204, 255, .62); }
+  :root[data-theme="void"] #crose path[stroke="#f7e2ab"] { stroke: #e4dbff; }
+  :root[data-theme="void"] #crose path[fill="#f7e2ab"] { fill: #e4dbff; }
+  :root[data-theme="void"] #cneedle path[fill="rgba(232,211,173,.3)"] { fill: rgba(214, 204, 255, .34); }
+  /* The dark outline that keeps a needle off its own dial. Warm-black against
+     brass, cool-black against violet — it is a shadow, and shadows here are
+     indigo. */
+  :root[data-theme="void"] #cneedle path[stroke="rgba(60,40,14,.85)"] { stroke: rgba(18, 10, 40, .85); }
+  :root[data-theme="void"] #crose circle[stroke="rgba(60,40,14,.8)"] { stroke: rgba(18, 10, 40, .8); }
+  /* The nav chevron is the smallest bright mark in the panel and the one that
+     has to survive the worst backdrop — it rides the screen edge, so it lands
+     on whatever is there, including a lit crystal face. Measured over one, the
+     pale first pass vanished. A near-black outline is what buys it back; the
+     glyph itself already draws from the alloy. */
+  :root[data-theme="void"] #navpulse path { stroke: rgba(10, 5, 26, .95); }
+  :root[data-theme="void"] #navdist {
+    color: var(--brass-hi);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .95), 0 0 10px rgba(0, 0, 0, .9), 0 0 16px rgba(110, 78, 214, .8);
+  }
+
+  /* The movement verb. It is the panel's fastest read — "am I wall-running or
+     falling" — and at the accent mid over a violet field it was gone. Up the
+     ramp, not down it. */
+  :root[data-theme="void"] #verb { color: var(--brass-hi); }
+
+  /* Altimeter tape. The unlabelled minor ticks are the thinnest marks in the
+     panel and the first to disappear — at the skyline's .45 they were a smudge
+     on the mid-band haze.
+     ONLY the minors. The major and datum ticks draw from `--brass` and
+     `--verdigris` and are already re-toned by the alloy, and a blanket
+     `.t::after` here outranks `.t.major::after` and `.t.datum::after` — which
+     is exactly what an earlier pass did, flattening the whole tape to one
+     colour and taking the cyan datum at y=0 with it. */
+  :root[data-theme="void"] #alttape .t.minor::after { background: rgba(233, 227, 255, .7); }
+  :root[data-theme="void"] #alttape .t.minor { opacity: .58; }
+  :root[data-theme="void"] #altidx { box-shadow: 0 0 8px rgba(169, 139, 255, .85); }
+  :root[data-theme="void"] #altmark::after { filter: drop-shadow(0 0 5px rgba(169, 139, 255, .95)); }
+
+  /* Drive gauge. The engraved channel is the clearest case of the inversion:
+     a near-black recess in a near-black frame is not a channel, it is nothing.
+     Lift it, and keep the machined top edge so it still reads as milled. */
+  :root[data-theme="void"] #speedbar {
+    background: rgba(48, 36, 92, .55);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, .7), 0 1px 0 rgba(214, 198, 255, .18);
+  }
+  :root[data-theme="void"] #speedticks {
+    background: repeating-linear-gradient(90deg, rgba(10, 6, 24, .85) 0 1px, transparent 1px 20.8px);
+  }
+  :root[data-theme="void"] #speedbar.hot #speedfill {
+    background: linear-gradient(180deg, #ffffff, var(--brass-hi) 45%, var(--brass));
+    box-shadow: 0 0 12px rgba(196, 172, 255, .9);
+  }
+  :root[data-theme="void"] #speedval small {
+    -webkit-text-fill-color: rgba(201, 188, 242, .55);
+    color: rgba(201, 188, 242, .55);
+  }
+
+  /* Panel lamps. Spent vs broken is the whole point of these, so the unlit
+     state has to stay visible without competing with the lit one. */
+  :root[data-theme="void"] .chip {
+    color: rgba(201, 188, 242, .6);
+    border-color: rgba(169, 139, 255, .22);
+    background: rgba(30, 22, 58, .45);
+  }
+  :root[data-theme="void"] .chip.ready {
+    border-color: rgba(169, 139, 255, .55);
+    background: rgba(58, 42, 110, .45);
+  }
+  :root[data-theme="void"] .chip.ready i {
+    background: radial-gradient(circle at 35% 32%, #ffffff, var(--brass) 62%, var(--brass-lo));
+    box-shadow: 0 0 10px rgba(186, 158, 255, .95);
+  }
+
+  /* The arrival seal's own vignette. */
+  :root[data-theme="void"] #toast.hold {
+    background: radial-gradient(ellipse 110% 120% at 50% 50%, rgba(28, 20, 56, .74), rgba(16, 11, 32, 0) 74%);
+  }
+
+  /* ONE alloy, one place. Every url(#gbrass) consumer — the compass bezel, the
+     needle, the hub, the nav chevron and the courier's seal — re-tones from
+     these three stops, which is the same "visibly the same metal" promise the
+     gradient was added for, now kept across both worlds. */
+  :root[data-theme="void"] #gbrass stop:nth-child(1) { stop-color: #efe8ff; }
+  :root[data-theme="void"] #gbrass stop:nth-child(2) { stop-color: #b199ff; }
+  :root[data-theme="void"] #gbrass stop:nth-child(3) { stop-color: #6a4fbe; }
 
   /* Paint-only defs holder: must not participate in layout. */
   #hud-defs { position: absolute; width: 0; height: 0; }
@@ -54,8 +313,8 @@
     font-size: 9px;
     letter-spacing: .3em;
     text-transform: uppercase;
-    color: var(--brass);
-    opacity: .58;
+    color: var(--cap-ink);
+    opacity: var(--cap-dim);
     text-shadow: 0 1px 4px rgba(0, 0, 0, .9);
   }
 
@@ -563,9 +822,11 @@
    * reads as part of the world behind it rather than as a web page over it.
    */
   #overlay {
-    /* Menu-local tokens. Deliberately NOT the HUD's --brass etc: the HUD is a
-       fixed brass instrument panel and must not change colour with the theme;
-       the menu is chrome and should. */
+    /* Menu-local tokens, kept separate from the HUD's alloy on purpose. Both
+       now follow the theme (the HUD's `--m-`-less twins are declared on #hud
+       further up), but the menu is a card over a live frame and the HUD is an
+       instrument in front of one — they answer the contrast question
+       differently and should stay free to diverge. */
     --m-ink: #f4ead8;
     --m-accent: #d9a441;
     --m-accent-hi: #f7e2ab;
