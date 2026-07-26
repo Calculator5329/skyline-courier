@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { lathe, blob, boundsOf, mergeGeometries, triangleCount } from './props.js'
+import { lathe, blob, sweepTube, boundsOf, mergeGeometries, triangleCount } from './props.js'
 import { glowMaterial } from './materials.js'
 import { getTheme } from './theme.js'
 
@@ -757,7 +757,7 @@ export function runeSlab(L, x, y, z, opts = {}) {
     size = 6.0, kind = 'stone', detail = 2,
     thickness = 0.85, border = true, borderHeight = 0.22, borderWidth = 0.62,
     rune = true, runeIntensity = 2.4, tiers = detail === 0 ? 1 : 2 + ((detail >= 2) ? 1 : 0),
-    spikes = detail >= 1, motif = 'knot',
+    spikes = detail >= 1, motif = 'knot', posts = true,
   } = opts
   const sizeX = opts.sizeX ?? size
   const sizeZ = opts.sizeZ ?? size
@@ -894,6 +894,47 @@ export function runeSlab(L, x, y, z, opts = {}) {
       if (top - len < baseY) baseY = top - len
     }
   }
+
+  // --- the broken corner posts --------------------------------------------
+  //
+  // Ethan, on the density of the frame against his reference: our islands
+  // "read as flat squares". They did — a slab with a rune on it has exactly
+  // one silhouette, seen from above OR below, and there are fifty of them.
+  // Four snapped-off posts at the corners give every island a broken profile
+  // and, more usefully, four small verticals that catch the rim light.
+  //
+  // ON THE DIAGONAL, AND NOWHERE ELSE, and the geometry of that is the safety
+  // argument. `level.js` holds every authored gap to an 82% landing margin,
+  // which is a margin on the INSCRIBED circle; the corners of a square sit at
+  // 1.41 half-widths, well outside anything a jump is measured against. And
+  // they are capped at 1.1 m, comfortably under the 1.45 m mantle — so the
+  // worst case is a player vaulting one, never a player stopped by one.
+  // CLAUDE.md rule 3 is satisfied by the height, not by hoping.
+  if (posts && detail >= 1 && Math.min(sizeX, sizeZ) > 4.5) {
+    // A DEDICATED RNG STREAM. `runeSlab` draws its tiers, its spikes and its
+    // rune rotation from one sequence, and inserting four draws anywhere in
+    // the middle of it re-rolls every underside in the level. It did: the
+    // first cut of these posts moved one island's tier stack into the
+    // headroom of the island below, and `assertTriggersClear` failed with
+    // "ascent 2: buried in stone". A separate stream keeps every shape that
+    // was already verified byte-identical.
+    const prand = makeRand(((opts.seed ?? DEFAULT_SEED) ^ 0x9E3779B1) >>> 0)
+    const px = sizeX / 2 - inset - bw * 0.6
+    const pz = sizeZ / 2 - inset - bw * 0.6
+    for (const [cx, cz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      if (prand() < 0.22) continue          // some corners have lost theirs
+      const ph = 0.45 + prand() * 0.65
+      const pw = 0.42 + prand() * 0.22
+      n += S(x + cx * px, y + ph / 2, z + cz * pz, pw, ph, pw, kind)
+      // A snapped cap: narrower, offset, so the post ends in a break rather
+      // than in a flat plinth top.
+      if (detail >= 2) {
+        n += S(x + cx * (px + 0.06), y + ph + 0.11, z + cz * (pz - 0.05),
+          pw * 0.62, 0.22, pw * 0.72, kind)
+      }
+    }
+  }
+
 
   return {
     topY: y, sizeX, sizeZ, baseY, runeRadius: runeR, boxes: n,
@@ -1184,27 +1225,879 @@ export function monolith(L, x, y, z, opts = {}) {
       const a = 2 * Math.PI * rand()
       const rr = width * (1.1 + rand() * 1.6)
       const r = width * (0.20 + rand() * 0.22)
-      n += hiddenBlob(L, S, x + Math.cos(a) * rr, y + r * 0.7, z + Math.sin(a) * rr, kind, {
-        seed: (rand() * 0xffffff) | 0,
-        // FLAT AND ONLY MODERATELY LUMPY, unlike the tiers under a slab.
-        // A fragment lies in the open with its top face exposed, and a blob's
-        // collider is its bounding box: a tall lumpy one touches that box at a
-        // single vertex and leaves the rest of the top plane standable and
-        // undrawn (`coverage.mjs` measured 1.00 m2 across three of them). A
-        // squashed slab of rock fills its own box top to within a few
-        // centimetres — and a shard fallen off an obelisk is a slab anyway.
-        radius: r, lumpiness: 0.28 + rand() * 0.12, squash: 0.38 + rand() * 0.10,
-        detail: 1, frequency: 3.2, shade: 0.86,
-      }, null, shade)
+      // A CHAMFERED CUBOID, NOT A BLOB, and the reasoning this replaces was
+      // right about the wrong axis. A fragment lies in the open with its top
+      // face exposed, and a blob is drawn inside its bounding BOX — squashing
+      // it flat does stop it touching that box's top at a single vertex, which
+      // is what the previous note fixed. What squashing cannot fix is the four
+      // CORNERS of that face: a round thing in a square box misses 21% of the
+      // top however flat it is, for ever. One fragment is half a square metre
+      // and invisible; the void course now places thirty monoliths and two
+      // hundred debris chips, and `coverage.mjs --page ?theme=void` billed the
+      // difference at 152 m2. A box IS its own collider, exactly — and a shard
+      // fallen off an obelisk is a slab of cut stone anyway.
+      n += S(x + Math.cos(a) * rr, y + r * 0.45, z + Math.sin(a) * rr,
+        r * (1.5 + rand() * 0.8), r * (0.75 + rand() * 0.5), r * (1.5 + rand() * 0.8),
+        kind, { shade: 0.86 * shade })
     }
   }
 
   return { topY, radius: width / 2, boxes: n }
 }
 
+// ========================================================== THE DRESSING KIT
+//
+// Ethan, 2026-07-25, comparing the build to the reference image:
+//
+//   "we are significantly less detailed and have less cool unique additions
+//   compared to the reference image and we have less depth and detail in the
+//   backdrop as well and less overall objects we have."
+//
+// He is right, and the diagnosis is specific: four prefab types cannot fill a
+// 508 m shaft. The reference frame has, ON TOP of walls, slabs, sigils and
+// crystals — broken arcades, hanging chains, thin spires, carved statuary,
+// stepped ziggurat masses, small floating debris at every depth, glowing orbs
+// receding into the haze, hanging banners, cracked causeways between masses,
+// and ruin districts stacked layer on layer. Everything below exists to put
+// those things in the frame.
+//
+// ============================ WHAT THEY ALL SHARE ==========================
+//
+// 1. THEY COST TRIANGLES, NOT DRAW CALLS. `level.js` merges every box and
+//    every `L.mesh()` of one kind into ONE geometry at build time, so an
+//    arcade, a chain and a thousand rock chips all land in the same batch the
+//    great walls are already in. That is what makes this affordable: the void
+//    ran 73-107 draws before this file grew and it runs the same after, and
+//    the whole budget conversation is about vertex throughput instead. Where
+//    a prefab genuinely cannot share that batch (the glowing orbs — a
+//    different material) it goes through the glow channel, which instances by
+//    shape signature, so hundreds of orbs are still one draw call.
+//
+// 2. NOTHING HAS A LARGE FLAT TOP. `docs/course-design.md` and the brief agree:
+//    nothing decorative may become an accidental landing. Every mass here ends
+//    in a ragged crest, a broken crown, an arch extrados or a needle, and the
+//    few genuinely flat faces are ziggurat steps, which are ghost-only. The
+//    constraint improved the silhouettes: a ruin with a flat top reads as a
+//    building site.
+//
+// 3. THEY ARE ALL GHOSTABLE, AND THE CALLER DECIDES BY MEASUREMENT. `emit()`'s
+//    `ghost` flag switches every emitter from `L.solid` to `L.decor`. The
+//    course (`levels/void.js`) sets it from the 3D distance to the nearest
+//    graph node, and registers what it ghosts with `Archipelago.sceneryAt` so
+//    `verify()` proves the clearance rather than taking the placement's word
+//    for it. Near the route: real colliders, always. Far from it: no collider,
+//    proven unreachable. There is no middle.
+//
+// 4. EVERY LOD IS REAL. `detail: 0` drops the chamfer (12 triangles a box
+//    instead of 44) and coarsens the slicing, which is what lets a far ruin
+//    district of two hundred masses cost less than one great wall.
+
+// --------------------------------------------------------------- rock chips
+//
+// A tiny pool of displaced icosahedra, shared by every debris cloud in the
+// world. `subdivisions: 0` is deliberate: `blob`'s default LOD floor is one
+// subdivision (80 triangles) and a 60 cm chip tumbling at 200 m does not need
+// them. A raw displaced icosahedron is 20 triangles and, because the noise is
+// band-limited to the mesh, it comes out as an angular chunk of rock rather
+// than a smooth pebble — which is the read the reference wants anyway.
+
+const _chunk = new Map()
+
+function chunkGeometry(i, sub = 0) {
+  const key = `${i}:${sub}`
+  let g = _chunk.get(key)
+  if (!g) {
+    g = blob(0xD1B500 + i * 7919, {
+      radius: 1,
+      lumpiness: 0.46 + (i % 5) * 0.05,
+      squash: 0.44 + (i % 4) * 0.14,
+      taperY: -0.18,
+      frequency: 3.3,
+      subdivisions: sub,
+      mottle: 0.10,
+    })
+    _chunk.set(key, g)
+  }
+  return g
+}
+
+/**
+ * debrisCloud — small floating rock, a lot of it, at many depths.
+ *
+ * ANCHOR: (x, y, z) is the CENTRE of the cloud.
+ *
+ * The single highest-value thing in this file, and the cheapest. The reference
+ * image's sense of a world rather than a diorama comes almost entirely from the
+ * fact that the space BETWEEN the big masses is not empty — there is always
+ * something tumbling in it, at every distance, catching a little light. Ours
+ * had nothing between the islands at all, which is why the `plunge` frame read
+ * as four dark squares on a violet field.
+ *
+ * At 20 triangles a chip and zero draw calls, a thousand of them cost less than
+ * one great wall's panel grid. That is the whole argument for doing this first.
+ *
+ * COLLISION. Ghost by default, because a cloud is placed where the course has
+ * proved no player can reach — see `ghost` in the header above. Passed
+ * `ghost: false` every chip becomes a `hiddenBlob`: a measured AABB with the
+ * rock drawn inside it. The solid form is deliberately SQUASHED and only
+ * a chamfered cuboid, for the reason `monolith`'s fallen fragments give at
+ * length — a blob is drawn inside its bounding BOX and can never cover that
+ * box's four top corners, which across two hundred chips is exactly the
+ * standable-but-undrawn area `tools/coverage.mjs` exists to catch.
+ */
+export function debrisCloud(L, x, y, z, opts = {}) {
+  const {
+    count = 26, radius = 22, size = 1.0, kind = 'stone', detail = 0,
+  } = opts
+  const ghost = opts.ghost !== false
+  const spreadY = opts.spreadY ?? radius * 0.75
+  const rand = pick(opts)
+  const { S, shade } = emit(L, { ...opts, ghost })
+  const sub = detail >= 2 ? 1 : 0
+  let n = 0
+  for (let i = 0; i < count; i++) {
+    const a = rand() * Math.PI * 2
+    // sqrt so the cloud is uniform in AREA rather than crowding its centre.
+    const rr = radius * Math.sqrt(rand())
+    const px = x + Math.cos(a) * rr
+    const pz = z + Math.sin(a) * rr
+    const py = y + (rand() - 0.5) * 2 * spreadY
+    // rand^2 biases hard toward small: a cloud of equal-sized rocks reads as a
+    // pattern, and the few large ones are what give the small ones a scale.
+    const s = size * (0.26 + rand() * rand() * 1.6)
+    if (ghost) {
+      if (!L.mesh) continue
+      const geo = chunkGeometry(i % 6, sub).clone()
+      const q = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(rand() * 6.283, rand() * 6.283, rand() * 6.283))
+      L.mesh(kind, geo, new THREE.Matrix4().compose(
+        new THREE.Vector3(px, py, pz), q,
+        new THREE.Vector3(s, s * (0.55 + rand() * 0.55), s * (0.75 + rand() * 0.5))),
+      { shade: (0.70 + rand() * 0.24) * shade })
+      n++
+    } else {
+      // A SOLID CHIP IS A BOX, and this is measured rather than fastidious.
+      //
+      // A blob is drawn inside its own bounding BOX, and a round thing in a
+      // square box never covers the four corners — 21% of that box's top face,
+      // at every squash and every lumpiness, for ever. One fallen fragment is
+      // 1 m2 of standable-but-undrawn and nobody notices; two hundred debris
+      // chips is 139 m2, which is what `coverage.mjs --page ?theme=void`
+      // reported and what took the void from 0.5 m2 of debt to 152.
+      //
+      // So the solid form is a small chamfered cuboid with randomised
+      // proportions. It IS its own collider, exactly, and at the sizes debris
+      // is drawn at the difference from a blob is a chamfer.
+      n += S(px, py, pz,
+        s * (1.3 + rand() * 0.7), s * (0.7 + rand() * 0.5), s * (1.3 + rand() * 0.7), kind)
+    }
+  }
+  return { count, pieces: n }
+}
+
+/**
+ * brokenArch — a ruined arcade: a wall pierced by arched openings, its crest
+ * broken, some of its arches collapsed.
+ *
+ * ANCHOR: (x, y, z) is the CENTRE OF THE FOOTPRINT AT THE BASE. `axis` is the
+ * direction the arcade runs.
+ *
+ * ======================= WHY A PIERCED WALL, NOT A RING ====================
+ * The obvious construction is `props.arch()` — a ring of voussoirs, each a box
+ * rotated to the arc tangent. It was built that way first and it is WRONG here,
+ * for a reason that is worth recording because it will come up again.
+ *
+ * `level.js`'s `rot` channel shrinks a rotated box until it fits back inside
+ * its declared AABB. That keeps the collider honest, but it means a voussoir at
+ * 45 degrees touches the TOP of its own AABB along one edge and leaves the rest
+ * of that face standable with nothing drawn on it. Across the exposed extrados
+ * of one arch that is several square metres of invisible floor — the exact bug
+ * class `tools/coverage.mjs` was written for, multiplied by every arch in the
+ * level.
+ *
+ * A wall with the arch CUT OUT of it has no rotated boxes at all. It is
+ * sampled in vertical slices: each slice is one axis-aligned solid box running
+ * from its own floor (the ground, or the intrados curve where a slice passes
+ * through an opening) to its own crest. Every slice's top face IS its own drawn
+ * top face, at every angle, so coverage is exact by construction — and the
+ * silhouette is better, because a ruined arcade in the reference is a pierced
+ * wall rather than a freestanding ring.
+ *
+ * The crest is a ragged function of position rather than a flat line, which
+ * also means this can never present a long flat landing however it is placed.
+ *
+ * @returns {{length:number, topY:number, boxes:number}}
+ */
+export function brokenArch(L, x, y, z, opts = {}) {
+  const {
+    bays = 3, span = 8, rise = 4.4, pierWidth = 2.0, depth = 2.4,
+    crest = 3.0, axis = 'x', kind = 'stone', detail = 2, broken = 0.4,
+    pilasters = true,
+  } = opts
+  const legHeight = opts.legHeight ?? rise * 0.85
+  const rand = pick(opts)
+  const { S } = emit(L, opts)
+  const F = frame(axis)
+  const nBays = Math.max(1, bays | 0)
+  const pitch = span + pierWidth
+  const total = nBays * pitch + pierWidth
+  const springY = y + legHeight
+  const crownY = springY + rise
+  let n = 0
+
+  // The crest: two incommensurate sine waves with random phase, so the top of
+  // the wall is broken everywhere and repeats nowhere. Evaluated as a function
+  // of position rather than sampled per box, so the profile is continuous and
+  // the boxes tile it instead of stepping randomly against each other.
+  const p1 = rand() * 6.283, p2 = rand() * 6.283
+  const w1 = 0.19 + rand() * 0.12, w2 = 0.61 + rand() * 0.3
+  const crestAt = (u) => crownY + crest * (
+    0.30 + 0.44 * (0.5 + 0.5 * Math.sin(u * w1 + p1))
+    + 0.26 * (0.5 + 0.5 * Math.sin(u * w2 + p2)))
+
+  // Which bays have lost their arch, and from which side the collapse runs.
+  const bayState = []
+  for (let b = 0; b < nBays; b++) {
+    const hit = rand() < broken
+    bayState.push({
+      broken: hit,
+      side: rand() > 0.5 ? 1 : -1,
+      // How far across the opening the collapse has eaten, as a fraction.
+      eaten: 0.35 + rand() * 0.75,
+    })
+  }
+
+  const sliceW = detail >= 2 ? 0.66 : detail === 1 ? 1.1 : 1.9
+  const slices = Math.max(4, Math.round(total / sliceW))
+  const sw = total / slices
+  const flat = detail === 0 ? { bevel: 0 } : undefined
+
+  for (let i = 0; i < slices; i++) {
+    const u = -total / 2 + (i + 0.5) * sw
+    let floor = y
+    let top = crestAt(u)
+
+    // Inside an opening?
+    for (let b = 0; b < nBays; b++) {
+      const ob = -total / 2 + pierWidth + span / 2 + b * pitch
+      const du = u - ob
+      if (Math.abs(du) >= span / 2) continue
+      const st = bayState[b]
+      // Elliptical intrados. Always defined, unlike the circular one, and at
+      // these proportions the eye cannot tell them apart.
+      const t = du / (span / 2)
+      const arch = springY + rise * Math.sqrt(Math.max(0, 1 - t * t))
+      if (st.broken && (du * st.side) > (span / 2) * (1 - st.eaten)) {
+        // The collapsed end of a broken bay: the wall is simply gone above the
+        // springing, leaving a ragged stub of leg.
+        top = Math.min(top, springY + rise * 0.22 * (0.4 + rand() * 0.6))
+      } else {
+        floor = arch
+      }
+      break
+    }
+
+    if (top - floor < 0.32) continue
+    const [cx, cz] = F.at(x, z, u, 0)
+    const [sx, sz] = F.sz(sw * 1.02, depth)
+    n += S(cx, (floor + top) / 2, cz, sx, top - floor, sz, kind, flat)
+  }
+
+  // Pilasters — a shallow buttress standing proud of both faces at every pier.
+  // Without them a pierced wall is a slab with holes in it; with them the
+  // arcade has an order, and the shadow down each pier is what makes the
+  // openings read as openings at 200 m.
+  if (pilasters && detail >= 1) {
+    for (let b = 0; b <= nBays; b++) {
+      const u = -total / 2 + pierWidth / 2 + b * pitch
+      const h = springY + rise * 0.28 - y
+      for (const side of [1, -1]) {
+        const [cx, cz] = F.at(x, z, u, side * (depth / 2 + 0.19))
+        const [sx, sz] = F.sz(pierWidth * 0.72, 0.38)
+        n += S(cx, y + h / 2, cz, sx, h, sz, kind, flat)
+      }
+    }
+  }
+
+  return { length: total, topY: crestAt(0), springY, crownY, boxes: n }
+}
+
+/**
+ * ruinSpire — a tall thin tower, snapped off near the top.
+ *
+ * ANCHOR: (x, y, z) is the CENTRE OF THE BASE.
+ *
+ * §5 asks every hero vantage to be framed by a vertical, and the course had
+ * exactly two kinds of vertical in it: the great walls (which are 40 m wide and
+ * read as ground rather than as a line) and the energy beams (which are
+ * emissive and belong to another lane). A spire is the third: a hard dark
+ * vertical, cheap enough to place forty of, that gives the fog something to
+ * recede past.
+ *
+ * It is `monolith` grown up rather than a variant of it — the difference that
+ * matters is the CORNER PILASTERS, four strips standing proud the whole height.
+ * A bare tapering stack at 40 m reads as a smooth cone in the haze; the
+ * pilasters give it four hard edges that catch the rim light §5 asks for, and
+ * they are what makes the same silhouette read as built rather than as rock.
+ *
+ * @returns {{topY:number, width:number, boxes:number}}
+ */
+export function ruinSpire(L, x, y, z, opts = {}) {
+  const {
+    height = 34, width = 4.0, kind = 'stone', detail = 2, taper = 0.66,
+    fins = true, broken = true,
+  } = opts
+  const courses = opts.courses ?? (detail === 0 ? 2 : detail === 1 ? 4 : 6)
+  const rand = pick(opts)
+  const { S } = emit(L, opts)
+  const flat = detail === 0 ? { bevel: 0 } : undefined
+  let n = 0
+
+  // Plinth. Two courses so the foot has a moulding rather than a hard meeting
+  // with the ground it is (usually) not standing on anyway.
+  const plinthH = Math.min(1.4, height * 0.05)
+  n += S(x, y + plinthH * 0.3, z, width * 1.55, plinthH * 0.6, width * 1.55, kind, flat)
+  if (detail >= 1) n += S(x, y + plinthH * 0.8, z, width * 1.28, plinthH * 0.4, width * 1.28, kind, flat)
+
+  const base = y + plinthH
+  const shaft = height * (broken ? 0.88 : 1) - plinthH
+  const each = shaft / courses
+  const leanX = (rand() - 0.5) * width * 0.5
+  const leanZ = (rand() - 0.5) * width * 0.5
+  const widthAt = (t) => width * (1 - taper * t)
+
+  for (let i = 0; i < courses; i++) {
+    const t0 = i / courses, t1 = (i + 1) / courses
+    const w = widthAt((t0 + t1) / 2)
+    const cy = base + shaft * (t0 + t1) / 2
+    const x2 = x + leanX * t1, z2 = z + leanZ * t1
+    const last = i === courses - 1
+    if (last && broken && detail >= 1) {
+      // The same stepped fracture `monolith` argues for: three offset plates
+      // approximating a diagonal break, every one of them axis-aligned so
+      // every one of them draws its own top face.
+      const plates = 3
+      const dir = rand() > 0.5 ? 1 : -1
+      const alongX = rand() > 0.5
+      const ph = each / plates
+      for (let p = 0; p < plates; p++) {
+        const cut = w * (0.14 + p * 0.30)
+        const pw = Math.max(w * 0.22, w - cut)
+        const shift = dir * (w - pw) / 2
+        n += S(x2 + (alongX ? shift : 0), cy - each / 2 + ph * (p + 0.5), z2 + (alongX ? 0 : shift),
+          alongX ? pw : w, ph, alongX ? w : pw, kind, flat)
+      }
+    } else {
+      n += S(x2, cy, z2, w, each * (last ? 1 : 1.12), w, kind, flat)
+    }
+    // Corner pilasters. Face-centred rather than corner-set: a strip on the
+    // diagonal is invisible in silhouette from three of the four cardinal
+    // directions, and this tower is seen from all of them.
+    if (fins && detail >= 1 && !(last && broken)) {
+      const fw = Math.max(0.34, w * 0.26), fp = 0.30
+      for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        n += S(x2 + ox * (w / 2 + fp / 2), cy, z2 + oz * (w / 2 + fp / 2),
+          ox ? fp : fw, each * 0.94, ox ? fw : fp, kind, flat)
+      }
+    }
+  }
+
+  return { topY: base + shaft, width, boxes: n }
+}
+
+/**
+ * ziggurat — a stepped mass, for the far band's skyline.
+ *
+ * ANCHOR: (x, y, z) is the CENTRE OF THE BASE.
+ *
+ * The reference's depth does not come from fog alone; it comes from the fact
+ * that there is a DISTRICT behind the fog — big stepped masses, layer on layer,
+ * each one a little more washed out than the last. A spire is a line and an
+ * arcade is a plane; this is the volume, and it is the shape that reads at
+ * 400 m when everything else has dissolved.
+ *
+ * GHOST BY DEFAULT and it should stay that way. Its steps are the one genuinely
+ * large flat surface in this file, which is fine at 300 m where the course has
+ * proved nobody can arrive and would be an accidental landing anywhere nearer.
+ *
+ * @returns {{topY:number, width:number, boxes:number}}
+ */
+export function ziggurat(L, x, y, z, opts = {}) {
+  const {
+    width = 26, height = 20, kind = 'stone', detail = 1, shrink = 0.70,
+    crown = true,
+  } = opts
+  const steps = opts.steps ?? (detail === 0 ? 3 : detail === 1 ? 5 : 7)
+  const rand = pick(opts)
+  const { S } = emit(L, { ghost: true, ...opts })
+  const flat = detail === 0 ? { bevel: 0 } : undefined
+  const each = height / steps
+  let n = 0
+  let w = width
+
+  // THE STACK DRIFTS. A ziggurat whose courses share one axis is a symmetric
+  // pyramid, and a symmetric pyramid of `bevel: 0` boxes at 400 m is a
+  // staircase — which is exactly what the first far-band capture came back as,
+  // three of them in a row, reading as voxel art rather than as ruin. Letting
+  // each course wander a fraction of its own inset costs nothing and turns the
+  // same box count into a mass that has collapsed unevenly.
+  let ox = 0, oz = 0
+  for (let i = 0; i < steps; i++) {
+    const cy = y + each * (i + 0.5)
+    const last = i === steps - 1
+    if (last && detail >= 1) {
+      // The top course is BROKEN into two offset plates, so the mass never
+      // finishes in a clean rectangle — a ziggurat with a tidy top reads as
+      // architecture drawn by a compiler.
+      const a = w * (0.42 + rand() * 0.2)
+      n += S(x + ox - (w - a) / 2, cy, z + oz, a, each, w * (0.7 + rand() * 0.3), kind, flat)
+      n += S(x + ox + a / 2, cy - each * 0.22, z + oz + w * 0.1,
+        w - a, each * 0.56, w * 0.55, kind, flat)
+    } else {
+      n += S(x + ox, cy, z + oz, w, each * 1.04, w * (0.86 + rand() * 0.28), kind, flat)
+    }
+    // Corner buttresses on the bottom two courses: the shadow line that stops
+    // a stack of boxes from reading as a stack of boxes.
+    if (i < 2 && detail >= 1) {
+      const bw = w * 0.16
+      for (const [bx, bz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        n += S(x + ox + bx * (w / 2 - bw * 0.3), cy, z + oz + bz * (w / 2 - bw * 0.3),
+          bw, each * 1.1, bw, kind, flat)
+      }
+    }
+    const nw = w * (shrink + rand() * 0.06)
+    ox += (rand() - 0.5) * (w - nw) * 0.9
+    oz += (rand() - 0.5) * (w - nw) * 0.9
+    w = nw
+  }
+
+  if (crown && detail >= 1) {
+    // A broken shrine on the summit. Different silhouette from the steps, so
+    // the mass terminates in something rather than simply stopping.
+    n += ruinSpire(L, x + ox, y + height, z + oz, {
+      height: height * 0.55, width: Math.max(1.6, w * 1.3), detail: Math.max(0, detail - 1),
+      taper: 0.5, seed: (rand() * 0xffffff) | 0, ghost: true, kind,
+    }).boxes
+  }
+
+  return { topY: y + height, width, boxes: n }
+}
+
+/**
+ * hangingChain — a cable or chain hung from a mass, sagging into the void.
+ *
+ * ANCHOR: (x, y, z) is the TOP ATTACHMENT. `to` hangs it to a second point;
+ * without one it falls free, drifting a little as it goes.
+ *
+ * The reference is full of these and they do something no other prefab here
+ * does: they connect masses that are otherwise floating independently, which is
+ * most of what makes the space read as one place instead of as a set of props.
+ * They are also nearly free — a four-sided tube at ten path segments is 80
+ * triangles for twenty metres of world.
+ *
+ * COLLISION. Solid by default, and the collider is one small hidden AABB per
+ * path segment rather than one box round the whole curve: a catenary's own
+ * bounding box is a slab metres across and almost entirely empty, which is a
+ * far bigger lie than the ~8 cm of box corner at each link. `ghost: true` drops
+ * the colliders for the far band, where the course has proved no player can
+ * reach it.
+ *
+ * @returns {{length:number, boxes:number}}
+ */
+export function hangingChain(L, x, y, z, opts = {}) {
+  const {
+    length = 20, radius = 0.09, kind = 'stone', detail = 1, sag = 0.16,
+    weight = true, links = null,
+  } = opts
+  const rand = pick(opts)
+  const ghost = !!opts.ghost
+  const { S, shade } = emit(L, opts)
+  const segs = detail >= 2 ? 6 : detail === 1 ? 4 : 3
+  const steps = links ?? (detail >= 2 ? 12 : detail === 1 ? 9 : 6)
+  const to = opts.to || null
+  let n = 0
+
+  // The path. Hung between two points it is a catenary approximated by a
+  // parabola (indistinguishable at these spans); hung free it falls with a
+  // slow drift, because a dead-vertical line reads as a wire and the reference
+  // has weight on everything.
+  const pts = []
+  // THE DRIFT IS SMALL, AND THAT IS A COLLISION NUMBER RATHER THAN AN ART ONE.
+  // Each path span gets one AABB, so a chain that wanders 3 m sideways over ten
+  // links declares ten 0.8 m boxes with a 10 cm tube running diagonally through
+  // each — and the top face of every one of those boxes is standable with
+  // nothing drawn on it. Measured: 40 m2 across the course's hundred chains.
+  // At 5% the per-span drift is under the 0.5 m coverage cell, so each box is
+  // sampled once, at its centre, where the chain actually is. It also still
+  // reads: a hanging chain in the reference is a near-vertical line with a
+  // little life in it, not a bent wire.
+  const driftX = (rand() - 0.5) * length * 0.05
+  const driftZ = (rand() - 0.5) * length * 0.05
+  const span = to ? Math.hypot(to[0] - x, to[2] - z) : 0
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps
+    if (to) {
+      const px = x + (to[0] - x) * t
+      const pz = z + (to[2] - z) * t
+      const py = y + (to[1] - y) * t - sag * span * 4 * t * (1 - t)
+      pts.push([px, py, pz])
+    } else {
+      pts.push([x + driftX * t * t, y - length * t, z + driftZ * t * t])
+    }
+  }
+
+  const geo = sweepTube(pts, radius, { segments: segs, detail, taper: 0.82, pathSegments: steps })
+  if (L.mesh) {
+    if (!ghost) {
+      // One AABB per span of the path, measured from the two ends plus the
+      // tube radius. Nothing about the drawn curve leaves it.
+      for (let i = 0; i < steps; i++) {
+        const a = pts[i], b = pts[i + 1]
+        const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2, cz = (a[2] + b[2]) / 2
+        n += S(cx, cy, cz,
+          Math.abs(b[0] - a[0]) + radius * 2,
+          Math.abs(b[1] - a[1]) + radius * 2,
+          Math.abs(b[2] - a[2]) + radius * 2, kind, { hidden: true })
+      }
+    }
+    L.mesh(kind, geo, new THREE.Matrix4(), { shade: 0.86 * shade })
+    n += 1
+  } else geo.dispose()
+
+  // A counterweight on a free-hanging chain: the thing that says it is heavy.
+  if (weight && !to && detail >= 1) {
+    const end = pts[pts.length - 1]
+    const r = radius * (2.2 + rand() * 1.2)
+    if (ghost) {
+      if (L.mesh) {
+        const g = chunkGeometry(3, 0).clone()
+        L.mesh(kind, g, new THREE.Matrix4().compose(
+          new THREE.Vector3(end[0], end[1] - r * 0.5, end[2]),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(rand(), rand() * 3, rand())),
+          new THREE.Vector3(r, r * 1.5, r)), { shade: 0.8 * shade })
+        n += 1
+      }
+    } else {
+      // A BLOCK, not a blob, for the coverage reason argued at `statue`'s head:
+      // a rounded lump only touches the top of its own collider at a point, and
+      // there are a hundred of these hanging off the islands and the walls. A
+      // squared stone counterweight is also simply what a chain like this ends
+      // in.
+      n += S(end[0], end[1] - r * 0.75, end[2], r * 1.7, r * 1.5, r * 1.7, kind)
+      n += S(end[0], end[1] - r * 1.62, end[2], r * 1.15, r * 0.4, r * 1.15, kind)
+    }
+  }
+
+  return { length: to ? Math.hypot(to[0] - x, to[1] - y, to[2] - z) : length, boxes: n }
+}
+
+/**
+ * causeway — a cracked bridge running between two masses.
+ *
+ * ANCHOR: (x, y, z) is one end; `to` is the other.
+ *
+ * §5's "silhouette against glow" wants long horizontals crossing the frame at
+ * mid depth, and a broken one is better than a whole one: the gap is what tells
+ * you it is a ruin rather than a road. It is also the cheapest way to make two
+ * far masses read as ONE district instead of two objects.
+ *
+ * GHOST BY DEFAULT, for the reason `ziggurat` gives: a causeway deck is a long
+ * flat surface, which is a landing anywhere the player could get to it.
+ *
+ * @returns {{span:number, boxes:number}}
+ */
+export function causeway(L, x, y, z, opts = {}) {
+  const {
+    width = 4.0, thickness = 0.9, kind = 'stone', detail = 1, parapet = true,
+    sag = 0.05,
+  } = opts
+  const to = opts.to || [x + 60, y - 8, z]
+  const rand = pick(opts)
+  const { S } = emit(L, { ghost: true, ...opts })
+  const flat = detail === 0 ? { bevel: 0 } : undefined
+  const dx = to[0] - x, dy = to[1] - y, dz = to[2] - z
+  const span = Math.hypot(dx, dz)
+  const segLen = detail >= 2 ? 3.2 : detail === 1 ? 4.6 : 7.0
+  const count = Math.max(3, Math.round(span / segLen))
+  const gaps = opts.gaps ?? (1 + ((rand() * 2) | 0))
+  // Which segments are missing. Never the two ends — a bridge with no abutment
+  // reads as a floating plank rather than as a broken bridge.
+  const missing = new Set()
+  for (let g = 0; g < gaps; g++) {
+    const at = 1 + ((rand() * (count - 2)) | 0)
+    missing.add(at)
+    if (rand() > 0.55) missing.add(at + 1)
+  }
+  // Across the span, so the deck and the parapets share one axis frame.
+  const ux = dx / (span || 1), uz = dz / (span || 1)
+  const nx = -uz, nz = ux
+  let n = 0
+
+  for (let i = 0; i < count; i++) {
+    if (missing.has(i)) continue
+    const t = (i + 0.5) / count
+    const px = x + dx * t, pz = z + dz * t
+    const py = y + dy * t - sag * span * 4 * t * (1 - t)
+    const len = (span / count) * 1.04
+    // Axis-aligned boxes sized to the segment's own footprint. A rotated deck
+    // would cost the same coverage argument `brokenArch` refuses to pay.
+    const sx = Math.abs(ux) * len + Math.abs(nx) * width
+    const sz = Math.abs(uz) * len + Math.abs(nz) * width
+    n += S(px, py, pz, sx, thickness, sz, kind, flat)
+    if (parapet && detail >= 1 && rand() > 0.35) {
+      const side = rand() > 0.5 ? 1 : -1
+      const pw = 0.42
+      n += S(px + nx * side * (width / 2 - pw / 2), py + thickness / 2 + 0.34,
+        pz + nz * side * (width / 2 - pw / 2),
+        Math.abs(ux) * len * 0.9 + Math.abs(nx) * pw,
+        0.68,
+        Math.abs(uz) * len * 0.9 + Math.abs(nz) * pw, kind, flat)
+    }
+  }
+  return { span, boxes: n }
+}
+
+/**
+ * statue — a carved figure on a pillar, the void's inhabitants.
+ *
+ * ANCHOR: (x, y, z) is the CENTRE OF THE BASE.
+ *
+ * Everything else in this kit is architecture, and a ruin with no figures in it
+ * reads as a quarry. The reference has carved statuary and pillars all through
+ * the mid ground, and one silhouette with a HEAD on it changes the register of
+ * the whole frame — it says somebody built this and is gone.
+ *
+ * Deliberately crude and deliberately boxy: this is a colossal carved figure
+ * seen at 30 to 200 m in near-darkness, not a character model. Every part is an
+ * axis-aligned solid box except the head, which is a `hiddenBlob` — a rounded
+ * head against a rectilinear body is the whole read, and it is one blob.
+ *
+ * @returns {{topY:number, boxes:number}}
+ */
+export function statue(L, x, y, z, opts = {}) {
+  const {
+    height = 10, kind = 'stone', detail = 2, armless = false,
+  } = opts
+  const rand = pick(opts)
+  const { S, shade } = emit(L, opts)
+  const flat = detail === 0 ? { bevel: 0 } : undefined
+  const s = height / 10          // everything below is authored at height 10
+  let n = 0
+
+  // Plinth: two courses, the upper one inset.
+  n += S(x, y + 0.35 * s, z, 3.4 * s, 0.7 * s, 3.4 * s, kind, flat)
+  n += S(x, y + 0.95 * s, z, 2.7 * s, 0.5 * s, 2.7 * s, kind, flat)
+
+  // The robe: three courses narrowing upward, with a lean so the figure has a
+  // contrapposto rather than standing to attention.
+  const lean = (rand() - 0.5) * 0.5 * s
+  const robe = [[1.2, 2.4, 2.1], [3.5, 2.0, 1.75], [5.4, 1.4, 1.5]]
+  for (let i = 0; i < robe.length; i++) {
+    const [by, bh, bw] = robe[i]
+    if (detail === 0 && i === 1) continue
+    n += S(x + lean * (by / 6), y + (by + bh / 2) * s, z + lean * 0.4 * (by / 6),
+      bw * s, bh * s, bw * 0.86 * s, kind, flat)
+  }
+
+  // Shoulders and head.
+  const sy = 6.8 * s
+  n += S(x + lean * 1.15, y + sy, z + lean * 0.46, 2.7 * s, 0.9 * s, 1.5 * s, kind, flat)
+  const hx = x + lean * 1.2, hz = z + lean * 0.48
+  // ============================ THE HEAD IS BOXES =============================
+  // It was a `hiddenBlob`, on the reasoning that a rounded head against a
+  // rectilinear body is the whole read. `tools/coverage.mjs --page ?theme=void`
+  // refused it, and was right: a blob is drawn inside its own bounding BOX, and
+  // a near-spherical one only reaches that box's top face at a single point.
+  // The tolerance is 60 cm, so on a head 3 m across the outer ring of the
+  // collider's top face is standable with nothing drawn on it — and across the
+  // thirty statues in this course that measured 299.75 m2 against a 200 m2
+  // budget. The exact bug the tool exists for, arriving through a prefab that
+  // looked innocent.
+  //
+  // Two stacked boxes — jaw and crown, the crown narrower and set back — give a
+  // head that reads at the only distances anyone sees it from, and every top
+  // face in it is its own drawn surface. The blob is kept for the SHOULDERS'
+  // silhouette instead, where it is buried under the head and cannot be
+  // exposed.
+  n += S(hx, y + sy + 0.86 * s, hz, 1.30 * s, 1.05 * s, 1.24 * s, kind, flat)
+  if (detail >= 1) {
+    n += S(hx - 0.06 * s, y + sy + 1.62 * s, hz + 0.05 * s,
+      1.06 * s, 0.52 * s, 1.02 * s, kind, flat)
+  }
+
+  // Arms folded across the chest — two short boxes, and one of them is
+  // sometimes missing, because these are ruins.
+  if (!armless && detail >= 1) {
+    for (const side of [1, -1]) {
+      if (rand() < 0.22) continue
+      n += S(x + lean * 1.05 + side * 0.95 * s, y + 5.6 * s, z + lean * 0.42,
+        0.62 * s, 1.9 * s, 0.62 * s, kind, flat)
+    }
+  }
+
+  return { topY: y + sy + 1.9 * s, boxes: n }
+}
+
+/**
+ * banner — hanging cloth, with a lit seam down it.
+ *
+ * ANCHOR: (x, y, z) is the TOP RAIL. It hangs DOWN from there. `axis` is the
+ * direction the rail runs; the cloth faces across it.
+ *
+ * The reference has banners the height of several storeys hanging off the great
+ * walls, and they do a specific job §5 asks for: they break the wall's panel
+ * grid with a soft vertical, and their bottom edge is the only ragged, hanging
+ * silhouette in a frame that is otherwise all straight lines and points.
+ *
+ * NO ROTATION ANYWHERE. The wave is made by OFFSETTING each course along the
+ * cloth's normal, not by turning it — a turned box is shrunk to fit its
+ * collider (see `brokenArch`'s note), and a stack of shrinking boxes is a
+ * ladder rather than a hanging cloth. Offsetting costs nothing and reads
+ * better.
+ *
+ * The lit seam goes through the glow channel in the theme's COOL accent, never
+ * the rune colour: §6 reserves that colour for "you may stand here" and a
+ * banner is on a wall.
+ *
+ * @returns {{bottomY:number, boxes:number}}
+ */
+export function banner(L, x, y, z, opts = {}) {
+  const {
+    length = 12, width = 2.4, thickness = 0.14, axis = 'x', kind = 'stone',
+    detail = 2, seam = true, seamIntensity = 1.1,
+  } = opts
+  const rand = pick(opts)
+  const { S, ghost } = emit(L, opts)
+  const colors = voidColors(opts, opts.theme || safeTheme())
+  const F = frame(axis)
+  const courses = detail >= 2 ? 7 : detail === 1 ? 4 : 2
+  const each = length / courses
+  const flat = detail === 0 ? { bevel: 0 } : undefined
+  const phase = rand() * 6.283
+  const amp = Math.min(0.42, width * 0.20)
+  let n = 0
+
+  // The rail the cloth hangs from.
+  {
+    const [cx, cz] = F.at(x, z, 0, 0)
+    const [sx, sz] = F.sz(width * 1.14, thickness * 2.6)
+    n += S(cx, y - 0.16, cz, sx, 0.32, sz, kind, flat)
+  }
+
+  for (let i = 0; i < courses; i++) {
+    const t = (i + 0.5) / courses
+    // Narrows slightly as it falls, and swings across its own normal.
+    const w = width * (1 - 0.16 * t)
+    const off = Math.sin(phase + t * 3.4) * amp * t
+    const [cx, cz] = F.at(x, z, 0, off)
+    const [sx, sz] = F.sz(w, thickness)
+    n += S(cx, y - 0.32 - each * (i + 0.5), cz, sx, each * 1.02, sz, kind, flat)
+  }
+
+  // The torn hem: two tails of different length, so the bottom edge is never a
+  // straight line.
+  const hemY = y - 0.32 - length
+  if (detail >= 1) {
+    const offH = Math.sin(phase + 3.4) * amp
+    for (const side of [-1, 1]) {
+      const drop = each * (0.4 + rand() * 0.9)
+      const [cx, cz] = F.at(x, z, side * width * 0.24, offH)
+      const [sx, sz] = F.sz(width * 0.40, thickness)
+      n += S(cx, hemY - drop / 2, cz, sx, drop, sz, kind, flat)
+    }
+  }
+
+  if (seam && !ghost && detail >= 1) {
+    const key = `banner:${width.toFixed(2)}:${length.toFixed(1)}`
+    const plane = F.alongX ? 'xy' : 'zy'
+    const side = opts.seamSide ?? 1
+    const [ox, oz] = F.at(x, z, 0, side * (thickness / 2 + amp + 0.02))
+    addGlow(L, key, colors.cool, seamIntensity,
+      () => bannerSeam(width, length),
+      planeMatrix(plane, ox, y - 0.32 - length / 2, oz, side, 0))
+  }
+
+  return { bottomY: hemY, boxes: n }
+}
+
+/** The banner's lit seam: a long thin stroke with rungs, authored in XY. */
+function bannerSeam(width, length) {
+  const out = { pos: [], idx: [] }
+  const w = Math.max(0.05, width * 0.045)
+  const h = length / 2
+  glyphQuad(out, [-w, -h * 0.92], [w, -h * 0.92], [w, h * 0.92], [-w, h * 0.92])
+  const rungs = Math.max(2, Math.round(length / 2.4))
+  for (let i = 0; i < rungs; i++) {
+    const yy = -h * 0.8 + (h * 1.6 * i) / Math.max(1, rungs - 1)
+    const rw = width * (0.14 + 0.10 * (i % 2))
+    glyphQuad(out, [-rw, yy - w * 0.7], [rw, yy - w * 0.7], [rw, yy + w * 0.7], [-rw, yy + w * 0.7])
+  }
+  return glyphGeometry(out)
+}
+
+/**
+ * voidOrb — a glowing point of light hanging in the void.
+ *
+ * §5: "every important edge needs a glow behind it — this is a composition rule
+ * and it must be designed into the level layout." Until now the only things
+ * that could provide that glow were the crystals (which sit ON mass, so they
+ * light it from the front rather than backing it) and the beams (four of them,
+ * in fixed places). An orb can go anywhere, including BEHIND a ruin at a depth
+ * where nothing else exists, which is exactly what §5 is asking for and what
+ * makes the far band read as receding rather than as flat.
+ *
+ * It is also how the frame gets §4.5's "glowing orbs and motes at many depths"
+ * as real geometry with real parallax, rather than as a particle sheet.
+ *
+ * COST: an icosahedron at detail 1 is 80 triangles, and the radius is QUANTISED
+ * so orbs bucket together in the glow channel — hundreds of them are one
+ * `InstancedMesh` and one draw call. That quantisation is the entire reason
+ * this is affordable; do not pass a continuous radius.
+ *
+ * ONE SUBDIVISION, NOT ZERO, and it was measured rather than assumed. The first
+ * cut used a bare icosahedron: twenty facets, each a flat plane of emissive at
+ * an intensity above the bloom threshold, which reads at close range as a hard
+ * white HEXAGON hanging in the air — a paper cutout, and the single most
+ * obviously wrong thing in the capture. Eighty facets plus an intensity that
+ * sits just under the clip point gives a round bloomed point of light, which is
+ * what §4.5 is asking for. Sixty extra triangles on an object there are six
+ * hundred of is four hundredths of the level's budget.
+ *
+ * No collider, and none is possible to want: it is a light, it is 60 cm across,
+ * and there is no orientation in which it could be a landing.
+ */
+export function voidOrb(L, x, y, z, opts = {}) {
+  const { intensity = 1.0, detail = 1 } = opts
+  const colors = voidColors(opts, opts.theme || safeTheme())
+  const color = opts.color ?? colors.cool
+  // Quantised to 5 cm on a small set of sizes. See the cost note above.
+  const r = Math.max(0.15, Math.round((opts.radius ?? 0.4) * 20) / 20)
+  const sub = detail >= 1 ? 1 : 0
+  const placed = addGlow(L, `orb:${r}:${sub}`, color, intensity,
+    () => new THREE.IcosahedronGeometry(r, sub),
+    new THREE.Matrix4().makeTranslation(x, y, z))
+  return { radius: r, placed }
+}
+
 // ------------------------------------------------------------------ export
 
 export const VOID_PREFABS = { greatWall, runeSlab, sigilRing, monolith }
+
+/**
+ * The dressing kit, kept OUT of `VOID_PREFABS` on purpose.
+ *
+ * `trackedVoidKit().assertAllPlaced()` exists to catch "prefab written, never
+ * imported, eight captures with none of them in frame". That contract is about
+ * the four load-bearing prefabs — a course without a great wall is broken.
+ * These nine are dressing: a caller that wants arcades but no statues is making
+ * a legitimate choice, and folding them into the same assertion would turn a
+ * real invariant into a checklist. They are still measured by
+ * `voidKitSelfTest()`, which walks both maps.
+ */
+export const VOID_DRESSING = {
+  debrisCloud, brokenArch, ruinSpire, ziggurat, hangingChain, causeway,
+  statue, banner, voidOrb,
+}
 
 /**
  * A recording facade over VOID_PREFABS, plus the two assertions that close the
@@ -1253,7 +2146,7 @@ export function trackedVoidKit() {
  */
 export function voidKitSelfTest(overrides = {}, levels = [0, 1, 2]) {
   const out = {}
-  for (const [name, fn] of Object.entries(VOID_PREFABS)) {
+  for (const [name, fn] of Object.entries({ ...VOID_PREFABS, ...VOID_DRESSING })) {
     out[name] = {}
     for (const detail of levels) {
       const rec = { solid: 0, decor: 0, boxes: [], meshes: 0, meshTris: 0, glow: 0, glowTris: 0 }
