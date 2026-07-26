@@ -105,6 +105,7 @@ const skyline = {
     lantern: null,          // null = PALETTE.brass, the shipped value
     streak: null,           // null = the shipped wind-streak cream
     streakOverlay: null,
+    streakGain: null,       // null = 1.0, the shipped strength
   },
 
   // Foliage belongs to a living world. A void has none, and this is the flag
@@ -565,6 +566,9 @@ const voidTheme = {
     // Cold and dim: wind streaks are the air, and this air is violet.
     streak: 0x9d7dff,
     streakOverlay: 0xb69cff,
+    // A third strength. The void reads on a few deliberate verticals; a
+    // full-strength streak field competes with them for the same channel.
+    streakGain: 0.34,
   },
 
   foliage: false,

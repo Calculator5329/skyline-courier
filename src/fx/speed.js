@@ -54,6 +54,7 @@ const OVERLAY_FRAG = /* glsl */`
   uniform float uSlide;      // 0..1, sliding
   uniform float uAspect;
   uniform vec3  uTint;
+  uniform float uStreakGain;
   uniform vec2  uCenter;     // where the player is actually headed, in the
                              // same aspect-corrected space as p
 
@@ -110,7 +111,7 @@ const OVERLAY_FRAG = /* glsl */`
     // is the entire skill the game rewards, looked exactly like jogging. A
     // reward you cannot see is a reward the player will not fight for. The
     // sustained term now leads and the burst rides on top of it as a flare.
-    float streakAmt = streak * (intensity * 0.34 + uBurst * 0.30);
+    float streakAmt = streak * (intensity * 0.34 + uBurst * 0.30) * uStreakGain;
 
     // --- speed vignette ---------------------------------------------------
     // Tightens as you accelerate — and "tightens" means the aperture actually
@@ -232,6 +233,12 @@ export class SpeedFX {
       // beams across a violet frame, which is exactly the thing the beam lane
       // was cutting down.
       uTint: { value: new THREE.Color(speedAccent('streakOverlay', 0xfff0d4)) },
+      // PER THEME, and a strength rather than only a colour. Recolouring the
+      // streaks violet was not enough: additive geometry that bright reads
+      // near-white whatever its hue, so in the void they still arrived as a
+      // second family of long pale diagonals across a frame whose whole point
+      // is a few deliberate verticals. The void's air is thin and still.
+      uStreakGain: { value: speedAccent('streakGain', 1.0) },
       uCenter: { value: new THREE.Vector2(0, 0) },
     }
 
@@ -255,6 +262,7 @@ export class SpeedFX {
     // landing platform somewhere behind it. Wind you can count is wind that is
     // doing its job; wind you have to see through is a wall.
     this.STREAKS = 110
+    this._streakGain = speedAccent('streakGain', 1.0)
     // Thin, but not a hairline. A one-pixel additive line over a soft hazy sky
     // reads as a scratch on the lens rather than as air, and no amount of
     // opacity tuning fixes it — the fix is a slightly wider, much fainter quad.
@@ -433,7 +441,11 @@ export class SpeedFX {
     // gives the field a floor you can actually see once past V_FLOOR; the
     // squared term still reserves most of the density for the top of the band,
     // so a dash reads as a step change rather than as more of the same.
-    this.streakMat.opacity = vis * (0.10 + vis * 0.24)
+    // The same per-theme gain as the overlay. These 110 instanced quads are a
+    // SEPARATE system from the screen-space streaks, and dimming only the
+    // overlay left the void full of long pale diagonals — the thing that made
+    // the beams read as one family of lasers among many.
+    this.streakMat.opacity = vis * (0.10 + vis * 0.24) * this._streakGain
     // Below this the field is a handful of near-transparent flecks that cost a
     // draw call to not be seen. Set just above what a flat-ground sprint makes.
     this.streaks.visible = vis > 0.22
