@@ -886,7 +886,7 @@ export class Level {
           // ONLY THE NEXT ONE. Depth test is off so a gate is never cut by
           // architecture, and the price of that is that a gate behind a wall
           // still draws — with every unreached checkpoint lit, the view up
-          // from `deep-4` came back with three faint rings floating on a
+          // from the deep came back with three faint rings floating on a
           // sandstone face two metres from the lens, reading as dirt on the
           // glass. One objective at a time is also the clearer instruction.
           if (vState < 0.5 || vState > 1.5) discard;
@@ -1846,17 +1846,24 @@ export function buildCourse(collision) {
   // The mast the finish stands on, hanging in open sky above the underpass.
   mast(SKY.x, SKY.z, FIN_Y - 55, FIN_Y - 1, 5.6)
   K.gearWheel(L, SKY.x, FIN_Y - 14, SKY.z, { radius: 6.5, plane: 'xy', spokes: 8, solidRim: true })
-  K.observatoryDome(L, SKY.x + 3, FIN_Y, SKY.z, { radius: 5.6, wallHeight: 6.5 })
-  K.archway(L, SKY.x - 6.6, FIN_Y, SKY.z, { axis: 'z', span: 6, pierWidth: 1.4, depth: 1.8, springHeight: 3.4 })
-  K.armillary(L, SKY.x, FIN_Y, SKY.z - 8.2, { radius: 3.0 })
+  // THE FINISH COURT, laid out around the run line rather than across it.
+  // The first version put the dome at x+3 with a 5.6 m radius and the finish
+  // trigger at x-1, which buried the trigger inside the dome's wall — the
+  // player would have run into a mass of blocks two metres from the lens
+  // instead of arriving somewhere. The player comes in from -X off sky-4, so:
+  // arch, then an open court with the trigger in it, then the dome behind it
+  // as the thing the last hundred metres were aimed at.
+  K.archway(L, SKY.x - 7.2, FIN_Y, SKY.z, { axis: 'z', span: 6, pierWidth: 1.4, depth: 1.8, springHeight: 3.4 })
+  K.observatoryDome(L, SKY.x + 5.5, FIN_Y, SKY.z, { radius: 4.6, wallHeight: 6.5 })
+  K.armillary(L, SKY.x - 1.0, FIN_Y, SKY.z - 8.0, { radius: 3.0 })
   K.waterfall(L, SKY.x, FIN_Y - 0.5, SKY.z + 8.4, { height: 46, width: 2.6 })
   K.vineCurtain(L, SKY.x - 4, FIN_Y - 0.6, SKY.z - 8.5, { length: 8, drop: 7 })
-  for (const cz2 of [-4.4, 4.4]) {
-    K.colonnade(L, SKY.x - 4.4, FIN_Y, SKY.z + cz2, { count: 3, spacing: 3.0, height: 3.4, radius: 0.48 })
-    K.lanternPost(L, SKY.x + 5.2, FIN_Y, SKY.z + cz2, { height: 3.4 })
+  for (const cz2 of [-4.6, 4.6]) {
+    K.colonnade(L, SKY.x - 4.6, FIN_Y, SKY.z + cz2, { count: 3, spacing: 3.2, height: 3.4, radius: 0.48 })
+    K.lanternPost(L, SKY.x - 6.0, FIN_Y, SKY.z + cz2 * 1.35, { height: 3.4 })
   }
-  L.checkpoint(SKY.x - 5.5, FIN_Y + 1.0, SKY.z, 'the skyline')
-  L.finish = new THREE.Vector3(SKY.x - 1.0, FIN_Y + 0.8, SKY.z)
+  L.checkpoint(SKY.x - 3.5, FIN_Y + 1.0, SKY.z, 'the skyline')
+  L.finish = new THREE.Vector3(SKY.x - 3.5, FIN_Y + 0.8, SKY.z)
   // The beacon stands on the finish mast, 88 m up and 150 m from the terrace:
   // from the spawn it is 30 degrees above the horizon and dead ahead, which is
   // the whole point — one unmistakable cue that names where the route ends

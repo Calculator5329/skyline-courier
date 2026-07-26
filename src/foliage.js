@@ -1806,7 +1806,6 @@ export class FoliageField {
        * flag; this is that documented opt-out, used for its exact purpose.
        */
       mesh.userData.scNoPrepass = true
-      if (globalThis.__SC_NO_FOLIAGE) mesh.visible = false
       // InstancedMesh derives its bounding sphere from the geometry's box and
       // every instance matrix, so this is the real extent of the planted area
       // and per-field frustum culling actually means something.
