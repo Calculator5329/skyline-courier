@@ -725,6 +725,24 @@
     box-shadow: inset 0 0 2px rgba(0, 0, 0, .8);
     transition: box-shadow .18s, transform .18s, background .18s;
   }
+  /* SPENT — the hook you have already used between landings. Cold, struck
+     through, and still PRESENT: a chip that merely vanishes reads as "nothing
+     in range", which is a different fact and the one Ethan was seeing. */
+  .chip.spent {
+    opacity: .5;
+    color: rgba(244, 234, 216, .55);
+  }
+  .chip.spent i { background: rgba(120, 100, 90, .5); box-shadow: none; }
+  .chip.spent::after {
+    content: "";
+    position: absolute;
+    left: 6px; right: 6px; top: 50%;
+    height: 1px;
+    background: currentColor;
+    opacity: .6;
+  }
+  .chip { position: relative; }
+
   .chip.ready {
     opacity: 1;
     color: var(--brass-hi);

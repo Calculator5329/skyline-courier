@@ -94,6 +94,7 @@ export class Hud {
     this._dashReady = null
     this._airLeft = null
     this._hookReady = null
+    this._hookSpent = null
     this._pipCount = -1
     this._pipsLit = 0
 
@@ -244,7 +245,25 @@ export class Hud {
     }
     // The hook chip lights only when there is actually something in range to
     // grab, so it doubles as the targeting readout rather than just a cooldown.
+    // THREE STATES, not two. Ethan, playing NORMAL: "normal doesn't seem to
+    // enforce or show as feedback that you only get one hook between landings."
+    //
+    // It IS enforced — `airChainLeft` gates AIMING in player.js, so the lamp
+    // goes dark the instant the cuff is spent. The bug is that dark-because-
+    // spent looked identical to dark-because-nothing-in-range, and in a course
+    // with 211 anchors the second case is rare, so the first read as "the rule
+    // isn't there" rather than as "you have used your hook".
+    //
+    // `spent` is now its own state: the chip stays lit but goes cold and
+    // struck-through, which says I AM THE THING YOU JUST USED rather than
+    // simply vanishing. `ready` is unchanged, so nothing about the working
+    // case moves.
+    const spent = player.airChainLeft <= 0 && !player.grappling
     const hookReady = player.grappleCooldown <= 0 && !!player.aimedAnchor
+    if (spent !== this._hookSpent) {
+      this._hookSpent = spent
+      this.chipHook.classList.toggle('spent', spent)
+    }
     if (hookReady !== this._hookReady) {
       this._hookReady = hookReady
       this.chipHook.classList.toggle('ready', hookReady)
