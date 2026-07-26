@@ -220,6 +220,12 @@ Ordered by how much each one costs the frame, worst first.
 
 Does not start until the playable slice is accepted.
 
+- [ ] Generalise `tools/containment.mjs` past the underpass and wire it into
+      `tools/ship-gate.sh`. It currently probes one flank because that is where
+      the bug was found, but the class it catches — a barrier whose ornament is
+      `L.mesh` and whose collider therefore has a hole a sliding capsule fits
+      through — is a whole-course risk, and nothing else in the harness looks
+      for it. A probe nobody runs rots.
 - [ ] Custom render pipeline: HDR targets, cascaded shadows, TAA, bloom pyramid.
 - [ ] BVH broadphase over a triangle soup, replacing the AABB-only collider.
 - [ ] Full Web Audio spatialisation: HRTF panning, occlusion raycasts, IR reverb.

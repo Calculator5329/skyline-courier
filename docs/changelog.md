@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-07-25 — the underpass left flank was passable
+
+Reported: *"at the underpass you can go LEFT and leave the play volume
+entirely."* Reproduced mechanically before anything was changed, with the new
+`tools/containment.mjs` driving the shipped controller through the shipped
+collision world: **27 of 144 scripted runs left the deck's -Z edge below the
+top of the balustrade**, e.g. sliding in at 11 m/s and steering left put the
+body through the rail at `x=133.63, y=0.34, z=-8.38` and off the edge at
+`x=135.24, z=-9.57`, then into free fall.
+
+- **`src/kit.js` — `balustrade()` now declares the baluster band's collider.**
+  This is the root cause and it is a hard-rule-2 violation: the turned
+  balusters are drawn with `L.mesh`, which is visual-only by construction, so
+  every balustrade in the course had colliders under its plinth (0.34 m) and
+  inside its top rail (1.28 m) and a **0.94 m collision hole in between**. A
+  standing capsule is 1.75 m and is stopped by the rail, so nobody found it;
+  the 0.95 m *sliding* capsule that the underpass's 1.35 m ceiling **forces**
+  you into steps onto the plinth for free and passes straight through a barrier
+  the player can see. Fixed with one `solid(..., { hidden: true })` slab per
+  run, baluster-deep — at the widest pitch this kit emits the clear gap is
+  0.66 m against a 0.68 m capsule, so the run was already impassable in
+  fiction. `ghost` runs are unaffected.
+- **`src/level.js` — the underpass's -Z balustrade starts at the island edge**
+  (`x=123`, length 26) instead of at the lintel, so the whole left flank from
+  the checkpoint through the slot is closed by architecture rather than by 8 m
+  of bare edge. It still stops at `x=149`: the apron past it is where the
+  `low-7` branch dashes in over the void, and a parapet there would delete an
+  authored route.
+- **`tools/containment.mjs`** — the probe, kept. `reachability.mjs` proves you
+  can get everywhere the course intends; nothing proved you could not get
+  *out*. Now **0 of 144 runs** cross the flank below the rail. Exits over the
+  top of the rail and off the lintel roof are counted and deliberately allowed
+  — the roof is play space, the climb verb goes up a 1.6 m parapet by design,
+  and falls are recoverable.
+
+No tuning constant was touched; the movement set is byte-identical.
+`node tools/reachability.mjs` still PASSes with all 22 checkpoints chained
+without dash or grapple, and `bash tools/ship-gate.sh` exits 0.
+
 ## 2026-07-25 — geometry unlock, vegetation, instrumentation, audio
 
 Shipped as `78603ac`. Four parallel workstreams; the commit message named only

@@ -1703,6 +1703,27 @@ export function balustrade(L, x, y, z, opts = {}) {
   // 5-point profile is ~90 triangles; at a 58 cm pitch that is affordable.
   const pitch = detail >= 2 ? 0.58 : detail === 1 ? 0.95 : 1.8
   const bw = thickness * 0.42
+
+  // The baluster band's collider, declared before the ornament that draws it.
+  //
+  // `L.mesh` is visual-only by construction (see level.js), so a lathed
+  // baluster carries no collision — which left this whole run with colliders
+  // only under the plinth (0.34 m) and inside the top rail, and a 0.94 m
+  // collision hole in between. A standing capsule is stopped by the rail and
+  // never notices; a SLIDING one is 0.95 m tall, steps onto the plinth for
+  // free and goes straight through a barrier the player can see. Measured at
+  // the underpass: entering the slot at 11 m/s and steering left put the body
+  // through the rail at x=133.63, y=0.34, z=-8.38 and off the deck edge at
+  // x=135.24, z=-9.57, falling out of the world.
+  //
+  // One slab, baluster-deep, rather than a box per baluster: at the widest
+  // pitch this kit emits (0.95 m at `detail: 1`) the clear gap is 0.66 m and
+  // the capsule is 0.68 m across, so the run is already impassable in fiction.
+  // The slab states that in collision instead of leaving it to luck.
+  // `ghost` runs get nothing, because `S` is `D` there and scenery is scenery.
+  ;[sx, sz] = F.sz(length, bw)
+  n += S(px, plinthTopY + gap * 0.5, pz, sx, gap, sz, kind, { hidden: true })
+
   for (let a = pitch * 0.6; a < length - pitch * 0.4; a += pitch) {
     const [bx, bz] = F.at(x, z, a, 0)
     if (L.mesh && detail >= 1) {
