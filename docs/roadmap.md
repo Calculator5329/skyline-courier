@@ -280,3 +280,36 @@ Does not start until the playable slice is accepted.
 - [x] 2026-07-25: Scaffolded the repo — Vite 7 + Three.js r180, workspace docs
       pattern, and the purpose/intent/taste briefs carried over from the parked
       Clockwork Garden.
+
+## Playtest 2026-07-25 (live build 78603ac) — Ethan
+
+Verbatim, so nothing gets softened in paraphrase.
+
+**Praised, do not change:** the compass top-right, the km/h readout bottom-left,
+the new timer treatment. *"the rest looks really great."*
+
+- [ ] **"Invisible glass"** — CONFIRMED and diagnosed. `SAMPLE_ALPHA_TO_COVERAGE`
+      is not enabled in GL state (measured live: `sampleBuffers 1`, `samples 4`,
+      `isEnabled(SAMPLE_ALPHA_TO_COVERAGE) === false`), but `src/foliage.js`
+      swapped its hard cutout for `smoothstep(alphaTest, …)` and relies on A2C
+      to resolve it. Fractional alpha therefore lands in an opaque pass with
+      blending off, so every leaf card draws its full quad as a hazy pane over
+      the geometry behind it. Needs a guaranteed `discard` path that does not
+      depend on pipeline GL state.
+- [ ] **Foliage reads badly in places.** *"the foliage is a little weird in some
+      places."* Judge from captures once the glass is gone.
+- [ ] **Stone texture is unresolved.** *"I don't even know if it's an
+      improvement."* Worth a deliberate A/B rather than more iteration.
+- [ ] **Still cannot reach the other islands.** Third time raised. This is the
+      single most repeated complaint in the project.
+- [ ] **Drop the checkpoint counter** from the top-left cluster.
+- [ ] **The hook is too strong for a straight parkour game.** *"you can
+      literally just fly and because I can just fly this little parkour course
+      [is] pretty boring."* Resolution is MODES, not a nerf: **FUN** keeps
+      today's tuning exactly (it is why the movement feels good, and
+      `docs/intent.md` records overpowered movement as a deliberate decision);
+      **NORMAL** makes the grapple a traversal tool rather than flight. Both
+      must keep every verb, and the "reachable without dash or grapple"
+      invariant still holds in both.
+- [ ] Themes come later, and the kit must stay parameterised so a theme is a
+      data change.
