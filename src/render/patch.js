@@ -402,7 +402,12 @@ const AMBIENT = /* glsl */ `
 `
 
 export class MaterialPatcher {
-  constructor() {
+  /**
+   * @param {object} [options] per-theme atmosphere colours. See `theme.aerial`.
+   *   Everything defaults to the shipped golden-hour values, so the skyline
+   *   theme is unchanged by construction.
+   */
+  constructor(options = {}) {
     /**
      * ONE uniform object, shared by every patched material.
      *
@@ -511,7 +516,18 @@ export class MaterialPatcher {
       // The forward-scatter lobe's colour: brighter and creamier than any part
       // of the sky, because it is the sun's own light redirected toward the eye
       // by the haze rather than the haze's ambient glow.
-      scHazeSun: { value: new THREE.Color(0xfff0d2).multiplyScalar(1.5) },
+      // THE COLOUR OF THE LIGHT IN THE AIR, and per theme, because it turns out
+      // to be most of the light landing on anything.
+      //
+      // Measured on the void by the materials lane: with the Fresnel rim below
+      // ON, a lit rock face is rgb(104,69,61) — bronze. With `aerialRim` at 0,
+      // the SAME face is rgb(1.0, 0.9, 7.1). So this warm haze was supplying
+      // essentially all of it, and supplying it golden-hour cream, which is why
+      // near-black violet rock kept photographing as tan whatever the painter
+      // did. It is the single biggest reason the void did not look like its
+      // reference.
+      scHazeSun: { value: new THREE.Color(options.hazeSun ?? 0xfff0d2)
+        .multiplyScalar(options.hazeGain ?? 1.5) },
       /**
        * THE SKY, and the reason there is no separate haze palette any more.
        *
@@ -545,10 +561,10 @@ export class MaterialPatcher {
       scAmbSplit: { value: new THREE.Vector4(0.30, 0, 0, 0) },
       // Sky-facing: the green-cyan of the zenith band, matched to skyenv's
       // zenith so the two ambient systems agree instead of fighting.
-      scAmbUp: { value: lumNormalized(0x8fd8c4) },
+      scAmbUp: { value: lumNormalized(options.ambUp ?? 0x8fd8c4) },
       // Down-facing: the sunlit cloud deck. Warm, and the reason island
       // undersides are lit rather than black.
-      scAmbDown: { value: lumNormalized(0xffcf96) },
+      scAmbDown: { value: lumNormalized(options.ambDown ?? 0xffcf96) },
     }
 
     this._patched = new WeakSet()

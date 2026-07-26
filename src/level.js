@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { surfaceMaterial, glowMaterial, PALETTE } from './materials.js'
+import { getTheme } from './theme.js'
 import { makeRand, trackedKit } from './kit.js'
 
 /**

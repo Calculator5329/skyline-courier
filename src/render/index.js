@@ -161,7 +161,10 @@ export class RenderPipeline {
     // scene's HemisphereLight as the only ambient. Aerial perspective is pure
     // arithmetic in the material and survives regardless — which is deliberate,
     // because it is the effect doing the most work for this art direction.
-    this.patcher = new MaterialPatcher()
+    // The atmosphere's own colours are part of the theme: measured, the warm
+    // Fresnel rim supplies nearly all the light landing on mass, so leaving it
+    // golden made every theme golden. See patch.js `scHazeSun`.
+    this.patcher = new MaterialPatcher(options.aerial || {})
 
     /**
      * Point the HAZE at the same sky the dome and the IBL are getting.

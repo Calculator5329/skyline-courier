@@ -221,6 +221,22 @@ const voidTheme = {
    * that the void has no bottom.
    */
   aerial: {
+    // THE COLOUR OF THE LIGHT IN THE AIR. Measured: with the Fresnel rim below
+    // on, a lit void rock face rendered rgb(104,69,61) — bronze; with the rim
+    // at zero the SAME face was rgb(1.0, 0.9, 7.1). So this haze colour was
+    // supplying essentially all the light landing on the void's mass, and
+    // supplying it golden-hour cream. It is why near-black violet rock kept
+    // photographing tan whatever the painter did, and it is the single largest
+    // remaining difference from the reference image.
+    //
+    // Cold violet, and dimmer: the void's light comes from crystals and sigils,
+    // not from the air.
+    hazeSun: 0x9c6bff,
+    hazeGain: 0.85,
+    // Ambient hemisphere, matched to the same decision. Violet from above,
+    // deep indigo from below — the inverse of the skyline's warm ground bounce.
+    ambUp: 0x8f6bd8,
+    ambDown: 0x2a1f4a,
     // 2.4x skyline. At 0.0034/m a surface at 80 m is a third hazed (the mid
     // band), at 200 m it is 80% (the far band), and the near band inside 30 m
     // is essentially untouched and reads on its own lighting alone.
