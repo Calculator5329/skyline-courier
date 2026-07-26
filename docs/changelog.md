@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-07-25 — the crystals become glass
+
+Ethan, with the build beside the reference image: our shards rendered as "flat,
+opaque, pastel salmon-pink and pale-blue solids — they read as coloured paper".
+The reference's crystals transmit light along their length, have a near-white
+hot core inside a saturated violet body, and are far more saturated.
+
+- **The cause was the tone mapper, not the crystals.** The void pins its
+  exposure, so there is a fixed 4.17x between scene linear and what AgX sees.
+  The old model was one line — `totalEmissiveRadiance *= vColor` — which at
+  `intensity: 1.35` put the WHOLE shard between 0.5 and 5.1 exposed, i.e.
+  entirely inside the part of the AgX curve whose job is to remove chroma. A
+  saturated red at (5.5, 0.14, 0.5) leaves AgX's inset matrix as pale salmon.
+  The fix is not more brightness; it is putting the shard's values back where
+  the reference has them.
+
+- **`src/crystals.js` — a body/core/rim translucency model.** The body sits at
+  0.18-0.83 exposed (AgX places 0.18 at mid display grey, which is where
+  §3's #8B5CF6 actually lives — it is a MID-tone violet, not a bright one), so
+  it keeps full chroma. A view-dependent core term peaks ~34x display white
+  over a small fraction of each shard: that is the near-white hot core, and it
+  is the only thing in the frame allowed to blow. A tight Fresnel rim draws the
+  arris. The shard now gets its light-source read from the core, not from a
+  bright body — which is exactly the difference between coloured paper and
+  glass.
+
+- **The core is real path length, not a Fresnel fake.** For a convex body the
+  distance a view ray travels inside it is longest where the surface faces the
+  eye, so `dot(N, V)` IS the thickness. That needs a normal that varies WITHIN
+  a facet, which the flat facet normals cannot give — so `addInnerNormals()`
+  welds the flat normals by position and stores the average as a second
+  attribute. The flat normals still drive the specular, so light still snaps
+  between faces; the welded one only drives the glow. `MeshPhysicalMaterial.
+  transmission` was rejected: it costs a full transmission pass, moves the mesh
+  into the transparent queue, and sorts 145 instanced clusters as one object.
+
+- **Chroma pre-compensation is PER HUE**, because AgX's cost depends on the
+  hue. The sigil red survived at full chroma while the rune violet came back
+  lavender at the same brightness, and one global saturation multiplier could
+  not serve both — at the setting the violet needed, the red's green clamped to
+  zero and the hue swung orange. Each hue is now walked 85% of the way to its
+  own gamut boundary, which gives the violet a 2.2x push and the red 1.1x from
+  one number and can never overshoot into a hue shift.
+
+- **Cost: nothing.** One vec3 attribute, one varying, ~15 fragment ALU. Draw
+  calls and triangles are byte-identical (ascent: 73 / 961,705 before and
+  after) and `ms/f` is inside run-to-run noise. Measured against §2 on ascent,
+  the shot with the biggest crystals in frame:
+
+  | | lum | sat | p99 | clip hi | clip lo | dyn |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | before | 34.4 | 0.835 | 206.4 | 2.87% | 4.17% | 205.2 |
+  | after | 28.6 | 0.862 | **226.0** | **1.73%** | 4.12% | 224.7 |
+  | §2 wants | 28-55 | > 0.45 | > 215 | 0.3-2.5% | 2-8% | > 200 |
+
+  p99 and clip-hi moved from failing to passing; nothing else left its band.
+
 ## 2026-07-25 — the void gets a background, and its beams get cut to six
 
 Two notes from Ethan with the build beside the reference image, answered
