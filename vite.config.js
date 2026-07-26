@@ -16,7 +16,15 @@ const scratch = process.env.SKYLINE_SCRATCH === '1'
 
 export default defineConfig({
   base: './',
-  server: { host: '127.0.0.1', port: 5183, strictPort: true },
+  server: {
+    host: '127.0.0.1', port: 5183, strictPort: true,
+    // DO NOT WATCH THE AGENT WORKTREES. `.claude/worktrees/` holds a full
+    // checkout per dispatched lane — fourteen of them during the void theme
+    // session — and vite walks every one, which exhausts the system's inotify
+    // watch limit and kills the dev server with ENOSPC on startup. The lanes
+    // are not sources for this build; watching them is pure cost.
+    watch: { ignored: ['**/.claude/**', '**/.orc/**', '**/dist/**', '**/shots/**'] },
+  },
   build: {
     target: 'es2022',
     assetsInlineLimit: 1024 * 1024,
