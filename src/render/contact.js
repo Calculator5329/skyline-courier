@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { Pass, renderTarget } from './pass.js'
 import { GBUFFER_GLSL } from './gbuffer.js'
+import { getTheme } from '../theme.js'
 
 /**
  * Screen-space contact shadows.
@@ -176,7 +177,16 @@ void main() {
   /**
    * TWO RADII, and the near one is the reason interior corners exist.
    *
-   * The broad set (0.9 m) is sized to the architecture — a moss lip, a
+   * BOTH RADII ARE PER-THEME (see applyThemeAO / uAO defaults below). The
+   * numbers this comment reasons about — 0.9 m broad, 0.24 m near — are the
+   * SKYLINE's, sized to the sunset archipelago's masonry. The void carries 40 m
+   * great walls, 14 m slabs and gaps of tens of metres, so it sets its own,
+   * roughly a class larger: a 0.9 m probe finds nothing to occlude in a
+   * cathedral, and raising the intensity of an estimator that finds no
+   * occluders cannot help. The scale changes; everything below about WHY there
+   * are two of them, and why they combine with min(), does not.
+   *
+   * The broad set (0.9 m, skyline) is sized to the architecture — a moss lip, a
    * balustrade base, a stair nosing — and it is genuinely good at those. It is
    * structurally incapable of drawing a 90-degree wall/floor junction, and not
    * because it is too weak: at a junction the wall runs away to infinity, so
@@ -429,6 +439,44 @@ export class ContactShadows {
      */
     this._scale = 1
     this._sized = [0, 0]
+
+    // The uniform values above ARE the skyline's tuning and its regression
+    // baseline; a theme sized at a different feature scale overrides them here.
+    // Read once, at construction — the theme is fixed for the boot (see
+    // selectTheme in theme.js) and main.js selects it before building the
+    // pipeline that constructs this pass, so getTheme() is already the active
+    // one. A theme that names no `ao` block renders byte-identical to before
+    // this hook existed.
+    this.applyThemeAO(getTheme().ao)
+  }
+
+  /**
+   * Overlay a theme's AO settings onto the shipped defaults. Every field is
+   * optional and falls through to the default (the skyline value) when absent,
+   * so a theme states only what it wants to move — the same partial-overlay
+   * shape `grade`, `exposure` and `aerial` use in theme.js.
+   *
+   *   intensity / radius / maxScreen / bias           -> the broad set (uAO)
+   *   nearIntensity / nearRadius / nearMaxScreen / nearBias -> the near set (uAONear)
+   *
+   * `maxScreen` (the uv screen-radius clamp) matters as much as `radius`: at any
+   * real viewing distance the clamp, not the world radius, is what binds — see
+   * the two measured notes on the uAO/uAONear defaults below. A theme that
+   * raises the world radius without raising this clamp only moves the distance
+   * at which the AO gives up, not its reach up close.
+   */
+  applyThemeAO(ao) {
+    if (!ao) return
+    const broad = this.pass.uniforms.uAO.value
+    const near = this.pass.uniforms.uAONear.value
+    if (ao.intensity != null) broad.x = ao.intensity
+    if (ao.radius != null) broad.y = ao.radius
+    if (ao.maxScreen != null) broad.z = ao.maxScreen
+    if (ao.bias != null) broad.w = ao.bias
+    if (ao.nearIntensity != null) near.x = ao.nearIntensity
+    if (ao.nearRadius != null) near.y = ao.nearRadius
+    if (ao.nearMaxScreen != null) near.z = ao.nearMaxScreen
+    if (ao.nearBias != null) near.w = ao.nearBias
   }
 
   /** @returns {number} resolution scale, 1 = full. */

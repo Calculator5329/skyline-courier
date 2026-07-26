@@ -84,6 +84,14 @@ const skyline = {
   grade: null,
   exposure: null,
 
+  // null = the shipped ambient-occlusion radii in render/contact.js, which
+  // were tuned against THIS theme's masonry (a moss lip, a balustrade base, a
+  // stair nosing) and are its regression baseline. Do not restate them here —
+  // the defaults in contact.js ARE the skyline's tuning, and a value here would
+  // be a second copy to keep in sync. The void overrides them because its
+  // architecture is a class larger; see `ao` on that theme.
+  ao: null,
+
   // The surface kinds an island reaches for. `drumPlatform` already takes
   // these per call; a theme names the DEFAULTS so a level does not have to.
   surfaces: {
@@ -500,6 +508,54 @@ const voidTheme = {
    * being a course in front of flat violet fog — see `src/fx/voidbackdrop.js`.
    */
   backdrop: true,
+
+  /**
+   * AMBIENT OCCLUSION, SIZED TO THE VOID'S ARCHITECTURE — a partial overlay on
+   * the shipped radii in render/contact.js, exactly like `grade`/`exposure`.
+   *
+   * The default set is 0.9 m broad / 0.24 m near, sized to the sunset level's
+   * masonry. The void is a class larger — 40 m great walls, 14 m slabs, gaps of
+   * tens of metres — so a 0.9 m probe lands almost entirely on surface within a
+   * fraction of a metre of the pixel it started on and finds nothing to
+   * occlude. MEASURED with tools/aoprobe.mjs on the default radii: turning AO
+   * OFF ENTIRELY moved the frame 1-2.6%, and DOUBLING its intensity moved it
+   * the same again — the shape of an estimator that is finding no occluders, on
+   * which intensity is the wrong knob. The reference image
+   * (docs/reference/theme2-void.png) is a large part detailed BECAUSE of its
+   * very deep crevice and under-ledge shading; that shading is a mid-scale
+   * phenomenon (a platform's dark underside, the recess between two coursed
+   * tiers, a slab resting against a wall), metres not centimetres.
+   *
+   * Both tiers are scaled up by ~4.5x and keep the default's broad:near ratio
+   * (~3.7:1), so the two-set design in contact.js is intact — the broad set now
+   * draws the under-ledge/between-mass shading and the near set the block-course
+   * and stair-nosing creases at void scale, combined with min() as before.
+   *
+   * `maxScreen` (the uv clamp) is raised in step with the radius, and it is the
+   * one that actually binds up close: at any real viewing distance the world
+   * radius wants far more screen than the default 0.10/0.075 clamp allowed, so a
+   * bigger radius alone would only move the distance at which the term gives up.
+   * contact.js's own default comments record this same lesson twice. The perf
+   * lane measured the AO taps as nearly free (cutting them saves nothing), so
+   * this whole term is being turned UP into headroom that already exists.
+   */
+  ao: {
+    // Broad set. 4.0 m catches the under-ledge and between-mass shading; 0.20 uv
+    // lets it reach that at the distances the platforms actually sit. Intensity
+    // and bias unchanged from the default — with real occluders now inside the
+    // radius, the shipped intensity finds them.
+    radius: 4.0,
+    maxScreen: 0.20,
+    intensity: 2.6,
+    bias: 0.16,
+    // Near set. 1.1 m is the void's masonry-joint / block-course scale, the
+    // fillet the hard 90-degree corners here do not have; 0.15 uv is its clamp
+    // raised in the same proportion. Intensity/bias unchanged from the default.
+    nearRadius: 1.1,
+    nearMaxScreen: 0.15,
+    nearIntensity: 3.2,
+    nearBias: 0.12,
+  },
 
   grade: {
     // Crushed toe, violet shadows, cold highlights, and saturation pushed
