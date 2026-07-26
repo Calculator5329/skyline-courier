@@ -559,6 +559,12 @@ function saveBest(t) {
 // and for driving the game from a browser console during development.
 window.__game = {
   player, rig, run, level, camera, scene, renderer, input, keys, respawn, resetRun,
+  // Exposed for the same reason the pipeline is: the continuous audio layer
+  // (wind, gearbox, wall scrape) has no visible output at all, so without a
+  // handle on it the only way to check it is to listen — which a headless
+  // harness cannot do. `audio.update` also swallows its own exceptions by
+  // design, so "no console error" is not evidence there either.
+  audio,
   tick, TUNING, MODES, getMode, setMode: applyMode,
   // Exposed so render passes can be toggled from the console when bisecting a
   // visual bug. Finding which pass owns an artifact by turning them off one at

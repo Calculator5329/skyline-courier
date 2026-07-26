@@ -309,6 +309,81 @@
     text-indent: .34em;
   }
   #verb.on { opacity: .95; }
+  /* The coyote window: the climb or the run has expired but the wall is still
+     kickable for 0.28 s. The word stays, at half light, because the state is
+     still true — you have just stopped spending it. */
+  #verb.hold { opacity: .42; }
+
+  /* --- the wall gauge --------------------------------------------------- */
+  /* A climb (0.9 s) and a lateral wall-run (1.6 s) both simply END, and until
+     now they ended without warning. These two hairlines are ONE instrument in
+     the two orientations the moves actually have: a rail up the side of the
+     gauge for a climb, a bar across it for a run. So which gauge is lit is a
+     second, wordless reading of the verb — a climb and a wall-run are
+     distinguishable at a glance without reading the word, which is the exact
+     confusion this is here to fix.
+
+     Both are hairlines and neither exists off a wall, so the panel is no
+     busier than it was in the state the player is in 95% of the time. They are
+     positioned absolutely, outside the flow, so nothing in the drive gauge
+     moves when a wall arrives — a cluster that jumps is worse than no meter. */
+  #wallbar, #wallrail {
+    position: absolute;
+    background: rgba(14, 11, 8, .5);
+    border-radius: 1px;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, .85), 0 1px 0 rgba(247, 226, 171, .1);
+    opacity: 0;
+    transition: opacity .16s;
+  }
+  #wallbar.on, #wallrail.on { opacity: 1; }
+  /* Same LENGTH, two orientations, meeting at the corner of the cluster —
+     which is what makes them read as one instrument turned through 90°. The
+     first version ran the bar the full 208 px of the cluster and it simply
+     read as a second speed channel stacked on the first; length is the cheapest
+     way to say "different instrument". Neither can be confused with the
+     ticked, redlined speed channel below at this size. */
+  #wallbar  { left: 0;     top: -11px; width: 55px; height: 3px; }
+  #wallrail { left: -14px; top: 0;     width: 3px;  height: 55px; }
+  #wallbar i, #wallrail i {
+    position: absolute;
+    inset: 0;
+    display: block;
+    background: linear-gradient(180deg, var(--brass-hi), var(--brass) 45%, var(--brass-lo));
+    /* Scaled, never resized: a transform is composited, and this writes on
+       nearly every frame of a wall contact. */
+    transform: scaleX(1);
+    transition: background .2s, box-shadow .2s;
+  }
+  /* The run drains the way you are travelling. The climb's ceiling comes DOWN
+     to meet you, which is what running out of climb actually feels like. */
+  #wallbar i  { transform-origin: 0 50%; }
+  #wallrail i { transform-origin: 50% 100%; }
+  #wallbar.on i, #wallrail.on i { box-shadow: 0 0 7px rgba(247, 226, 171, .55); }
+  /* The last third, in the same terracotta the speed scale already uses for
+     its redline. A colour change, not a blink: the point is to be read out of
+     the corner of an eye that is busy looking at a wall. */
+  #wallbar.low i, #wallrail.low i {
+    background: linear-gradient(180deg, #f0a878, var(--terracotta) 60%, #8c4a2a);
+    box-shadow: 0 0 7px rgba(198, 106, 62, .6);
+  }
+  /* The EMPTY part of the channel warms too. Recolouring only the fill meant
+     that by the time the state mattered there were four pixels of it left to
+     carry the message; warming the whole instrument is what makes "running
+     out" readable in peripheral vision, and it costs no extra element. */
+  #wallbar.low, #wallrail.low {
+    background: rgba(84, 38, 20, .55);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, .8), 0 0 5px rgba(198, 106, 62, .3);
+  }
+  /* Spent, but still kickable. An empty channel lit from within — there is
+     nothing left to spend and Space still works. */
+  /* Deliberately DIMMER than a lit gauge, not brighter. The first pass lit the
+     channel from inside and a full-length warm column read as a FULL budget —
+     the opposite of what it means. A warm ghost of the channel says spent, and
+     the fact that it is still on screen at all says the wall is still there. */
+  #wallbar.coyote, #wallrail.coyote {
+    background: rgba(198, 106, 62, .38);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, .7), 0 0 5px rgba(198, 106, 62, .25);
+  }
   #speedval {
     font-size: 30px;
     font-variant-numeric: tabular-nums;
@@ -925,6 +1000,7 @@
        moving, or the reload looks like a hang. A static lit bar does that. */
     #loadnote .lbar i { width: 100%; background: var(--m-accent-hi); opacity: .7; }
     #reticle, #speedfill, .chip, #verb, #toast, #compass, #alt, #nav, #cppips b,
+    #wallbar, #wallrail, #wallbar i, #wallrail i,
     .pickcard, .lamp, .mapbtn .thumb, #keysbox > summary::after,
     #overlay.loading #menu > * {
       transition: none !important;
@@ -1019,6 +1095,8 @@
   </div>
 
   <div id="speedwrap" class="inst">
+    <div id="wallrail"><i></i></div>
+    <div id="wallbar"><i></i></div>
     <div id="verb"></div>
     <div id="speedval"><b id="speednum">0</b><small>KM/H</small></div>
     <div id="speedbar">

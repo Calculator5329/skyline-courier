@@ -578,6 +578,31 @@ export class SpeedFX {
       this._wallN.copy(player.wallNormal)
     }
 
+    // --- lateral wall-run -------------------------------------------------
+    // The climb below already left a mark on the air; a lateral run left none,
+    // so running ON a wall and falling PAST one produced the same picture.
+    // Contact point is the surface itself — back along the normal by the
+    // capsule radius — at chest height, for the same reason the wall-jump
+    // sparks are raised: struck at the boots they sit 60° below the eye and
+    // never enter the frame.
+    if (player.wallRunning && player.speed > 2.5) {
+      const n = player.wallNormal
+      const vx = player.velocity.x, vz = player.velocity.z
+      const vl = Math.hypot(vx, vz)
+      if (vl > 0.001 && n.lengthSq() > 0.5) {
+        const r = TUNING.radius + 0.05
+        motes.wallrun(
+          h,
+          player.position.x - n.x * r,
+          player.position.y + 1.05,
+          player.position.z - n.z * r,
+          n.x, 0, n.z,
+          vx / vl, vz / vl,
+          player.speed,
+        )
+      }
+    }
+
     // --- vertical wall-run ------------------------------------------------
     if (player.climbTimer > 0) {
       // Facing direction, from the camera: a climb is always straight at the
