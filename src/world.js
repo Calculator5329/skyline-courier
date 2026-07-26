@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { PALETTE } from './materials.js'
 import { SKY, SKY_GRADIENT_GLSL } from './render/skygrad.js'
+import { getTheme, themeSunDir } from './theme.js'
 
 /**
  * Sky, light, and atmosphere.
@@ -203,17 +204,21 @@ const SKY_FRAG = /* glsl */`
   }
 `
 
-export function buildWorld(scene, renderer) {
+export function buildWorld(scene, renderer, theme = getTheme()) {
   // Golden hour: the sun sits LOW. This single number does more for the look
   // than any shader in the project — a high sun flattens everything into
   // top-down midday light and no amount of grading recovers the rim-lit,
-  // long-shadowed read the reference depends on.
-  const sunDir = new THREE.Vector3(-0.62, 0.17, 0.77).normalize()
-  const horizon = new THREE.Color(SKY.horizon)
+  // long-shadowed read the reference depends on. It is now per-theme (the
+  // void has no sun at all, only a direction for ambient to fall from), but
+  // the principle survives the move: see src/theme.js.
+  const sunDir = themeSunDir(theme)
+  const L = theme.light
+  const SKYC = { ...SKY, ...(theme.sky || {}) }
+  const horizon = new THREE.Color(SKYC.horizon)
 
   // --- sky --------------------------------------------------------------
   const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(900, 32, 20),
+    new THREE.SphereGeometry(theme.skyRadius, 32, 20),
     new THREE.ShaderMaterial({
       vertexShader: SKY_VERT,
       fragmentShader: SKY_FRAG,
@@ -225,16 +230,16 @@ export function buildWorld(scene, renderer) {
         // the aerial perspective samples. Two files holding two copies of the
         // same sky is precisely how distant islands ended up terminating
         // against a colour the sky never reached.
-        uZenith: { value: new THREE.Color(SKY.zenith) },
+        uZenith: { value: new THREE.Color(SKYC.zenith) },
         uHorizon: { value: horizon },
         // "Ground" is the cloud deck, so it is BRIGHT. Everything below the
         // horizon in this world is luminous cloud, never dark earth.
-        uGround: { value: new THREE.Color(SKY.deck) },
+        uGround: { value: new THREE.Color(SKYC.deck) },
         uSunDir: { value: sunDir },
-        uSunColor: { value: new THREE.Color(SKY.sun) },
+        uSunColor: { value: new THREE.Color(SKYC.sun) },
         uTime: { value: 0 },
         uDeck: {
-          value: new THREE.Vector4(SKY.deckY, SKY.billowScale, SKY.bankScale, 0),
+          value: new THREE.Vector4(SKYC.deckY, SKYC.billowScale, SKYC.bankScale, 0),
         },
       },
     }),
@@ -257,7 +262,9 @@ export function buildWorld(scene, renderer) {
   // a fourth opinion about the sky), and the density drops 0.0052 -> 0.0030 so
   // that a mid-distance island seen through the fallback path survives instead
   // of dissolving at 120 m.
-  scene.fog = new THREE.FogExp2(horizon.getHex(), 0.0030)
+  scene.fog = new THREE.FogExp2(
+    theme.fog.color != null ? theme.fog.color : horizon.getHex(),
+    theme.fog.density)
 
   // --- light ------------------------------------------------------------
   // Warm key against cool ambient — the split that defines the reference.
@@ -271,10 +278,10 @@ export function buildWorld(scene, renderer) {
   // Intensity is low because the render pipeline's analytic sky IBL is now
   // the primary ambient source and budgets itself to ~20% of the key. This
   // light is a floor under that, not a second full ambient system.
-  const hemi = new THREE.HemisphereLight(0x9fc0b0, 0xffd7a8, 0.25)
+  const hemi = new THREE.HemisphereLight(L.hemiSky, L.hemiGround, L.hemiIntensity)
   scene.add(hemi)
 
-  const sun = new THREE.DirectionalLight(0xffca7d, 3.1)
+  const sun = new THREE.DirectionalLight(L.keyColor, L.keyIntensity)
   sun.position.copy(sunDir).multiplyScalar(60)
   sun.castShadow = true
   sun.shadow.mapSize.set(2048, 2048)
@@ -296,24 +303,26 @@ export function buildWorld(scene, renderer) {
   // A cool fill from the opposite side keeps shadowed faces readable, which
   // matters more than realism when the player is reading a route at speed.
   // Tinted green-cyan so shadows land on the cool side of the split.
-  const fill = new THREE.DirectionalLight(0x9fc4b4, 0.45)
-  fill.position.set(30, 18, -40)
+  const fill = new THREE.DirectionalLight(L.fillColor, L.fillIntensity)
+  fill.position.set(L.fillPos[0], L.fillPos[1], L.fillPos[2])
   scene.add(fill)
 
   // Bounce from the cloud deck below. Undersides of floating islands are lit
   // in the reference, never black — this is the light that does that.
-  const bounce = new THREE.DirectionalLight(0xffe0b4, 0.3)
+  const bounce = new THREE.DirectionalLight(L.bounceColor, L.bounceIntensity)
   bounce.position.set(0, -40, 0)
   scene.add(bounce)
 
   // --- drifting motes ----------------------------------------------------
-  const COUNT = 900
+  const COUNT = theme.motes.count
   const pos = new Float32Array(COUNT * 3)
   const seed = new Float32Array(COUNT)
   for (let i = 0; i < COUNT; i++) {
-    pos[i * 3] = -20 + Math.random() * 280
-    pos[i * 3 + 1] = -6 + Math.random() * 34
-    pos[i * 3 + 2] = -60 + Math.random() * 120
+    // Spread is per-theme: the skyline's motes hug the route, the void's fill
+    // a much taller column because the course climbs through them.
+    pos[i * 3] = -20 + Math.random() * theme.motes.spread[0]
+    pos[i * 3 + 1] = -6 + Math.random() * theme.motes.spread[1]
+    pos[i * 3 + 2] = -60 + Math.random() * theme.motes.spread[2]
     seed[i] = Math.random() * Math.PI * 2
   }
   const moteGeo = new THREE.BufferGeometry()
@@ -323,13 +332,22 @@ export function buildWorld(scene, renderer) {
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
-    uniforms: { uTime: { value: 0 } },
+    uniforms: {
+      uTime: { value: 0 },
+      uMoteColor: { value: new THREE.Vector3(...theme.motes.color) },
+      uRise: { value: theme.motes.rise },
+    },
     vertexShader: /* glsl */`
       attribute float aSeed;
       uniform float uTime;
+      uniform float uRise;
       varying float vFade;
       void main() {
         vec3 p = position;
+        // A slow upward current, wrapped so the column never empties out.
+        // art-direction-void.md: "small debris drifting upward sells 'the void
+        // has a current' and reinforces the upward pull".
+        p.y += mod(uTime * uRise + aSeed * 7.0, 96.0) * step(0.001, uRise);
         p.y += sin(uTime * 0.28 + aSeed) * 1.5;
         p.x += cos(uTime * 0.19 + aSeed * 1.7) * 1.1;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
@@ -339,11 +357,12 @@ export function buildWorld(scene, renderer) {
       }
     `,
     fragmentShader: /* glsl */`
+      uniform vec3 uMoteColor;
       varying float vFade;
       void main() {
         vec2 d = gl_PointCoord - 0.5;
         float a = smoothstep(0.5, 0.0, length(d)) * vFade * 0.42;
-        gl_FragColor = vec4(1.0, 0.94, 0.80, a);
+        gl_FragColor = vec4(uMoteColor, a);
       }
     `,
   })

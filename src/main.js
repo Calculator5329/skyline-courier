@@ -10,6 +10,7 @@ import { SpeedFX } from './fx/speed.js'
 import { GrappleFX } from './fx/grapple.js'
 import { RenderPipeline } from './render/index.js'
 import { Music } from './music.js'
+import { selectTheme, getTheme } from './theme.js'
 
 /**
  * Bootstrap and the game loop.
@@ -52,7 +53,11 @@ document.body.appendChild(renderer.domElement)
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(76, window.innerWidth / window.innerHeight, 0.1, 1200)
 
-const world = buildWorld(scene, renderer)
+// Theme is chosen ONCE, before anything that bakes a colour into a uniform,
+// an IBL or a 33^3 grade LUT. `?theme=void` on the URL, then localStorage,
+// then the shipped skyline. See src/theme.js.
+const theme = selectTheme()
+const world = buildWorld(scene, renderer, theme)
 
 // ------------------------------------------------------------------- level
 
@@ -78,7 +83,18 @@ let music = null
 
 // HDR pipeline: physical auto-exposure → Karis bloom → AgX + procedural
 // grade LUT. The scene never touches the default framebuffer directly.
-const pipeline = new RenderPipeline(renderer, scene, camera)
+const pipeline = new RenderPipeline(renderer, scene, camera, {
+  // Both are partial overlays over the shipped defaults — see src/theme.js.
+  // `grade` retints the LUT; `exposure` widens the metering window, without
+  // which a near-black theme pins against the daylight floor and cannot get
+  // dark at all.
+  grade: theme.grade || undefined,
+  exposure: theme.exposure || undefined,
+  sky: theme.sky
+    ? { zenith: theme.sky.zenith, horizon: theme.sky.horizon,
+        sunHaze: theme.sky.sun, cloud: theme.sky.deck }
+    : undefined,
+})
 pipeline.setSize(window.innerWidth, window.innerHeight)
 
 // ------------------------------------------------------------------- state

@@ -190,7 +190,7 @@ void main() {
 `
 
 export class AutoExposure {
-  constructor(type) {
+  constructor(type, options = {}) {
     this.meterPass = new Pass('sc-meter', METER, {
       tSrc: { value: null },
       tCoverage: { value: null },
@@ -254,8 +254,14 @@ export class AutoExposure {
         value: new THREE.Vector4(
           // minEV/maxEV: L in [0.06, 4.0] -> EV100 in [-1.06, 5.0]. Rounded out
           // by a stop each way for headroom against a stray frame.
-          -2.0,
-          6.0,
+          //
+          // PER THEME. The window above is deliberately narrow because the
+          // skyline level is one outdoor daylight condition — but a near-black
+          // void meters far below EV -2, pins against this floor and stops
+          // adapting, so the frame reads exactly as dark as the clamp allows
+          // and no darker. See src/theme.js, `exposure.minEV`.
+          options.minEV ?? -2.0,
+          options.maxEV ?? 6.0,
           1, // reset flag, cleared after the first update
           0
         ),
@@ -265,8 +271,8 @@ export class AutoExposure {
           // Absolute exposure window. At EV100 = 6 the formula gives
           // 2^0.75/(1.2*64) = 0.022 and at EV100 = -2 it gives 5.6; these
           // clamps sit just outside that so they only catch pathologies.
-          0.02,
-          6.0
+          options.clampLo ?? 0.02,
+          options.clampHi ?? 6.0
         ),
       },
     })

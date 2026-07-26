@@ -50,7 +50,12 @@ async function main() {
   let gl = null
   try {
     browser = await launchBrowser()
-    const { page, errors } = await openGame(browser, server.url, { width, height })
+    // `--theme void` renders the same shots under a different theme. The theme
+    // is read once at boot from the URL (src/theme.js), so it has to be on the
+    // address the harness opens, not poked in afterwards.
+    const themeName = args.theme && args.theme !== true ? String(args.theme) : null
+    const url = themeName ? `${server.url}?theme=${encodeURIComponent(themeName)}` : server.url
+    const { page, errors } = await openGame(browser, url, { width, height })
     await hideChrome(page, { hud: !!args.hud })
     gl = await glRenderer(page)
 

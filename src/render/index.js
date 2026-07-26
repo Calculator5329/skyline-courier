@@ -90,7 +90,7 @@ export class RenderPipeline {
     })
 
     // --- auto exposure -----------------------------------------------------
-    this.exposure = this.hdrSupported ? new AutoExposure(this._type) : null
+    this.exposure = this.hdrSupported ? new AutoExposure(this._type, options.exposure || {}) : null
 
     // Fallback exposure carrier: a 1x1 FloatType DataTexture holding a fixed
     // multiplier, so the composite has exactly one code path whether or not
@@ -140,7 +140,11 @@ export class RenderPipeline {
     }
 
     // --- grade + composite -------------------------------------------------
-    this.lut = createGradeLut(options.grade ?? GRADE)
+    // A theme supplies a PARTIAL grade — the handful of knobs that make it
+    // cold or warm — over the shipped baseline, rather than a whole new table.
+    // A theme that had to restate toeStrength and whitePoint to change a
+    // shadow tint would drift from the baseline every time the baseline moved.
+    this.lut = createGradeLut(options.grade ? { ...GRADE, ...options.grade } : GRADE)
     this.composite = createComposite(this.lut)
 
     /** Live handles on the composite's uniform vectors, for the tunables. */
@@ -181,7 +185,7 @@ export class RenderPipeline {
      * How much a SKY texel votes in the exposure meter, relative to a texel
      * with geometry in it. See the coverage block in exposure.js.
      */
-    this._meterSkyWeight = options.meterSkyWeight ?? 0.30
+    this._meterSkyWeight = options.meterSkyWeight ?? options.exposure?.skyWeight ?? 0.30
 
     /** Analytic sunset sky through PMREM -> scene.environment. */
     this.skyEnv = this.hdrSupported ? new SkyEnvironment(renderer, options.sky) : null
