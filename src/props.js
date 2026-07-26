@@ -63,6 +63,20 @@ const EPS = 1e-9
  */
 const DEFAULT_BEVEL = 0.035
 
+/**
+ * How far a facet's plane may lean away from the normals it is shaded by
+ * before `flattenFolded` gives it its own flat normal.
+ *
+ * Not zero, and the reason is `level.js`'s `mesh()`: a prefab is placed with a
+ * non-uniform scale (island squash runs 0.75-1.35), and a non-uniform scale
+ * rotates the geometric normal and the shading normal by DIFFERENT amounts. A
+ * facet that clears zero by a hair in prefab space comes out the far side of
+ * that transform inverted, which is how three triangles survived the first cut
+ * of this fix. 0.2 is the margin that covers the anisotropy this world
+ * actually places, measured rather than guessed.
+ */
+const FOLD_MARGIN = 0.2
+
 /** Cosine of the angle past which two adjacent faces get a hard crease. */
 const DEFAULT_CREASE = Math.cos((34 * Math.PI) / 180)
 
@@ -163,6 +177,42 @@ class Builder {
   tri(a, b, c) { this.idx.push(a, b, c) }
 
   quad(a, b, c, d) { this.idx.push(a, b, c, a, c, d) }
+
+  /**
+   * Emit a triangle ONLY if its winding agrees with its own vertex normals.
+   *
+   * A sweep runs a section along a path, and where the path turns tighter than
+   * the section is wide the surface passes through itself: on the concave side
+   * the quad between two path stations comes out back-to-front. It is a sliver
+   * — the ones measured in this world were 2 cm^2 — but a sliver whose front
+   * face points into the solid is backface-culled from the side you stand on,
+   * which is a pinhole of sky in a stone cornice and is exactly the artefact
+   * this whole audit is about.
+   *
+   * Dropping it is correct rather than merely convenient: the sliver lies
+   * INSIDE the region the sweep already covered on the other side of the fold,
+   * so the surface it would have added is interior. Reversing it instead would
+   * put a second, coincident skin there and z-fight.
+   */
+  triOut(a, b, c) {
+    const p = this.pos, n = this.nrm
+    const ax = p[b * 3] - p[a * 3], ay = p[b * 3 + 1] - p[a * 3 + 1], az = p[b * 3 + 2] - p[a * 3 + 2]
+    const bx = p[c * 3] - p[a * 3], by = p[c * 3 + 1] - p[a * 3 + 1], bz = p[c * 3 + 2] - p[a * 3 + 2]
+    const gx = ay * bz - az * by, gy = az * bx - ax * bz, gz = ax * by - ay * bx
+    const nx = n[a * 3] + n[b * 3] + n[c * 3]
+    const ny = n[a * 3 + 1] + n[b * 3 + 1] + n[c * 3 + 1]
+    const nz = n[a * 3 + 2] + n[b * 3 + 2] + n[c * 3 + 2]
+    if (gx * nx + gy * ny + gz * nz <= 0) return false
+    this.idx.push(a, b, c)
+    return true
+  }
+
+  /** `quad`, with each half subject to `triOut`'s check. */
+  quadOut(a, b, c, d) {
+    const one = this.triOut(a, b, c)
+    const two = this.triOut(a, c, d)
+    return one && two
+  }
 
   /**
    * Emit a fresh flat-shaded polygon (3 or 4 points), winding it so its front
@@ -627,7 +677,10 @@ function sweepResolved(outline, points, opts, closed, srcPts) {
 
   for (const [a, c] of bands) {
     const ra = rows[a], rc = rows[c]
-    for (let i = 0; i < cols - 1; i++) b.quad(ra[i], rc[i], rc[i + 1], ra[i + 1])
+    // `quadOut`, not `quad`: see Builder.triOut. A path that turns tighter
+    // than the section is wide folds the surface through itself, and the
+    // folded sliver is a backface-culled hole in a solid.
+    for (let i = 0; i < cols - 1; i++) b.quadOut(ra[i], rc[i], rc[i + 1], ra[i + 1])
   }
 
   if (!closed) {
@@ -1109,6 +1162,79 @@ export function blob(seed = DEFAULT_SEED, opts = {}) {
 
   const geo = b.geometry()
   geo.computeVertexNormals()      // smooth, welded, seamless
+  // A crease deeper than the vertex spacing leaves a facet whose own plane
+  // faces AWAY from the averaged normals it is shaded by — see `flattenFolded`.
+  flattenFolded(geo)
+  return geo
+}
+
+/**
+ * Reconcile shading normals with winding, by flat-shading the facets that
+ * disagree with them.
+ *
+ * `computeVertexNormals` averages the faces meeting at a vertex. In a deep,
+ * anisotropically-squashed crease — an island keel is a sphere stretched 3:1
+ * on Y — a small facet at the bottom of the fold can end up with all three of
+ * its vertex normals leaning out of the crease, far enough that the facet's
+ * own plane faces the other way. The winding is right; the normals are.
+ *
+ * That matters because it is not only a shading artefact: the surface shader
+ * reads the interpolated normal, so such a facet lights as if it faced into
+ * the rock and reads as a hole in a boulder, and it is exactly what the
+ * winding audit reports as "wound inside-out" when it is nothing of the kind.
+ *
+ * The repair is to give those few facets their own vertices carrying the
+ * geometric normal — flat shading, on the handful of triangles where smooth
+ * shading was lying. Measured cost on this world's 362 island keels: 72
+ * triangles, 216 vertices, out of 55,120.
+ */
+function flattenFolded(geo, margin = FOLD_MARGIN) {
+  const ix = geo.index
+  if (!ix) return geo
+  const attrs = Object.keys(geo.attributes)
+  const pos = geo.attributes.position
+  const nrm = geo.attributes.normal
+  const arrays = {}
+  for (const k of attrs) arrays[k] = Array.from(geo.attributes[k].array)
+  const idx = Array.from(ix.array)
+  let next = pos.count
+  let fixed = 0
+
+  for (let i = 0; i < idx.length; i += 3) {
+    const a = idx[i], b = idx[i + 1], c = idx[i + 2]
+    const ax = pos.getX(b) - pos.getX(a), ay = pos.getY(b) - pos.getY(a), az = pos.getZ(b) - pos.getZ(a)
+    const bx = pos.getX(c) - pos.getX(a), by = pos.getY(c) - pos.getY(a), bz = pos.getZ(c) - pos.getZ(a)
+    const gx = ay * bz - az * by, gy = az * bx - ax * bz, gz = ax * by - ay * bx
+    const gl = Math.hypot(gx, gy, gz)
+    if (gl < 1e-12) continue
+    const nx = (nrm.getX(a) + nrm.getX(b) + nrm.getX(c)) / 3
+    const ny = (nrm.getY(a) + nrm.getY(b) + nrm.getY(c)) / 3
+    const nz = (nrm.getZ(a) + nrm.getZ(b) + nrm.getZ(c)) / 3
+    const nl = Math.hypot(nx, ny, nz) || 1
+    if ((gx * nx + gy * ny + gz * nz) / (gl * nl) > margin) continue
+
+    fixed++
+    for (let k = 0; k < 3; k++) {
+      const src = idx[i + k]
+      for (const name of attrs) {
+        const a2 = geo.attributes[name]
+        const size = a2.itemSize
+        for (let s = 0; s < size; s++) arrays[name].push(a2.array[src * size + s])
+      }
+      // Overwrite the copy's normal with the facet's own plane.
+      arrays.normal[next * 3] = gx / gl
+      arrays.normal[next * 3 + 1] = gy / gl
+      arrays.normal[next * 3 + 2] = gz / gl
+      idx[i + k] = next++
+    }
+  }
+
+  if (!fixed) return geo
+  for (const name of attrs) {
+    const a2 = geo.attributes[name]
+    geo.setAttribute(name, new THREE.Float32BufferAttribute(arrays[name], a2.itemSize))
+  }
+  geo.setIndex(idx)
   return geo
 }
 

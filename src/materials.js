@@ -58,23 +58,45 @@ export const PALETTE = {
    * elevation gets almost no direct light by cosine law no matter how bright
    * its albedo is.
    */
-  moss: 0x67ad55,
-  // Fired orange at hue ~14, saturated hard: this must be unmistakably
-  // RED-orange next to brass's gold, not a slightly darker version of it.
-  terracotta: 0xc34a26,
+  moss: 0x62a44f,
+  /**
+   * Sandy peach and ochre — the brief's words — at hue 23 and saturation 0.59.
+   *
+   * Was 0xc34a26: hue 14 at 0.80 saturation, which the grade's 1.30 saturation
+   * multiplied into a measured hue 17.4 / saturation 0.81 on the underpass
+   * slab. That is a safety cone, and it is the entire mid-mass of that frame
+   * plus the rim of every island in the archipelago.
+   *
+   * It is still ~17 degrees off brass, so the reserved-accent contract holds:
+   * terracotta means the route acts here, and it still cannot be mistaken for
+   * gold. See materials/textures.js `terracotta` for the rest of the argument.
+   */
+  terracotta: 0xc0764e,
   /**
    * The boulder rock under the islands, and — via level.js — a good deal of the
    * paving. The one surface allowed to be genuinely cool, and the counterweight
    * to the warm masonry.
    *
-   * Re-pitched from 0x8f9280: that sat at hue 70 with saturation 0.12, and the
-   * grade multiplies saturation hard enough (measured 0.12 in, 0.69 out) that
-   * it came back as OLIVE — a yellow-green paving deck reading as a third
-   * substance rather than as cool rock. 0x8e968b is hue 96 at saturation 0.07:
-   * greener in hue so the amplification lands on green rather than yellow, and
-   * flatter in saturation so the amplification has less to work with.
+   * 0x8e968b sat at hue 96, and hue 96 is the OLIVE corner: the grade
+   * multiplies saturation by 1.30 and pushes green into the shadow term, so
+   * every amplification this material takes moves it further into khaki. The
+   * previous pass tried to solve that by going greener still; it did not work,
+   * because the problem was never how much green, it was WHICH green.
+   *
+   * 0x8c9492 is hue 165 at saturation 0.054 — the same value, a third less
+   * saturation, and rotated to the cyan side of green where damp cool rock
+   * lives. Still the coolest substance in the palette; no longer able to be
+   * amplified into a colour.
+   *
+   * NOT DONE, AND NOT IN THIS LANE: the roadmap's preferred fix is to stop
+   * paving with this kind at all and restrict it to undersides and boulder
+   * mass. That is a `level.js`/`kit.js` change (`BUILT`/`WILD` both pass
+   * `kind: 'stone'` for the drum body). What the material half can do instead
+   * is make the same kind read two ways: `upWarm` below is at 0.70 on stone, so
+   * a stone DECK takes the golden-hour sky's warm bias and a stone UNDERSIDE
+   * does not.
    */
-  stone: 0x8e968b,
+  stone: 0x8c9492,
   // Golden-hour haze rather than a clear blue zenith.
   sky: 0xe9b57a,
   ink: 0x2b2622,
@@ -92,10 +114,10 @@ export const PALETTE = {
  * `depth` is the metres of relief the height field spans, so it is checkable:
  * brass at 0.014 means the tallest gear tooth stands 14 mm off the plate.
  *
- * `relief`, `detile`, `wedge`, `topDust`, `sunLobe`, `cavity`, `glint`, `wrap`
- * and `worldUv` are the knobs that decide how much of the macro layer a
- * material pays for; 0 compiles the feature out entirely. Everything else is
- * documented in materials/shader.js.
+ * `relief`, `detile`, `wedge`, `topDust`, `sunLobe`, `cavity`, `glint`, `wrap`,
+ * `upWarm`, `patina` and `worldUv` are the knobs that decide how much of the
+ * macro layer a material pays for; 0 compiles the feature out entirely.
+ * Everything else is documented in materials/shader.js.
  */
 /** level.js's TEX_PER_METRE. The world-planar uv path must match it exactly or
  *  the material silently changes texel density relative to every other one. */
@@ -158,6 +180,24 @@ const SURFACE = {
     glint: 0.10,
     specAo: 0.60,
     shadeTint: 0.55,
+    /**
+     * Sandstone is what the player walks on, and the walking deck is the
+     * surface the review measured as mint. On the tower stair, tread and riser
+     * are the same porcelain 30 cm apart and came back at hue 45.8 against hue
+     * 34.1. See scSkyWarmCol in materials/shader.js for why an up-face under a
+     * 9.8-degree sun ends up lit almost entirely by the cool zenith, and why
+     * biasing it back toward the warm horizon ring is a correction rather than
+     * a tint.
+     *
+     * SIZED AGAINST THE GRADE'S OWN FIX, not against the original measurement.
+     * The render lane's shadow-tint split landed in the same round and took the
+     * tread from 45.8 to 38.5 on its own; at the 0.90 this was first tuned to,
+     * the two corrections stacked and overshot to 31.1, i.e. 4.7 degrees WARMER
+     * than the riser. 0.55 lands the tread at ~34 against a riser at ~35.8,
+     * which is the actual target: one material, one hue, whichever way it
+     * faces. If the grade's split is ever tuned back, this has to come up.
+     */
+    upWarm: 0.55,
   },
   brass: {
     // Polished metal at golden hour is entirely what it reflects — metalness is
@@ -222,6 +262,29 @@ const SURFACE = {
     // the alloy and it is also what keeps a sun-away brass wall from landing on
     // top of terracotta's hue, which is the legibility failure the review named.
     shadeTint: 0.45,
+    // The lowest non-zero in the set: brass albedo IS its F0, and pushing an
+    // F0 around is a different claim from warming a diffuse colour — at 0.25
+    // the correction walked the F0's own hue 6 degrees, which is a fifth of the
+    // gap that separates brass from terracotta. Enough that a brass tread
+    // agrees with the sandstone beside it, and no more.
+    upWarm: 0.12,
+    /**
+     * VERDIGRIS ON THE DOWNWARD FACES, and the last of the three things a
+     * full-screen brass wall was measured to be missing.
+     *
+     * The tile's own verdigris pass is driven by the cavity of the height field
+     * and is correct as far as it goes — it puts crust in the gear-tooth roots
+     * and the rivet channels. What it cannot know is which way the BOX faces,
+     * and copper carbonate is overwhelmingly an underside phenomenon: the
+     * soffit of a band, the lee of a bracket, the shadowed half of a boss.
+     * Measured on `closeup.png`, every brass region in the frame sat inside 1.9
+     * degrees of hue — there was not one cool pixel on the signature material.
+     *
+     * 0.40 with a 0.55 hard cap in the shader: a patina is a film, and the
+     * plate must still read through it.
+     */
+    patina: 0.40,
+    patinaCavity: 0.30,
   },
   moss: {
     envMapIntensity: 1.05,
@@ -262,7 +325,13 @@ const SURFACE = {
     // with the sun behind it glows, and it is the most recognisable vegetation
     // cue in the reference art.
     backlit: 0.55,
-    macroAlbedo: 0.34,
+    // 0.40, up from 0.34: band 1 runs at 1-4 m, which is exactly the scale the
+    // review found missing on a 12 m disc, and the tile's new clump mask covers
+    // only 0.6-1.2 m. `mix(1, 0.62 + 0.80 * macro, 0.40)` spans 0.85..1.17.
+    // Not the 0.44 first tried: at that amount the band read as smeared sweeps
+    // across the deck rather than as clumping, because it is a smooth fbm and
+    // the tile mask is what carries the organic edge.
+    macroAlbedo: 0.40,
     macroRough: 0.12,
     macroHue: 0.50,
     bigAlbedo: 0.13,
@@ -279,6 +348,11 @@ const SURFACE = {
     // Moss is already the cool end of the palette; pushing it further just
     // turns a landing pad grey, and a landing pad has to stay legible.
     shadeTint: 0.30,
+    // A moss cap DOES catch the horizon ring — it is why the reference's turf
+    // reads golden at the rim — but this material's job is to be the cool half
+    // of the palette, and a warm bias at porcelain's strength would walk it
+    // straight back to the khaki the last round fixed.
+    upWarm: 0.14,
   },
   terracotta: {
     envMapIntensity: 1.25,
@@ -306,9 +380,23 @@ const SURFACE = {
     // the tile crowns rather than as brass's sweep.
     glint: 0.22,
     cavity: 0.80,
-    // The warmest albedo in the set takes the strongest cool bias: a red-orange
-    // wall whose shadow side stays red-orange is the whole "one hue" problem.
-    shadeTint: 0.70,
+    // 0.58, down from 0.70. That number was sized against a hue-14 base at 0.80
+    // saturation, where a cool shadow was the only thing keeping the material
+    // off the "one orange wedge" complaint. The base is now hue 23 at 0.59 and
+    // does not need to be argued down that hard — at 0.70 the desaturated tile
+    // went grey-pink on every sun-away face.
+    shadeTint: 0.58,
+    /**
+     * OFF, and the only material in the set that takes none of it.
+     *
+     * scSkyWarmCol corrects an up face by cutting GREEN — that is the channel
+     * measurement said was 19% too high on a sandstone deck. On a red-orange
+     * material the same cut walks hue the wrong way: at 0.45 it took the
+     * terracotta roofs from hue 22.6 back to 15.8, i.e. straight back to the
+     * safety cone this round exists to remove. Terracotta was never the
+     * material that read cold on a deck, so it does not need the correction.
+     */
+    upWarm: 0,
   },
   stone: {
     envMapIntensity: 1.35,
@@ -336,6 +424,20 @@ const SURFACE = {
     sunLobe: 0.20,
     cavity: 0.68,
     shadeTint: 0.60,
+    /**
+     * THE HIGHEST IN THE SET, and this is the material half of "stop paving
+     * with the grey-green stone".
+     *
+     * `level.js` hands this kind to the drum body of every island and to the
+     * rim of every scenery island, so it is walked on whether it was meant to
+     * be or not, and re-pointing that is a level change outside this lane. What
+     * the material can do is stop being one substance in two orientations: an
+     * up-facing stone deck takes the warm horizon ring at 0.70 and reads as
+     * sandy paving, while the underside of the same drum keeps the cool
+     * cyan-grey the palette wants under an island. Higher than porcelain's 0.55
+     * because this kind starts 60 hue degrees greener and has further to come.
+     */
+    upWarm: 0.70,
   },
 }
 

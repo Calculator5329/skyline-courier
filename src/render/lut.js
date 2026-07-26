@@ -19,7 +19,8 @@ import * as THREE from 'three'
  * paint a grey veil over the whole frame:
  *
  *   ASC-CDL slope/offset/power  ->  split tone  ->  luminance-preserving
- *   saturation  ->  highlight desaturation  ->  filmic S-curve pivoted at 0.50
+ *   saturation  ->  highlight desaturation  ->  gamut guard  ->  filmic
+ *   S-curve pivoted at 0.50, with a shoulder and a real toe
  */
 
 const SIZE = 33
@@ -82,7 +83,21 @@ export const GRADE = {
   // does the real work: see the zenith/aureole rebalance in skyenv.js and the
   // orientation-driven split in patch.js, both of which only touch surfaces
   // that are genuinely receiving ambient rather than key.
-  shadowTint: [-0.026, 0.034, 0.015],
+  //
+  // CUT TO +0.018 GREEN, from +0.034. That paragraph above turned out to be a
+  // warning this file did not take seriously enough: at 0.034, amplified by a
+  // saturation of 1.30, the grade was greening every dark texel in the frame
+  // whether it was in shadow or not — and the frame's darkest large surface is
+  // the deck, because a sun at 9.8 degrees of elevation delivers sin(9.8) =
+  // 0.17 of its key to anything horizontal. The result is the value inversion
+  // the art review filed against tower.png: bright sandstone risers over
+  // olive-green treads, on a stair the player has to read at speed.
+  //
+  // The separation the big number was buying is now carried where it belongs,
+  // by `scAmbientTint` in patch.js, which can see the surface ORIENTATION and
+  // therefore knows the difference between a wall in shadow (green, correctly)
+  // and a deck that is merely receiving a low sun (not green).
+  shadowTint: [-0.018, 0.018, 0.010],
   // Warm cream highlights: red up, green up half as much, blue down. This is
   // the porcelain-in-sunlight signature and it is what keeps a blown highlight
   // from reading as a hole in the frame.
@@ -156,14 +171,86 @@ export const GRADE = {
   // letting sunlit sandstone keep its ochre on the way to white.
   highlightDesat: 0.06,
 
+  // --- gamut guard ---------------------------------------------------------
+  //
+  // THE FIX FOR underpass.png's CLIPPING, and it is not where anyone looked.
+  //
+  // That shot measured 2.75% clipped high and dropping the brass glint from
+  // 1.5 to 1.15 did not move the number by a hundredth. Measured properly —
+  // histogramming the colour of every clipped pixel rather than assuming —
+  // 24,372 of its 39,582 clipped pixels come back as (255, ~104, ~50). That is
+  // not brass and it is not the sky. It is TERRACOTTA with its red channel
+  // clipped and its other two nowhere near, and the clip happens here.
+  //
+  // `highlightDesat` above cannot catch it, by construction: it is weighted by
+  // L^3, and a saturated red has a LUMINANCE of about 0.4 while its red channel
+  // is over 1.0. Rec.709 weights red at 0.2126, so a channel can run a third of
+  // a stop past white while the luminance-keyed guard sees a mid-tone and does
+  // nothing at all. `saturation: 1.30` then pushes it further out (0.70 -> 0.79
+  // on the measured value) and `contrast: 1.32` about a 0.5 pivot expands
+  // everything above the pivot again.
+  //
+  // So the guard is keyed on the MAX CHANNEL, which is the quantity that
+  // actually clips. Above the knee it pulls the colour toward its own
+  // luminance — a hue-preserving chroma compression, the same move AgX's inset
+  // makes upstream in a wider gamut. On a NEUTRAL it does exactly nothing,
+  // because max equals luminance there and the pull distance is zero, so it
+  // cannot touch the sky, the sun disc or sunlit sandstone. It only ever acts
+  // on the one thing that was broken: a single hot channel.
+  //
+  // Knee 0.62, matching the shoulder knee — above that the S-curve is already
+  // rolling off, so a channel arriving here is on its way to white regardless
+  // and the only question is whether it gets there alone or with its
+  // neighbours.
+  gamutKnee: 0.62,
+  // 0.55 at full overshoot. Measured on the same terracotta: max channel 0.788
+  // -> 0.70, which lands the slab near 217 out of 255 instead of clipped, and
+  // the hue stays put. Above ~0.75 the terracotta visibly desaturates toward
+  // salmon, which is a different bug.
+  gamutDesat: 0.55,
+
   // --- toe -----------------------------------------------------------------
   //
-  // Black lift in code values / 255. 0.003 is under one code value: visible as
-  // "there is atmosphere down there", invisible as haze. Halved from 0.006 —
-  // with the contrast above doing the work in the bottom third, the extra lift
-  // was cancelling exactly what it was meant to protect. Some toe is still
-  // right for this game: crushed blacks would make the shadowed parts of the
-  // route unreadable, which is a gameplay bug, not a look.
+  // A REAL TOE, which this grade did not have.
+  //
+  // What was here was a black LIFT: `toe + (1 - toe) * c`, 0.003 of it, which
+  // raises the floor and compresses nothing. Measured across all eight harness
+  // shots the result was 0.00% clipped low with the 1st percentile between 38.8
+  // and 57.4 — a dynamic range of about 144 code values out of 255 with no
+  // black anywhere in it. Every genuinely occluded corner in the game arrived
+  // at 40+ and read as grey paint.
+  //
+  // The shape is a gamma that decays with brightness:
+  //
+  //     out = c ^ ( 1 + toeStrength * exp( -c / toeWidth ) )
+  //
+  // At c = 0 the exponent is 1 + toeStrength and the curve crushes hard; by the
+  // mid-tones the exponential has died and it is the identity. It is smooth
+  // everywhere — no knee to show up as a band on a soft gradient, which a
+  // piecewise power would give — monotonic everywhere (the derivative is
+  // positive for every c in (0,1], so it can never invert two neighbouring
+  // values), and it fixes both endpoints exactly: 0 stays 0 and 1 stays 1, so
+  // the white point the shoulder normalises to is untouched and this can sit
+  // after the shoulder without disturbing it.
+  //
+  // 2.39 and 0.156 are SOLVED, not chosen, against two measured constraints
+  // and a two-equation fit:
+  //
+  //   - closeup.png's 1st percentile arrives here at 0.216 and has to leave
+  //     under 22/255, which fixes the exponent there at 1.60;
+  //   - its 50th percentile arrives at 0.489 and must not lose more than about
+  //     four code values, which caps the exponent there at 1.10.
+  //
+  // Those two pin the pair exactly. The result puts genuinely occluded geometry
+  // at 8-15 code values (an input of 0.16 lands on 11), which is what the art
+  // review asked for, and costs the mid-tones about 3 codes across the set.
+  toeStrength: 2.39,
+  toeWidth: 0.156,
+  // Black lift in code values / 255, applied last so it cannot push anything
+  // past 1. Under one code value: this is not the toe, it is the toe's floor —
+  // enough that the darkest corner of an archway has air in it rather than
+  // being a dead hole, and small enough that the toe above still gets to reach
+  // single digits.
   toe: 0.003,
 
   // --- shoulder ------------------------------------------------------------
@@ -259,7 +346,23 @@ function applyGrade(r, g, b, P, sh) {
   g += (l2 - g) * hd
   b += (l2 - b) * hd
 
-  // 5. filmic S-curve, per channel
+  // 5. gamut guard — the same pull toward luminance, but weighted by the MAX
+  // CHANNEL rather than by luminance, which is the quantity that clips. See
+  // the note on gamutKnee: this is what stops a saturated terracotta from
+  // arriving with its red at 1.05 and its luminance at 0.4, which is invisible
+  // to step 4 and was 62% of underpass.png's clipped pixels. Zero effect on a
+  // neutral, by construction — there, max is luminance and the pull is zero.
+  const knee = P.gamutKnee ?? 1
+  const mx = Math.max(r, g, b)
+  if (mx > knee) {
+    const over = Math.min(1, (mx - knee) / Math.max(1e-4, 1 - knee))
+    const gd = (P.gamutDesat ?? 0) * over
+    r += (l2 - r) * gd
+    g += (l2 - g) * gd
+    b += (l2 - b) * gd
+  }
+
+  // 6. filmic S-curve, per channel
   return [scurve(r, P, sh), scurve(g, P, sh), scurve(b, P, sh)]
 }
 
@@ -271,8 +374,19 @@ function scurve(x, P, sh) {
   if (c > sh.k) {
     c = sh.k + (1 - sh.k) * ((1 - Math.exp(-(c - sh.k) / sh.s)) / sh.norm)
   }
-  // Toe last, as a lift of the whole range so it cannot push anything past 1.
-  return P.toe + (1 - P.toe) * Math.min(1, Math.max(0, c))
+  c = Math.min(1, Math.max(0, c))
+  // The toe: a gamma that decays with brightness. AFTER the shoulder rather
+  // than before it, which is safe precisely because this curve fixes 1 exactly
+  // (1^anything is 1) — so the shoulder's normalisation still lands the white
+  // point on display white, and the toe's whole effect stays in the bottom
+  // third where it was solved for. See toeStrength.
+  const ts = P.toeStrength ?? 0
+  if (ts > 0 && c > 0) {
+    c = Math.pow(c, 1 + ts * Math.exp(-c / Math.max(1e-3, P.toeWidth ?? 0.14)))
+  }
+  // The floor last, as a lift of the whole range so it cannot push anything
+  // past 1.
+  return P.toe + (1 - P.toe) * c
 }
 
 /**

@@ -97,6 +97,50 @@ export const SHARED = {
    */
   scShadeCol: { value: new THREE.Color(0.72, 0.94, 0.93) },
   /**
+   * THE UP-FACE BIAS, and the counterweight to scShadeCol.
+   *
+   * A surface facing straight up under a sun at 9.8 degrees elevation collects
+   * cos(80) = 0.17 of the key by Lambert, so it is lit almost entirely by
+   * ambient — and the ambient here is skyenv's cool green zenith. The measured
+   * consequence, on the tower stair where the same porcelain faces two ways
+   * 30 cm apart: treads at hue 45.8 / luma 86.7 against risers at hue 34.1 /
+   * luma 155.5. One material, +11.7 degrees of green and a 1.8-stop value
+   * inversion, purely from which way it points. That is the review's "the floor
+   * is green", and it is why the ascent stair does not read as a stair.
+   *
+   * The physical answer is that an up-face does not only see the zenith — it
+   * integrates the WHOLE hemisphere, and at golden hour the largest, brightest
+   * part of that hemisphere is the warm horizon ring and the lit cloud sea
+   * under it. skyenv normalises its map for irradiance, which averages that
+   * ring away against the cool dome above.
+   *
+   * THE CORRECTION IS A GREEN CUT, NOT A RED BOOST, and that took two attempts
+   * to get right.
+   *
+   * Attempt one ran at (1.24, 1.07, 0.85) — Rec.709 luma 1.09. Up faces are a
+   * large share of the screen, so it raised the scene's log-average enough that
+   * the adaptive exposure pulled back, and everything that was NOT an up face
+   * went dark with it: across the eight-shot set p1 fell 49.8 -> 28.2 and mean
+   * saturation rose 0.451 -> 0.520. The decks came back mustard, with blue
+   * crushed from 36 code values to 10. A chromatic correction that changes the
+   * frame's energy is not a chromatic correction; it is an exposure change
+   * wearing one as a disguise.
+   *
+   * The target says what the shape has to be. A tread should look like the
+   * riser under less light: scale the measured riser rgb(207,149,72) by 0.5 and
+   * you get (104,75,36). The measured tread is (101,89,36) — red and blue are
+   * already right and GREEN is 19% too high. So the fix cuts green.
+   *
+   * (1.14, 0.90, 1.06) has Rec.709 luma 0.963 on a neutral, but on a
+   * sandstone-hued texel — where green is not the dominant channel it is in the
+   * luma weights — it lands within 0.2% of unity. It rotates hue and leaves the
+   * meter alone, which is the only property that matters here.
+   */
+  scSkyWarmCol: { value: new THREE.Color(1.14, 0.90, 1.06) },
+  /** Verdigris: copper carbonate. The coolest pixel the world owns, and the
+   *  only place a green that is not vegetation is allowed to appear. */
+  scPatinaCol: { value: new THREE.Color(0x4e8f7a) },
+  /**
    * The radiance of the bright band where the cloud sea meets the sky — the
    * one sharp structure in this environment, and the thing the horizon glint
    * puts back. Linear light units, matched to skyenv.js's horizon (0xffcfa0 at
@@ -147,7 +191,7 @@ uniform vec4 scMacroP;    // x tiles/metre, y albedo amt, z roughness amt, w hue
 uniform vec4 scBigP;      // x contrast expansion, y big albedo amt, z big tiles/metre, w big rough amt
 uniform vec4 scReliefP;   // x tilt amount, y relief->albedo coupling, z de-tile amount, w world-uv tiles/metre
 uniform vec4 scWeatherP;  // x wedge amt, y top amt, z wedge height (m), w top-rough amt
-uniform vec4 scSpecP;     // x sun-lobe amount, y cavity strength, z shade-tint amt, w unused
+uniform vec4 scSpecP;     // x sun-lobe amount, y cavity strength, z shade-tint amt, w up-face warm amt
 uniform vec4 scGlintP;    // x horizon-glint amount, y specular AO from cavity, z glint band width, w unused
 uniform vec4 scWrapP;     // x wrap width, y wrap amount, z back-lit transmission, w unused
 uniform vec4 scSunP;      // shared: x aureole width^2, y cavity's bite on specular
@@ -155,7 +199,10 @@ uniform vec3 scWedgeCol;  // moss / lichen creeping out of the inside corner
 uniform vec3 scTopCol;    // sun-bleach + settled grit on upward faces
 uniform vec3 scCavityCol; // what a pocket sees: the cool green zenith
 uniform vec3 scShadeCol;  // what the sun-away hemisphere sees: the same sky
+uniform vec3 scSkyWarmCol;// what an UP face sees: the warm horizon ring
 uniform vec3 scHorizonCol;// the bright band where the cloud sea meets the sky
+uniform vec3 scPatinaCol; // verdigris, on downward faces and in crevices
+uniform vec4 scPatinaP;   // x downward-face amount, y crevice amount, z metalness kill, w unused
 
 // Written by the map_fragment block, consumed by the chunk overrides further
 // down main(). GLSL globals, so no varyings and no recomputation. scCavity is
@@ -164,6 +211,11 @@ uniform vec3 scHorizonCol;// the bright band where the cloud sea meets the sky
 float scRoughAdd;
 vec3  scTiltW;
 float scCavity = 1.0;
+/** How much of this texel is corrosion product rather than bare metal. Written
+ *  by the patina block, consumed by the metalness chunk override — verdigris is
+ *  a dielectric salt, and leaving metalness at 1 under it is what made the last
+ *  attempt read as green paint on gold. 0 on every material that opts out. */
+float scPatina = 0.0;
 /**
  * The uv every tile-scale map is sampled at. Normally just vMapUv; under
  * SC_WORLDUV it is the world-planar projection instead, and then the roughness,
@@ -367,6 +419,32 @@ const MAIN_FRAGMENT = /* glsl */ `
   }
   #endif
 
+  // ---------------------------------------------------------- verdigris ----
+  #ifdef SC_PATINA
+  {
+    // Copper carbonate forms where water sits and where it never dries: the
+    // soffit of a band, the underside of a bracket, the lee of a boss. The
+    // tile's own verdigris pass already covers the pockets it can see inside
+    // one 2.4 m square; this is the half that needs a WORLD normal, and it is
+    // the half the art director asked for — a full-screen brass wall came back
+    // spanning 1.9 degrees of hue across every region measured, so there is at
+    // present no cool pixel anywhere on the signature material.
+    //
+    // Downward faces, widened by a low-frequency patchiness so one soffit
+    // corrodes and the next does not. -0.12 to -0.72 in N.y is a soft turn
+    // starting just past horizontal: a slab's underside is full strength, a
+    // 45-degree chamfer takes about half, and a wall takes none.
+    float down = smoothstep( -0.12, -0.72, scNw.y );
+    float blotch = smoothstep( 0.28, 0.74, mac.r * 0.60 + mac.a * 0.50 );
+    scPatina = clamp( down * blotch * scPatinaP.x
+                      + ( 1.0 - scCavity ) * blotch * scPatinaP.y, 0.0, 0.55 );
+    diffuseColor.rgb = mix( diffuseColor.rgb, scPatinaCol, scPatina );
+    // Crust is matte. A green that keeps the plate's polish reads as tinted
+    // lacquer; the roughness break is most of what says "different substance".
+    scRoughAdd += scPatina * 0.34;
+  }
+  #endif
+
   // ------------------------------------------------ shadow-side cool ----
   #if defined( SC_SHADETINT ) && ( NUM_DIR_LIGHTS > 0 )
   {
@@ -388,7 +466,37 @@ const MAIN_FRAGMENT = /* glsl */ `
     // Wide crossover: a hard terminator here would draw a second, wrong
     // shadow edge across every curved-looking surface.
     float away = smoothstep( 0.35, -0.30, ndl );
+    /**
+     * CLAMPED ON UP-FACING NORMALS, and this is the fix for the stair.
+     *
+     * With the sun at 9.8 degrees, an up-face has N.L = 0.17 — inside this
+     * term's crossover, so a horizontal tread that is in FULL SUN was being
+     * told it faces away from it and tinted cool for the privilege. A vertical
+     * riser catching the same sun at N.L = 0.9 got none of it. That is a lie
+     * about the lighting, and the measured cost was a tread reading 11.7
+     * degrees greener than the riser 30 cm above it.
+     *
+     * 1 - 0.6 * N.y: an up-face keeps 40% of the bias (a deck genuinely does
+     * see more sky than a wall does), a vertical face keeps all of it, and a
+     * soffit — which sees the cloud sea, not the zenith — keeps all of it too.
+     */
+    away *= 1.0 - 0.6 * max( 0.0, scNw.y );
     diffuseColor.rgb *= mix( vec3( 1.0 ), scShadeCol, away * scSpecP.z );
+  }
+  #endif
+
+  // -------------------------------------------------- up-face sky warm ----
+  // The other half of the stair fix: the warm horizon ring an up-face
+  // integrates. See scSkyWarmCol. Squared so it falls off fast — only a
+  // genuinely horizontal surface collects a full hemisphere, and a 45-degree
+  // chamfer collects a quarter of this rather than half, which keeps the term
+  // off anything that reads as a wall. No light dependency, so unlike the
+  // shade tint above it does not need NUM_DIR_LIGHTS.
+  #ifdef SC_UPWARM
+  {
+    float upFace = clamp( scNw.y, 0.0, 1.0 );
+    upFace *= upFace;
+    diffuseColor.rgb *= mix( vec3( 1.0 ), scSkyWarmCol, upFace * scSpecP.w );
   }
   #endif
 
@@ -630,6 +738,11 @@ roughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );`,
     `float metalnessFactor = metalness;
 #ifdef USE_METALNESSMAP
   metalnessFactor *= texture2D( metalnessMap, scUv0 ).b;
+#endif
+#ifdef SC_PATINA
+  // Verdigris is a dielectric salt sitting ON the alloy, not a tint of it.
+  // Without this the crust keeps a metal's F0 and reads as green anodising.
+  metalnessFactor *= 1.0 - scPatina * scPatinaP.z;
 #endif`,
   ],
   // The macro tilt is added AFTER the tile-scale normal map, not instead of
@@ -677,7 +790,7 @@ roughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );`,
  * invalidate a warm program cache — three keys programs on the chunk set plus
  * this string, and will happily reuse a stale compiled program otherwise.
  */
-const SHADER_VERSION = 'sc3'
+const SHADER_VERSION = 'sc4'
 
 export const DEFAULT_PARAMS = {
   /** macro tiles per metre. 0.085 -> ~11.8 m period, so features land at 1-4 m. */
@@ -725,6 +838,22 @@ export const DEFAULT_PARAMS = {
   /** how hard the sun-away hemisphere is tinted cool; 0 disables */
   shadeTint: 0,
   /**
+   * How hard an UP-facing face is biased toward the warm horizon ring; 0
+   * disables the term and its branch. See scSkyWarmCol — this is the knob that
+   * decides whether a walking deck reads as sandstone or as mint.
+   */
+  upWarm: 0,
+  /**
+   * Verdigris on downward faces. 0 disables the term, its two uniforms and its
+   * branch. Metals only: on a dielectric it is just a green stain, and the
+   * materials that want one already paint it into the tile.
+   */
+  patina: 0,
+  /** verdigris in crevices, riding the same cavity signal as `cavity` */
+  patinaCavity: 0.30,
+  /** how much metalness the crust kills where it is at full strength */
+  patinaMetal: 0.75,
+  /**
    * How much of the cloud-sea horizon band this surface mirrors back. 0
    * disables the term and its branch. See THE HORIZON GLINT — this is the knob
    * that decides whether a material reads as polished or as painted.
@@ -771,8 +900,11 @@ export function extendSurfaceMaterial(material, params = {}) {
     scWeatherP: {
       value: new THREE.Vector4(p.wedge, p.topDust, p.wedgeHeight, p.topRough),
     },
-    scSpecP: { value: new THREE.Vector4(p.sunLobe, p.cavity, p.shadeTint, 0) },
+    scSpecP: { value: new THREE.Vector4(p.sunLobe, p.cavity, p.shadeTint, p.upWarm) },
     scGlintP: { value: new THREE.Vector4(p.glint, p.specAo, 0, 0) },
+    scPatinaP: {
+      value: new THREE.Vector4(p.patina, p.patinaCavity, p.patinaMetal, 0),
+    },
     scWrapP: { value: new THREE.Vector4(p.wrapWidth, p.wrap, p.backlit, 0) },
     // THREE.Color converts the sRGB hex into the renderer's working space.
     scWedgeCol: { value: new THREE.Color(p.wedgeColor) },
@@ -788,6 +920,10 @@ export function extendSurfaceMaterial(material, params = {}) {
   // Cavity rides in the normal map's alpha, so it cannot be enabled without one.
   if (p.cavity > 0 && material.normalMap) defines.SC_CAVITY = ''
   if (p.shadeTint > 0) defines.SC_SHADETINT = ''
+  if (p.upWarm > 0) defines.SC_UPWARM = ''
+  // The crevice half of the patina rides the cavity signal, so like SC_CAVITY
+  // it needs a normal map to read the alpha out of.
+  if (p.patina > 0 && material.normalMap) defines.SC_PATINA = ''
   if (p.glint > 0) defines.SC_GLINT = ''
   if (p.wrap > 0 || p.backlit > 0) defines.SC_WRAP = ''
   if (p.worldUv > 0) defines.SC_WORLDUV = ''

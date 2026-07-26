@@ -496,6 +496,18 @@ export class RenderPipeline {
   get aoRadius() { return this.contact ? this.contact.aoRadius : 0 }
   set aoRadius(v) { if (this.contact) this.contact.aoRadius = v }
 
+  /**
+   * The short-radius tap set that draws interior corners. 0 disables it and
+   * leaves only the broad architectural radius — which, measured, returns
+   * "mostly open" at a 90-degree wall/floor junction. See contact.js.
+   */
+  get aoNearIntensity() { return this.contact ? this.contact.aoNearIntensity : 0 }
+  set aoNearIntensity(v) { if (this.contact) this.contact.aoNearIntensity = v }
+
+  /** Short-radius AO world radius, metres. */
+  get aoNearRadius() { return this.contact ? this.contact.aoNearRadius : 0 }
+  set aoNearRadius(v) { if (this.contact) this.contact.aoNearRadius = v }
+
   /** How much of the AO buffer is applied to the indirect terms. 0..1. */
   get aoStrength() { return this.patcher.aoStrength }
   set aoStrength(v) { this.patcher.aoStrength = v }
@@ -644,20 +656,29 @@ export class RenderPipeline {
   /** @param {number} hex down-facing ambient tint, sRGB. Luminance-normalised. */
   setAmbientDownColor(hex) { this.patcher.setAmbientDownColor(hex) }
 
-  /** Haze colour looking AWAY from the sun (hex, sRGB). Cool, and darker. */
-  setAerialCoolColor(hex, scale = 0.7) {
-    this.patcher.uniforms.scHazeCool.value.set(hex).multiplyScalar(scale)
+  /**
+   * Re-point the haze's copy of the sky gradient.
+   *
+   * @param {object} c any subset of {zenith, horizon, deck, sun} as hex.
+   *
+   * This is the ONLY way to change what distance fades into, and it takes sky
+   * colours rather than haze colours on purpose — see the block comment on
+   * `scAerialPerspective` in patch.js. `setSkyColors` above changes the IBL's
+   * copy; if you move one you almost certainly want to move all three (dome,
+   * IBL, haze), and `skygrad.js` is where the dome's live.
+   */
+  setAerialSkyColors(c) {
+    this.patcher.setSkyColors(c)
   }
 
-  /** Haze colour away from the sun (hex, sRGB). Match the sky's horizon band. */
-  setAerialColor(hex) {
-    this.patcher.uniforms.scHaze.value.set(hex)
-  }
-
-  /** Haze colour looking INTO the sun (hex, sRGB), pre-boost. */
-  setAerialSunColor(hex, boost = 1.55) {
+  /** Colour of the forward-scatter lobe (hex, sRGB), pre-boost. */
+  setAerialSunColor(hex, boost = 1.5) {
     this.patcher.uniforms.scHazeSun.value.set(hex).multiplyScalar(boost)
   }
+
+  /** How far the inscatter departs from the sky down the solar azimuth. 0..1. */
+  get aerialSunLobe() { return this.patcher.aerialSunLobe }
+  set aerialSunLobe(v) { this.patcher.aerialSunLobe = v }
 
   /**
    * Per-channel extinction ratios. Blue > red makes distance warm; equal

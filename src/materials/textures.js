@@ -207,6 +207,49 @@ function overlayField(ctx, fill) {
   ctx.drawImage(c, 0, 0)
 }
 
+/**
+ * In-place per-texel edit of a canvas, as a MULTIPLY rather than an overlay.
+ *
+ * `overlayField` above composites source-over, which is right for laying a new
+ * substance (verdigris crust) on top of an old one. It is wrong for modulating
+ * one that is already there: source-over toward a colour pulls every channel
+ * toward that colour, so darkening a texel by 18% would also drag its hue, and
+ * on the ORM canvas it would drag metalness in B down along with roughness in
+ * G. `fn(px, i, x, y)` gets [r, g, b] in 0..255 and mutates it in place; the
+ * array is reused across texels, so this allocates once for the whole pass.
+ */
+function modulateField(ctx, fn) {
+  const img = ctx.getImageData(0, 0, SIZE, SIZE)
+  const d = img.data
+  const px = [0, 0, 0]
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = y * SIZE + x
+      const j = i * 4
+      px[0] = d[j]; px[1] = d[j + 1]; px[2] = d[j + 2]
+      fn(px, i, x, y)
+      d[j] = Math.max(0, Math.min(255, px[0] | 0))
+      d[j + 1] = Math.max(0, Math.min(255, px[1] | 0))
+      d[j + 2] = Math.max(0, Math.min(255, px[2] | 0))
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+}
+
+/** The height canvas as a 0..1 field. Same read cavityField does, published so
+ *  a painter can drive roughness off the form it just carved. */
+function readHeight(hctx) {
+  const src = hctx.getImageData(0, 0, SIZE, SIZE).data
+  const hf = new Float32Array(SIZE * SIZE)
+  for (let i = 0; i < hf.length; i++) hf[i] = src[i * 4] / 255
+  return hf
+}
+
+function smoothstep(a, b, x) {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+}
+
 function speckle(ctx, rand, count, colors, sizeMin, sizeMax) {
   for (let i = 0; i < count; i++) {
     ctx.fillStyle = colors[(rand() * colors.length) | 0]
@@ -452,9 +495,15 @@ const PAINTERS = {
        * to hue 55 while the wall built of the identical material stayed at 35 —
        * one substance reading as two depending on which way it faced.
        *
-       * So: same hue, less of it. 0.44 rather than 0.62, and a touch warmer.
+       * So: less of it. 0.42 rather than the 0.62 it started at.
+       *
+       * And the hue moved as well as the amount: 132,132,114 is hue 60, which
+       * is the olive corner, and the mip mean of a deck is mostly joint. A
+       * recess should read COOL, not YELLOW-green — 124,128,128 is hue 180 at
+       * saturation 0.031, so it still pulls the mean toward the sky the joint
+       * actually sees without pulling it toward khaki.
        */
-      a.fillStyle = 'rgba(132,132,114,0.44)'
+      a.fillStyle = 'rgba(124,128,128,0.42)'
       for (const c of courses) {
         a.fillRect(0, c.y - c.spec.joint, SIZE, c.spec.joint * 2)
         for (const blk of c.blocks) {
@@ -532,7 +581,11 @@ const PAINTERS = {
       const x = rand() * SIZE
       const y = rand() * SIZE
       const r = 34 + rand() * 62
-      blob(a, x, y, r, 'rgba(112,130,96,.30)', 'rgba(112,130,96,0)')
+      // Rotated off hue 88 (olive) to hue 132 and pulled back from .30 to .24:
+      // twelve blobs up to 96 texels across is 40% of the tile, and sandstone
+      // is the largest area in almost every frame, so this one call was a
+      // measurable share of the deck's green.
+      blob(a, x, y, r, 'rgba(106,128,112,.24)', 'rgba(106,128,112,0)')
       blob(m, x, y, r, mg(0.95, 0, 0.5), mg(0.95, 0, 0))
     }
     // Chipped arrises: where a corner has broken off, fresh unweathered stone
@@ -775,6 +828,68 @@ const PAINTERS = {
     medallion(SIZE * 0.72, SIZE * 0.70, 30)
 
     /**
+     * --- ROUGHNESS FROM THE HEIGHT FIELD ---------------------------------
+     *
+     * The art director's note is that a full-screen brass wall at arm's length
+     * has "no reflection gradient" — measured, a 440x180 patch of plate spanned
+     * 12.4 luma of standard deviation and the rivet BAND, which is a channel
+     * cut 40 code values INTO the plate, came back 6.8 luma BRIGHTER than the
+     * plate it is cut into. That is not a lighting problem: every ornament was
+     * given its polish by hand, so the open field between ornaments was one
+     * value (0.26) over ~90% of the tile and the specular had nothing to break
+     * on.
+     *
+     * So polish is now a function of the form. Proud metal is what hands, boots
+     * and weather burnish; a recess is where the dirt film sits and never gets
+     * rubbed. The mapping is the brief's numbers directly:
+     *
+     *   height 0.80+ (rivet crowns 0.77, gear teeth 0.78, turned lands 0.83)
+     *     -> 0.18, a near-mirror that returns a narrow horizon band
+     *   height 0.30- (band floors 0.35, turned grooves 0.33, hub bore 0.29)
+     *     -> 0.55, satin, which smears the same band over tens of degrees
+     *   the open plate at 0.50 lands at 0.44, i.e. in the recessed field's
+     *     range, because relative to a rivet crown that is exactly what it is.
+     *
+     * Blended 60/40 with the painted channel rather than replacing it, so the
+     * planishing marks, the lathe rings and the hammered-crown gradient all
+     * survive as a modulation on top of the form-derived base.
+     */
+    {
+      const hf = readHeight(h)
+      modulateField(m, (px, i) => {
+        // 0.30..0.80 is the working span of this tile's height field; see the
+        // per-feature values quoted above.
+        const formRough = 0.55 - 0.37 * smoothstep(0.30, 0.80, hf[i])
+        const painted = px[1] / 255
+        px[1] = Math.max(0.03, Math.min(0.95, painted * 0.40 + formRough * 0.60)) * 255
+      })
+
+      /**
+       * --- CAVITY INTO ALBEDO ------------------------------------------
+       *
+       * "No dark recesses" was the other half of the note, and on a metal there
+       * is no other way to get one: metalness is 1, so there is no diffuse term
+       * at all and albedo IS the specular colour. Darkening F0 in a pocket is
+       * the standard stand-in for the radiance a channel loses to its own
+       * walls, and it is what puts a black line under a band shoulder and a
+       * dark ring under a medallion's teeth.
+       *
+       * Radius 16 texels (~7.4 cm) rather than the verdigris pass's 6: a band
+       * channel is 18 texels wide and a medallion undercut wider still, so at
+       * radius 6 only the lips of those read as pockets and their floors read
+       * as open plate. Gain 2.6 puts a full channel floor at ~1.
+       *
+       * Floor 0.60, i.e. the brief's "0.55-0.65 in band channels and medallion
+       * undercuts". Not lower: a crevice that goes to black stops being metal.
+       */
+      const cavBroad = cavityField(h, 16, 2.6)
+      modulateField(a, (px, i) => {
+        const k = 1.0 - 0.40 * cavBroad[i]
+        px[0] *= k; px[1] *= k; px[2] *= k
+      })
+    }
+
+    /**
      * --- verdigris -------------------------------------------------------
      *
      * DRIVEN ENTIRELY BY THE GEOMETRY, not by an independent noise field.
@@ -877,8 +992,15 @@ const PAINTERS = {
      * five — a base with no blue in it cannot come back green, only yellow.
      * The second cause is the lighting response, and that is the wrap term in
      * materials/shader.js.
+     *
+     * DOWN 5% IN VALUE from #67ad55, and that is not a reversal of the above.
+     * The review's follow-up finding is that moss, not sandstone, is now the
+     * brightest large surface in frame, and taste.md wants the masonry to be
+     * the thing the eye lands on. 5% off the base plus the clump mask below —
+     * which takes the hollows a further 18% down — moves the MEAN without
+     * touching the crowns, so the deck stays legible as a landing pad.
      */
-    a.fillStyle = '#67ad55'
+    a.fillStyle = '#62a44f'
     a.fillRect(0, 0, SIZE, SIZE)
     h.fillStyle = hg(112)
     h.fillRect(0, 0, SIZE, SIZE)
@@ -954,6 +1076,56 @@ const PAINTERS = {
       a.fill()
       dome(h, x, y, r * 2.2, 190, HEIGHT_MID)
     }
+
+    /**
+     * --- THE CLUMP MASK ---------------------------------------------------
+     *
+     * The finding this exists for: a 12 m moss disc is a single flat value.
+     * Everything above works at 5-40 cm — clumps, hollows, blades — and every
+     * one of those has mipped to its mean by the time the disc fills the lower
+     * third of the frame, which is the only view of it that matters. Measured
+     * on `gaps.png`, a 660x180 patch of deck sat at hue 78.2 with a luma
+     * standard deviation of 17.4 on a mean of 99, and most of that 17.4 is the
+     * scattered tufts and the flower specks, not the mat.
+     *
+     * So: a two-octave coherent field at 2 and 4 cells. Moss is the one
+     * material sampling world-planar (see SURFACE.moss.worldUv), so the tile
+     * field is CONTINUOUS across a whole cap rather than restarting per box —
+     * 2 cells across a 2.38 m tile is a 1.19 m clump and 4 cells is 60 cm,
+     * which is the review's "~1.5 m" band. The ~4 m band is the macro shader's
+     * job (materials/shader.js band 1, 1-4 m) and moss's macroAlbedo is raised
+     * to match.
+     *
+     * Value and hue move together, and that is the point: a clump is a crown
+     * that gets sun and dries out, so it is brighter AND yellower; a hollow
+     * holds water and shade, so it is darker AND bluer. Moving value alone is
+     * what makes a mask read as a lighting artefact rather than as growth.
+     *
+     *   value  +/-18%   (the review's number)
+     *   hue    +/-10 degrees, via R up / B down on the clumps and the reverse
+     *          in the hollows. On the base 98,164,79 that is R x1.075 and
+     *          B x0.91 at full clump, which walks hue 106.6 -> 96.6.
+     */
+    {
+      const clumpA = coherent(rand, 2)   // 1.19 m
+      const clumpB = coherent(rand, 4)   // 0.60 m
+      modulateField(a, (px, i, x, y) => {
+        // -1..1, weighted toward the coarse octave so the read is clumps
+        // rather than mottle.
+        const k = (clumpA(x, y) - 0.5) * 1.30 + (clumpB(x, y) - 0.5) * 0.70
+        const v = 1 + 0.18 * k
+        px[0] *= v * (1 + 0.075 * k)
+        px[1] *= v
+        px[2] *= v * (1 - 0.090 * k)
+      })
+      // A hollow is damp, and damp moss is smoother — this is what lets the
+      // hollows catch a sky glint and the crowns stay matte, so the mask has a
+      // specular consequence and not only an albedo one.
+      modulateField(m, (px, i, x, y) => {
+        const k = (clumpA(x, y) - 0.5) * 1.30 + (clumpB(x, y) - 0.5) * 0.70
+        px[1] = Math.max(0, Math.min(255, px[1] - k * 26))
+      })
+    }
   },
 
   /**
@@ -963,12 +1135,23 @@ const PAINTERS = {
    * balustrade were telling the player the same thing.
    */
   terracotta(a, h, m, rand) {
-    // Pushed from hue 15 to hue 14 with a higher saturation and a lower value.
-    // Small in hue terms, but it is the direction the review asked for — this
-    // material's job is to be unmistakably RED-orange against brass's gold, and
-    // the extra saturation and the darker value do more for that separation
-    // than another few degrees of hue would.
-    a.fillStyle = '#c34a26'
+    /**
+     * SANDY PEACH AND OCHRE, not a hazard stripe.
+     *
+     * The previous pass took this to hue 14 at 0.80 saturation on the argument
+     * that terracotta's job is to be unmistakably RED-orange against brass's
+     * gold. The separation worked and the colour did not: measured on the
+     * underpass slab it delivers hue 17.4 at saturation 0.81 — a safety cone,
+     * and it is the whole mid-mass of that frame plus the rim of every island.
+     * docs/art-direction.md asks for "sandy peach and ochre".
+     *
+     * 0xc0764e is hue 22.6 at saturation 0.59: still the reddest thing in the
+     * palette and still ~17 degrees off brass, so the reserved-accent contract
+     * (level.js: terracotta means the route acts here) is intact. What it gives
+     * up is the shout, and the shout is what made every island a three-layer
+     * cake of green plate, red stripe, grey block.
+     */
+    a.fillStyle = '#c0764e'
     a.fillRect(0, 0, SIZE, SIZE)
     h.fillStyle = hg(84)
     h.fillRect(0, 0, SIZE, SIZE)
@@ -990,7 +1173,10 @@ const PAINTERS = {
         const w = tile - gap * 2
         const hh = tile - gap * 2
         wrapped(a, () => {
-          a.fillStyle = `rgb(${(195 * v) | 0},${(74 * v) | 0},${(38 * v) | 0})`
+          // Per-tile colour, tracking the new base: a fired batch varies in
+          // value, and the darker units of a peach batch are ochre rather than
+          // a deeper red.
+          a.fillStyle = `rgb(${(188 * v) | 0},${(117 * v) | 0},${(78 * v) | 0})`
           a.fillRect(x, y, w, hh)
         })
         wrapped(h, () => {
@@ -1025,7 +1211,10 @@ const PAINTERS = {
       }
     })
 
-    speckle(a, rand, 1600, ['rgba(92,40,22,.15)', 'rgba(255,196,152,.16)'], 0.6, 2.6)
+    // The dark speckle tracks the base too: at hue 14 it was a deeper red and
+    // read as soot on a hazard stripe. 0x683e26 is the same ochre, three stops
+    // down, which is what an under-fired patch on a peach tile looks like.
+    speckle(a, rand, 1600, ['rgba(104,62,38,.15)', 'rgba(255,204,166,.16)'], 0.6, 2.6)
     // Lichen crusting on a few tiles: the cool accent on the warmest material.
     for (let i = 0; i < 11; i++) {
       const x = rand() * SIZE
@@ -1044,7 +1233,28 @@ const PAINTERS = {
    * whole island underside fills the lower third.
    */
   stone(a, h, m, rand) {
-    a.fillStyle = '#8e968b'
+    /**
+     * OFF THE YELLOW-GREEN POLE. 0x8e968b was hue 96 at saturation 0.073, and
+     * hue 96 is the olive corner: the grade multiplies saturation by 1.30 and
+     * adds green to the shadow term, so every push this material receives is a
+     * push further into olive. `level.js` also paves with it — `BUILT`/`WILD`
+     * both pass `kind: 'stone'` for the drum body and the scenery islands take
+     * it for their rims — and an olive walking deck under a peach balustrade is
+     * the review's "the floor is green" in one sentence.
+     *
+     * 0x8c9492 is hue 165 at saturation 0.054: the same value, a third less
+     * saturation, and rotated to the CYAN side of green where "cool damp rock"
+     * lives and "olive" does not. It is still the one genuinely cool material
+     * in the set and still the counterweight to the warm masonry — it just
+     * cannot be amplified into a substance colour any more.
+     *
+     * The other half of the fix is in shader.js: up-facing stone takes the
+     * golden-hour sky's warm bias at nearly full strength, so a stone DECK
+     * reads sandy while a stone UNDERSIDE stays cool grey. The roadmap's
+     * preferred fix — stop paving with this kind at all — is a `level.js`
+     * change and is not in this lane.
+     */
+    a.fillStyle = '#8c9492'
     a.fillRect(0, 0, SIZE, SIZE)
     h.fillStyle = hg(HEIGHT_MID)
     h.fillRect(0, 0, SIZE, SIZE)
@@ -1059,9 +1269,12 @@ const PAINTERS = {
       const y = rand() * SIZE
       const r = 22 + rand() * 58
       dome(h, x, y, r, 168 + rand() * 40, HEIGHT_MID)
+      // Cobble crowns track the base's rotation to hue ~165; leaving them at
+      // hue 95 would put the olive straight back on the proud faces, which are
+      // the ones the frame actually sees.
       blob(a, x, y, r,
-           `rgba(${(158 + rand() * 28) | 0},${(166 + rand() * 24) | 0},${(152 + rand() * 22) | 0},.24)`,
-           'rgba(158,166,152,0)')
+           `rgba(${(152 + rand() * 26) | 0},${(160 + rand() * 22) | 0},${(158 + rand() * 22) | 0},.24)`,
+           'rgba(152,160,158,0)')
     }
     // Crevices between them: deep, cool, damp.
     for (let i = 0; i < 26; i++) {
@@ -1071,7 +1284,7 @@ const PAINTERS = {
       dome(h, x, y, r, 74, HEIGHT_MID)
       blob(a, x, y, r, 'rgba(62,74,64,.28)', 'rgba(62,74,64,0)')
     }
-    speckle(a, rand, 3200, ['rgba(116,124,112,.18)', 'rgba(198,206,192,.22)', 'rgba(62,72,64,.12)'], 1, 5)
+    speckle(a, rand, 3200, ['rgba(112,120,118,.18)', 'rgba(194,202,200,.22)', 'rgba(62,72,70,.12)'], 1, 5)
     // Mineral streaking down the faces, cool and grey-green.
     for (let i = 0; i < 22; i++) {
       a.strokeStyle = 'rgba(72,84,72,.16)'

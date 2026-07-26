@@ -566,11 +566,10 @@ export class Level {
     // is correct and costs one determinant, and because the moment someone
     // hands a prefab left-to-right with a negative scale it stops being dead.
     //
-    // It is NOT the cause of the invisible-surface bug. That bug is real —
-    // 543 of 605,966 triangles are wound inconsistently with their own vertex
-    // normals, and forcing DoubleSide recovers 13.4% of the frame — but the
-    // inconsistency is baked in at GENERATION time, not introduced here.
-    // See docs/roadmap.md.
+    // It was NOT the cause of the inconsistent-winding bug either. That bug
+    // was real and is now fixed at generation time (`props.Builder.triOut` and
+    // `props.flattenFolded`); `node tools/winding.mjs` attributes every
+    // remaining triangle to the call that made it and now reports zero.
     const mirrored = matrix.determinant() < 0
 
     if (index) {

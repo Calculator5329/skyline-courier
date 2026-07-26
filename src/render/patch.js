@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { SKY, SKY_GRADIENT_GLSL } from './skygrad.js'
 
 /**
  * Material injection.
@@ -48,7 +49,7 @@ import * as THREE from 'three'
  * a stale cached program cannot survive an edit to this file during a dev
  * session.
  */
-const PATCH_VERSION = 2
+const PATCH_VERSION = 3
 
 /** Materials that actually run three's lighting pipeline. */
 function isLit(m) {
@@ -70,6 +71,7 @@ function lumNormalized(hex) {
 }
 
 const PARS = /* glsl */ `
+${SKY_GRADIENT_GLSL}
 uniform sampler2D scContactTex;
 uniform vec2 scScreenTexel;
 uniform vec3 scSunDirView;
@@ -88,9 +90,12 @@ uniform vec4 scAerial;
 uniform vec4 scAerial2;
 // Per-channel extinction ratios. See scAerialPerspective.
 uniform vec3 scAerialBeta;
-uniform vec3 scHaze;
 uniform vec3 scHazeSun;
-uniform vec3 scHazeCool;
+// The sky, sampled by the same function world.js draws it with.
+uniform vec3 scSkyZenith;
+uniform vec3 scSkyHorizon;
+uniform vec3 scSkyDeck;
+uniform vec3 scSkySunColor;
 // x: warm/cool ambient split strength, y/z/w: unused
 uniform vec4 scAmbSplit;
 uniform vec3 scAmbUp;
@@ -126,7 +131,25 @@ vec3 scAmbientTint( vec3 N ) {
   // reads as the average of sky and cloud, which is what a vertical wall
   // actually receives.
   float up = clamp( wN.y * 0.5 + 0.5, 0.0, 1.0 );
-  return mix( vec3( 1.0 ), mix( scAmbDown, scAmbUp, up ), scAmbSplit.x );
+  /**
+   * ...and then held back on UP-FACING normals by 1 - 0.6 * max(0, N.y).
+   *
+   * The physics says a deck sees the sky and the sky is cool green, and that is
+   * true. What it leaves out is that this sun sits at 9.8 degrees of elevation,
+   * so a horizontal surface receives sin(9.8) = 0.17 of the key and is drawn
+   * almost entirely by that cool ambient — while the vertical riser beside it
+   * takes cos(9.8) = 0.98 and is drawn by the warm key. Applying the full split
+   * on top of a 2.5-stop value difference is what turned the ascent stair in
+   * tower.png into bright sandstone risers over olive treads: an inversion of
+   * both value AND hue on a surface the player has to read at 47 km/h.
+   *
+   * 0.6 keeps the cool green on walls and soffits, where the split does its
+   * work and where nobody is trying to judge a foothold, and hands the deck
+   * back its ochre. It is the same trade taste.md asks for everywhere else:
+   * the route is legible first, the physics is right second.
+   */
+  float hold = 1.0 - 0.6 * max( 0.0, wN.y );
+  return mix( vec3( 1.0 ), mix( scAmbDown, scAmbUp, up ), scAmbSplit.x * hold );
 }
 
 /**
@@ -185,19 +208,32 @@ float scAmbientVisibility() {
  * distant geometry has to LIGHTEN into the haze. Haze that darkens what it
  * covers reads as smog; haze that lightens it reads as distance.
  *
- * ===================== WHY THE HAZE IS NOT ONE COLOUR ======================
+ * ===================== WHY THE HAZE IS THE SKY =============================
  * A single warm inscatter colour is what an unfinished background looks like.
  * Every island at every distance converges on the same value, so near, mid and
  * far read as one flat card at three scales and the archipelago — the headline
  * effect of this art direction — stops being legible as depth at all.
  *
- * Real aerial perspective is DIRECTIONAL, and at golden hour violently so. The
- * air between you and something you are looking at *through* the sun is lit;
- * the air between you and something 120 degrees away from the sun is in the
- * shadow of the atmosphere itself and is both cooler and darker. So the
- * inscatter is a three-way blend along the view ray's angle to the sun, and the
- * cool end is DARKER than the warm end, which is what re-establishes value
- * separation between an island on the sun side and one away from it.
+ * The version before this one already knew that and answered it with three
+ * hand-picked haze colours blended by the view ray's angle to the sun. It was
+ * an improvement and it was still wrong, in a way the art review named
+ * exactly: three constants cannot follow a sky that runs cool at the zenith
+ * through a tight warm band at the horizon to a luminous cloud deck below.
+ * Measured, an island 300 m out came back cool blue-white in front of a warm
+ * tan sky and popped forward as a cut-out.
+ *
+ * So the inscatter is now SAMPLED FROM THE SKY, in the view direction, using
+ * scSkyGradient — literally the same function world.js draws the dome with
+ * (see render/skygrad.js). The two cannot disagree, because there is only one
+ * of them. That is also the physically honest answer: the light scattered into
+ * a horizontal path IS, to first order, the sky radiance along it.
+ *
+ * The directional structure the hand-picked colours were reaching for comes
+ * for free and in more detail — an island silhouetted a few degrees above the
+ * horizon gets the bright warm band, one below it gets the cloud deck, one seen
+ * against the zenith gets the cool green, and everything toward the sun gets
+ * the aureole — with the tight forward lobe kept on top for the last ~30
+ * degrees, because that is a scattering phase function and not a sky colour.
  *
  * The transmittance FLOOR does the rest: no matter how much haze a ray crosses,
  * a fixed fraction of the surface's own colour survives. Physically that is a
@@ -232,17 +268,22 @@ vec3 scAerialPerspective( vec3 color, vec3 N ) {
 
   vec3 T = max( exp( -tau * scAerialBeta ), vec3( scAerial2.x ) );
 
-  // Forward scatter: looking toward the sun through the haze is much brighter
-  // than looking away through the same haze. At golden hour this is the
-  // strongest depth cue in the frame, and it is the reason a backlit distant
-  // island reads as backlit rather than as washed out.
   float sunCos = dot( dirW, scSunDirWorld );
-  // Away-side -> sun-side base. The smoothstep window is wide (-0.55..0.20)
-  // because this is the LOW-frequency half of the effect: it has to read as the
-  // sky being warmer on one side, not as a rim around the solar azimuth.
-  vec3 side = mix( scHazeCool, scHaze, smoothstep( -0.55, 0.20, sunCos ) );
-  // ...and then the tight forward lobe on top, for the last 30 degrees.
-  vec3 inscatter = mix( side, scHazeSun, pow( max( sunCos, 0.0 ), 3.0 ) ) * scAerial.w;
+
+  // THE INSCATTER IS THE SKY. One evaluation, shared with the dome — see the
+  // block comment above and render/skygrad.js. Every bit of directional and
+  // vertical structure comes from here, which is why there is no longer a
+  // hand-picked "cool side" constant to keep in sync with anything.
+  vec3 inscatter = scSkyGradient(
+    dirW, scSkyZenith, scSkyHorizon, scSkyDeck, scSkySunColor, scSunDirWorld );
+
+  // The tight forward lobe, kept separate because it is a phase function
+  // rather than a sky colour: the last ~30 degrees around the solar azimuth
+  // scatter far more light toward the eye than the sky in that direction is
+  // itself emitting, and that excess is what makes a backlit island read as
+  // backlit instead of merely hazy.
+  inscatter = mix( inscatter, scHazeSun, pow( max( sunCos, 0.0 ), 3.0 ) * scAerial2.w );
+  inscatter *= scAerial.w;
 
   vec3 result = color * T + inscatter * ( 1.0 - T );
 
@@ -450,7 +491,12 @@ export class MaterialPatcher {
           // roughly the foreground's chroma rather than exceeding it; above
           // ~0.8 the horizon starts to read as a poster.
           0.55,
-          0
+          // Forward-lobe strength, 0.42. How far the inscatter is allowed to
+          // depart from the sky's own value looking straight down the solar
+          // azimuth. It replaces what used to be a full lerp to `scHazeSun`,
+          // which at 1.0 printed a bright cream disc onto every surface facing
+          // the sun regardless of how much air was actually in front of it.
+          0.42
         ),
       },
       scAerialBeta: {
@@ -462,19 +508,24 @@ export class MaterialPatcher {
         // distance instead of a blue wall.
         value: new THREE.Vector3(0.72, 1.0, 1.62),
       },
-      // Warm gold, matching the sky's horizon band so distant geometry dissolves
-      // INTO the sky rather than terminating against a different colour, which
-      // is the tell that gives away every painted backdrop. Slightly deeper than
-      // the old 0xffe3bd: that value was lighter than the horizon it was meant
-      // to match, so hazed islands came back paler than the sky behind them.
-      scHaze: { value: new THREE.Color(0xf7d7a8) },
-      // Looking into the sun: brighter and creamier still.
+      // The forward-scatter lobe's colour: brighter and creamier than any part
+      // of the sky, because it is the sun's own light redirected toward the eye
+      // by the haze rather than the haze's ambient glow.
       scHazeSun: { value: new THREE.Color(0xfff0d2).multiplyScalar(1.5) },
-      // Looking AWAY from the sun: the cool green-blue of the zenith, and
-      // deliberately darker. This is the half of the haze that was missing, and
-      // it is what puts value separation back between a sun-side island and one
-      // on the shadow side. Matched to skyenv's zenith so the two agree.
-      scHazeCool: { value: new THREE.Color(0x9fb4b0).multiplyScalar(0.7) },
+      /**
+       * THE SKY, and the reason there is no separate haze palette any more.
+       *
+       * These four are the exact values `world.js` hands its dome shader —
+       * both sides read them from `skygrad.js`. Changing the sky's horizon here
+       * without changing it there is not possible, which is the point: the
+       * previous three-constant haze had to be manually re-matched every time
+       * the sky moved, and measured on the shot set it had drifted far enough
+       * that distant islands came back cool blue-white against a warm tan sky.
+       */
+      scSkyZenith: { value: new THREE.Color(SKY.zenith) },
+      scSkyHorizon: { value: new THREE.Color(SKY.horizon) },
+      scSkyDeck: { value: new THREE.Color(SKY.deck) },
+      scSkySunColor: { value: new THREE.Color(SKY.sun) },
       // Ambient split strength. 0.30, measured rather than chosen: at 0.42 the
       // terrace deck came back at hue 45 lit / 57-69 shadowed, which clears the
       // +20-degree separation target but drags the LIT sandstone from ochre to
@@ -613,6 +664,26 @@ export class MaterialPatcher {
   /** Chroma restored at full haze, to undo AgX's desaturation at distance. */
   get aerialChroma() { return this.uniforms.scAerial2.value.z }
   set aerialChroma(v) { this.uniforms.scAerial2.value.z = v }
+
+  /** How far the inscatter departs from the sky down the solar azimuth. 0..1. */
+  get aerialSunLobe() { return this.uniforms.scAerial2.value.w }
+  set aerialSunLobe(v) { this.uniforms.scAerial2.value.w = v }
+
+  /**
+   * Re-point the haze's copy of the sky.
+   *
+   * @param {object} c any subset of {zenith, horizon, deck, sun} as hex.
+   *
+   * There is deliberately no way to set a haze colour that is not a sky colour.
+   * If the dome moves, this moves with it or distant geometry starts
+   * terminating against a colour the sky behind it does not reach.
+   */
+  setSkyColors(c) {
+    if (c.zenith !== undefined) this.uniforms.scSkyZenith.value.set(c.zenith)
+    if (c.horizon !== undefined) this.uniforms.scSkyHorizon.value.set(c.horizon)
+    if (c.deck !== undefined) this.uniforms.scSkyDeck.value.set(c.deck)
+    if (c.sun !== undefined) this.uniforms.scSkySunColor.value.set(c.sun)
+  }
 
   /** Warm/cool ambient split strength. 0 = off. See scAmbientTint. */
   get ambientSplit() { return this.uniforms.scAmbSplit.value.x }

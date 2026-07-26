@@ -49,6 +49,7 @@ uniform mat4 uProjInv;
 uniform vec3 uSunDirView;
 uniform vec4 uParams;   // x length(m)  y thickness(m)  z frame  w strength
 uniform vec4 uAO;       // x intensity  y radius(m)  z max screen radius(uv)  w bias
+uniform vec4 uAONear;   // the same four, for the short-radius set. x <= 0 = off
 varying vec2 vUv;
 
 // 14 steps. Below ~10 the ray steps over thin geometry (railings, the
@@ -63,6 +64,15 @@ varying vec2 vUv;
 // blur. The golden-angle spiral is what makes 8 enough — it has no preferred
 // direction, so the residual error is isotropic noise rather than a pattern.
 #define SC_AO_TAPS 8
+// ...and 5 for the short-radius set below. It is the more expensive of the two
+// per tap (a tight screen footprint means its neighbours are the pixels every
+// other thread also wants, but it runs on top of a full 8-tap set that has
+// already paid for the cache line) and it is the cheaper of the two to
+// under-sample: it produces a strong, spatially coherent signal in a crease and
+// nothing at all in the open, which is exactly the shape the bilateral below
+// resolves best. 8 and 5 measured indistinguishable in the frame and 5 gives
+// most of the cost back.
+#define SC_AO_NEAR_TAPS 5.0
 #define SC_GOLDEN_ANGLE 2.39996323
 
 /**
@@ -80,10 +90,10 @@ varying vec2 vUv;
  *  - the BIAS discards near-tangent samples, which are the same surface seen
  *    through depth-buffer quantisation rather than a real occluder.
  */
-float scAmbientOcclusion( vec3 P, vec3 N, float depth, float jitter ) {
-  if ( uAO.x <= 0.0 ) return 1.0;
+float scAmbientOcclusion( vec3 P, vec3 N, float depth, float jitter, vec4 ao, float taps ) {
+  if ( ao.x <= 0.0 ) return 1.0;
 
-  float radius = uAO.y;
+  float radius = ao.y;
   // World radius -> uv radius. A length L at view depth d subtends L*P00/d in
   // NDC x, and uv is half of NDC. Clamped: at 30 cm from a wall the unclamped
   // footprint is most of the screen, which is both slow (cache misses on every
@@ -97,17 +107,21 @@ float scAmbientOcclusion( vec3 P, vec3 N, float depth, float jitter ) {
   // crease then gets sampled twice as far as every vertical one, which is
   // exactly the sort of bug that reads as "the AO is weak" rather than as "the
   // AO is wrong".
-  float over = max( uvR.x, uvR.y ) / max( uAO.z, 1e-4 );
+  float over = max( uvR.x, uvR.y ) / max( ao.z, 1e-4 );
   if ( over > 1.0 ) uvR /= over;
 
   float occ = 0.0;
   for ( int i = 0; i < SC_AO_TAPS; i ++ ) {
+    // Uniform across the whole draw (taps is a compile-time-constant argument
+    // at both call sites), so this break costs nothing and genuinely saves the
+    // taps it skips rather than masking them off.
+    if ( float( i ) >= taps ) break;
     float fi = float( i ) + jitter;
     float a = fi * SC_GOLDEN_ANGLE;
     // sqrt of the index gives a UNIFORM disc rather than a centre-heavy one;
     // without it three quarters of the taps land inside the inner third of the
     // radius and the AO has no reach.
-    float r = min( 1.0, sqrt( ( fi + 0.5 ) / float( SC_AO_TAPS ) ) );
+    float r = min( 1.0, sqrt( ( fi + 0.5 ) / taps ) );
     vec2 suv = vUv + vec2( cos( a ), sin( a ) ) * r * uvR;
     if ( suv.x <= 0.0 || suv.x >= 1.0 || suv.y <= 0.0 || suv.y >= 1.0 ) continue;
     if ( texture2D( tNormal, suv ).z < 0.5 ) continue;   // sky occludes nothing
@@ -116,10 +130,10 @@ float scAmbientOcclusion( vec3 P, vec3 N, float depth, float jitter ) {
     vec3 v = S - P;
     float d = sqrt( max( dot( v, v ), 1e-8 ) );
     float range = clamp( 1.0 - ( d - radius ) / max( radius, 1e-3 ), 0.0, 1.0 );
-    occ += max( dot( N, v / d ) - uAO.w, 0.0 ) * range;
+    occ += max( dot( N, v / d ) - ao.w, 0.0 ) * range;
   }
 
-  return clamp( 1.0 - uAO.x * occ / float( SC_AO_TAPS ), 0.0, 1.0 );
+  return clamp( 1.0 - ao.x * occ / taps, 0.0, 1.0 );
 }
 
 void main() {
@@ -142,7 +156,35 @@ void main() {
   // so one value cannot correlate them.
   float jitter = scIGN( gl_FragCoord.xy + uParams.z * 3.1717 );
 
-  float ao = scAmbientOcclusion( P, N, depth, jitter );
+  /**
+   * TWO RADII, and the near one is the reason interior corners exist.
+   *
+   * The broad set (0.9 m) is sized to the architecture — a moss lip, a
+   * balustrade base, a stair nosing — and it is genuinely good at those. It is
+   * structurally incapable of drawing a 90-degree wall/floor junction, and not
+   * because it is too weak: at a junction the wall runs away to infinity, so
+   * most of a 0.9 m disc of taps lands on wall pixels far enough away that the
+   * RANGE check discards them, and the screen clamp throws away more. The
+   * estimator returns "mostly open" for a quarter-space. Measured off the debug
+   * view on closeup.png, that junction came back at 0.75-0.78 visibility
+   * against the 0.5 a quarter-space analytically subtends.
+   *
+   * A 0.22 m disc at the same junction lands every tap on surface that is
+   * genuinely within range, and returns something near the analytic answer.
+   * The two sets are combined with min() rather than a product: they are
+   * estimates of the same visibility function at two scales, so multiplying
+   * them counts the same occluder twice and turns every corner into a black
+   * hole. min() lets the near set DARKEN what the broad set found and never
+   * lighten it, which is the correct direction — the finer estimate is the more
+   * trustworthy one at short range, and it says nothing at all in open space.
+   *
+   * The near set uses a decorrelated jitter (the golden-ratio offset) so its
+   * eight taps do not land on the same eight angles as the broad set's and
+   * leave a visible eight-spoke rosette that the bilateral cannot resolve.
+   */
+  float ao = scAmbientOcclusion( P, N, depth, jitter, uAO, float( SC_AO_TAPS ) );
+  ao = min( ao, scAmbientOcclusion(
+    P, N, depth, fract( jitter + 0.61803399 ), uAONear, SC_AO_NEAR_TAPS ) );
 
   // A surface already facing away from the sun is in its own shadow; marching
   // from it can only produce a shadow on top of a shadow, at full cost. The AO
@@ -310,6 +352,39 @@ export class ContactShadows {
           0.16
         ),
       },
+      uAONear: {
+        value: new THREE.Vector4(
+          // intensity 3.0. Higher than the broad set because it has to reach
+          // the analytic answer for a quarter-space (0.5) from an estimator
+          // that undercounts, and because it acts through min() — it only ever
+          // shows up where it found something the broad set did not.
+          3.2,
+          // radius 0.24 m. Sized to the FILLET the architecture does not have:
+          // the wall/floor junctions in this level are hard 90-degree corners
+          // and this is the band either side of the crease that a real one
+          // would occlude. Larger and it stops being a corner term and starts
+          // duplicating the broad set at extra cost; smaller and it lands
+          // inside a couple of depth texels at any distance and returns noise.
+          0.24,
+          // max screen radius 0.075 uv.
+          //
+          // MEASURED, after 0.045 left closeup.png's p1 at 30.8 against a
+          // target of 25. At the 1.8 m the wall/floor junction in that shot
+          // sits at, a 0.24 m radius wants 0.078 uv vertically, so a 0.045
+          // clamp was cutting the effective world radius to 0.13 m — barely
+          // half of the tuning above — in exactly the near field the set exists
+          // for. This is the same mistake the broad set's clamp made before it
+          // went 0.055 -> 0.10, and it is worth stating twice: the CLAMP, not
+          // the radius, is what binds up close.
+          0.075,
+          // bias 0.12, below the broad set's 0.16. That bias was raised to stop
+          // depth quantisation over a 0.9 m disc reading as a grey wash on flat
+          // surfaces; over 0.22 m there is far less depth difference to
+          // quantise, and the same 0.16 here would discard most of a real
+          // corner along with the noise.
+          0.12
+        ),
+      },
     })
     this.blur = new Pass('sc-contact-blur', BILATERAL, {
       tSrc: { value: null },
@@ -338,6 +413,14 @@ export class ContactShadows {
   /** AO world radius in metres. */
   get aoRadius() { return this.pass.uniforms.uAO.value.y }
   set aoRadius(v) { this.pass.uniforms.uAO.value.y = v }
+
+  /** Short-radius (interior-corner) AO strength. 0 skips its taps entirely. */
+  get aoNearIntensity() { return this.pass.uniforms.uAONear.value.x }
+  set aoNearIntensity(v) { this.pass.uniforms.uAONear.value.x = v }
+
+  /** Short-radius AO world radius, metres. Size it to a fillet, not a wall. */
+  get aoNearRadius() { return this.pass.uniforms.uAONear.value.y }
+  set aoNearRadius(v) { this.pass.uniforms.uAONear.value.y = v }
 
   setSize(w, h) {
     if (this.rtA) this.rtA.dispose()
