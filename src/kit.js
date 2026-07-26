@@ -6,6 +6,60 @@ import {
 import {
   FoliageField, scatterOnBox, hangFromEdge, vineRope, JUNCTION_MIX,
 } from './foliage.js'
+import { LOOK_LEVELS, readLook, setLook } from './render/quality.js'
+
+// ------------------------------------------------------------------- the LOOK
+//
+// One A/B switch for "which generation of the art the world is built from" —
+// see the LOOK section of src/render/quality.js for the full argument and the
+// three ways it is set. kit.js is where a look is CONSUMED, because the two
+// things a look rolls back both live here: the foliage channel and the curve
+// geometry. The default (`modern`) makes both gates below no-ops, so a world
+// nobody re-looked is byte-identical to today's.
+//
+// Read once and memoised: the look cannot change without a reload (the course
+// is built once at boot), so re-reading the URL per plant would be wasted work.
+let _look
+function activeLook() {
+  if (_look === undefined) _look = readLook()
+  return _look
+}
+/** Whether the vegetation channel is allowed to plant anything this build. */
+function foliageEnabled() { return LOOK_LEVELS[activeLook()].foliage }
+/** Whether prefabs draw real curves, or fall back to their box silhouette. */
+function curvesEnabled() { return LOOK_LEVELS[activeLook()].curves }
+
+/**
+ * A view of a Level with its `mesh` channel hidden.
+ *
+ * `curves: false` (the `legacy` look) turns the whole shared kit blocky by the
+ * cleanest lever there is: it hands every prefab the exact Level the node
+ * self-test sees — one with no `mesh()` — so each one takes its already-written
+ * box fallback, where the collider box is drawn as the visible surface. Nothing
+ * about a prefab's logic changes; it simply cannot reach the curve channel.
+ *
+ * A prototype view rather than a mutated Level: reads of `solid`, `decor`,
+ * `group`, `lantern`, `__kitFoliage`, … fall through to the real Level, and the
+ * only own property is a `mesh` shadowed to `undefined`. One view per Level
+ * (memoised in `trackedKit`) so foliage bookkeeping stays on one object.
+ */
+function lookMeshless(L) {
+  const v = Object.create(L)
+  v.mesh = undefined
+  return v
+}
+
+// Console channel for the A/B, exposed the moment this module loads (main.js
+// reassigns `window.__game` wholesale after boot, so a global is the one place
+// a patch here survives). `window.setLook('legacy')` then reload; the URL form
+// `?look=legacy` needs no console at all.
+if (typeof window !== 'undefined') {
+  try {
+    window.setLook = (name) => setLook(name)
+    window.getLook = () => readLook()
+    window.LOOK_LEVELS = LOOK_LEVELS
+  } catch { /* sandboxed window */ }
+}
 
 /**
  * kit.js — architectural prefabs for the sky-garden archipelago.
@@ -193,6 +247,11 @@ function foliageAt(L, x, z) {
  * fails to load — see this file's header.
  */
 function plant(L, x, z, fn) {
+  // The one gate the LOOK switch needs for vegetation: every plant in the world
+  // — deck grass, moss junctions, hanging ivy — routes through here, so a look
+  // with `foliage: false` empties the world of plants by returning before the
+  // field is even touched. `modern` never trips it.
+  if (!foliageEnabled()) return 0
   const f = foliageAt(L, x, z)
   if (!f) return 0
   try {
@@ -2700,13 +2759,31 @@ export function trackedKit() {
   const placed = new Set()
   const api = {}
   let level = null
+  // THE CURVE GATE, at the one point every prefab call passes through. When the
+  // active look forbids curves, hand each prefab a mesh-less view of the Level
+  // (see `lookMeshless`) so the whole shared kit takes its box fallback in one
+  // place, rather than threading a flag through a dozen prefabs. `modern` /
+  // `no-foliage` keep curves on, so `meshless` is false and the Level is passed
+  // straight through, unchanged. One view per Level so `level` (used for the
+  // foliage flush) stays a single object.
+  const meshless = !curvesEnabled()
+  const views = meshless ? new WeakMap() : null
+  const asLevel = (L) => {
+    if (!meshless || !L || typeof L !== 'object') return L
+    let v = views.get(L)
+    if (!v) { v = lookMeshless(L); views.set(L, v) }
+    return v
+  }
   for (const [name, fn] of Object.entries(PREFABS)) {
     api[name] = (...args) => {
       placed.add(name)
       // Every prefab takes the Level first. Remembering it is what lets
       // `assertAllPlaced` flush the vegetation without level.js having to know
       // the foliage layer exists — see THE FOLIAGE CHANNEL in the header.
-      if (args.length && args[0] && typeof args[0] === 'object') level = args[0]
+      if (args.length && args[0] && typeof args[0] === 'object') {
+        args[0] = asLevel(args[0])
+        level = args[0]
+      }
       return fn(...args)
     }
   }

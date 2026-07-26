@@ -146,3 +146,166 @@ export const QUALITY_NAMES = Object.keys(QUALITY_LEVELS)
 export function resolveQuality(name) {
   return QUALITY_LEVELS[name] ? name : DEFAULT_QUALITY
 }
+
+/* ========================================================================= *
+ *  LOOK — which GENERATION of the art the world is built from.
+ * ========================================================================= *
+ *
+ * This is the same SHAPE of thing as a quality level — one object per level,
+ * settable three ways, defaulting to a verbatim restatement of today's look —
+ * but it turns a different kind of knob. QUALITY trades frame time and leaves
+ * the art alone; LOOK leaves the frame time alone and chooses which iteration
+ * of the ART the geometry is generated from. They are orthogonal: any look can
+ * run at any quality.
+ *
+ * WHY IT EXISTS. Ethan, 2026-07-26: "I kinda liked the skyline better with the
+ * simpler 2nd gen iteration graphics — any way to add a setting and I can see
+ * them and see if I wanna switch? it was right before foliage was added." The
+ * commit that added foliage (78603ac) landed THREE things at once — instanced
+ * vegetation, real generated curve geometry (props.js: lathes, voussoirs,
+ * blobs), and a brass HUD — so "before foliage" is really "before all three".
+ * This setting lets him look before deciding, without a revert.
+ *
+ * WHAT EACH LOOK CAN AND CANNOT ROLL BACK, honestly:
+ *   - Foliage: fully. Every plant in the world is drawn by kit.js's foliage
+ *     channel, which routes through one function; the look gates it there.
+ *   - Curve geometry: fully, for the shared architectural kit. kit.js draws
+ *     each curved prefab as a real mesh INSIDE a hidden box collider, and keeps
+ *     a box-only fallback (the path it takes when there is no mesh channel, e.g.
+ *     under node) that renders the collider box itself as the visible surface.
+ *     `curves: false` selects that fallback for the whole kit — the blocky
+ *     "2nd-gen" silhouette, and, because the visible box IS the collider, a
+ *     path that cannot be hollow.
+ *   - The brass HUD: NOT from here. It lives in src/hud.js, which this lane
+ *     does not own, so no look level can restore the pre-brass instrumentation.
+ *     If Ethan finds he wants that rolled back too, it is a separate change to
+ *     hud.js. Called out so `legacy` is not mistaken for a full time-machine.
+ *
+ * DEFAULT IS TODAY'S LOOK, EXACTLY. `modern` sets both flags true, which makes
+ * every gate in kit.js a no-op, so a player who never touches this setting gets
+ * a byte-identical world — the skyline `closeup` baseline stays at lum 111.0,
+ * sat 0.807. That invariant is the whole reason this is a flag and not a merge.
+ *
+ * CAPTURING FOR AN A/B REVIEW. The docs for this feature live here, in the two
+ * files this lane owns, rather than in a separate `docs/look-modes.md` — a
+ * structural gate restricts the change to `src/render/quality.js` and
+ * `src/kit.js`, so a standalone doc file cannot ship from here. To capture the
+ * same shot under each look and compare the PNGs:
+ *
+ *   node tools/shotset.mjs --out /tmp/look-modern
+ *   node tools/shotset.mjs --out /tmp/look-nofoliage --quality no-foliage
+ *   node tools/shotset.mjs --out /tmp/look-legacy    --quality legacy
+ *   # then open each look dir's closeup.png (and terrace, vista, tower) side by side
+ *
+ * (`--quality <lookname>` is the harness bridge; see `readLook` below.) What to
+ * expect, per shot:
+ *   - closeup / terrace: `no-foliage` drops the deck grass and the moss at the
+ *     wall/floor junctions but keeps the curved drum and cornice; `legacy` also
+ *     flattens the moss cap and lathed body back to a faceted box and turns
+ *     cornices into plain courses.
+ *   - vista / gaps: island undersides go from noise-displaced `blob` rock to
+ *     stacked box tiers in `legacy`; rim ivy switches from instanced cards to
+ *     box strands the moment foliage is off.
+ *   - tower / crossing: arches lose their voussoir mesh and show the box-per-
+ *     block collider; the observatory dome drops from a swept shell to its
+ *     stepped stone courses.
+ * Because every visible box in the `legacy` path IS the collider it used to
+ * hide (`{ hidden: !!L.mesh }` / `{ hidden: curves }` flip to visible), the box
+ * look cannot be hollow — it is the surface==collider invariant, drawn.
+ */
+
+/**
+ * @typedef {object} LookLevel
+ * @property {string} label    what a UI would print
+ * @property {string} note     one honest sentence about what it changes
+ * @property {boolean} foliage whether the vegetation channel plants anything
+ * @property {boolean} curves  whether prefabs draw real curves (vs box fallback)
+ */
+
+/** @type {Record<string, LookLevel>} */
+export const LOOK_LEVELS = {
+  // The reference image. Both channels on == every look-gate in kit.js is a
+  // no-op == today's world, unchanged. Must stay first-and-default.
+  modern: {
+    label: 'Modern',
+    note: "Today's look: full vegetation and real curved geometry.",
+    foliage: true,
+    curves: true,
+  },
+
+  // The literal answer to "right before foliage was added": the modern curved
+  // geometry, with every plant removed. Isolates the one change Ethan named, so
+  // he can see whether it was the foliage he disliked or the geometry with it.
+  'no-foliage': {
+    label: 'No foliage',
+    note: 'Modern curved geometry, but no vegetation anywhere.',
+    foliage: false,
+    curves: true, // curves stay on; foliage is the only thing removed
+  },
+
+  // The fuller "2nd-gen" look: no vegetation AND the blocky box geometry that
+  // predated props.js. This is the closest this lane can get to the parent of
+  // 78603ac — the brass HUD aside (see the header note).
+  legacy: {
+    label: 'Legacy (2nd-gen)',
+    note: 'No vegetation and blocky box geometry — the pre-foliage silhouette.',
+    foliage: false,
+    curves: false,
+  },
+}
+
+/** The look applied when nobody has chosen one. Must equal today's look. */
+export const DEFAULT_LOOK = 'modern'
+
+export const LOOK_NAMES = Object.keys(LOOK_LEVELS)
+
+/** Resolve a name to a look, falling back to the default rather than throwing. */
+export function resolveLook(name) {
+  return LOOK_LEVELS[name] ? name : DEFAULT_LOOK
+}
+
+const LOOK_KEY = 'skyline-courier:look'
+
+/**
+ * The active look, read the same three ways a quality level is, so it can be
+ * A/B'd by reload and captured by the shot harness:
+ *
+ *   1. `?look=legacy` on the URL — wins, and does NOT persist, so an evaluator
+ *      A/Bs by reloading and the harness leaves nothing set for the next run.
+ *      This is the primary channel and mirrors how `?quality=` behaves.
+ *   2. THE HARNESS BRIDGE. tools/shotset.mjs forwards `--quality` onto the URL
+ *      but has no `--look` flag (it is outside this lane's owned paths), so a
+ *      look NAME passed to `--quality` is honoured here — but ONLY when it is a
+ *      real look name and NOT a real quality name, so `--quality lite` is still
+ *      unambiguously a quality. This is what lets `shotset --quality legacy`
+ *      capture the legacy look today with the stock harness. Remove it the day
+ *      shotset grows a real `--look`.
+ *   3. localStorage, written by `setLook()` — the persistent console channel.
+ *
+ * Fully guarded: under node (no `location`) every branch throws into the catch
+ * and the default is returned, so kit.js's self-test path is unaffected.
+ */
+export function readLook() {
+  try {
+    const params = new URLSearchParams(location.search)
+    const l = params.get('look')
+    if (l && LOOK_LEVELS[l]) return l
+    const q = params.get('quality')
+    if (q && LOOK_LEVELS[q] && !QUALITY_LEVELS[q]) return q
+    const s = localStorage.getItem(LOOK_KEY)
+    if (s && LOOK_LEVELS[s]) return s
+  } catch { /* node, or private mode */ }
+  return DEFAULT_LOOK
+}
+
+/**
+ * Persist a look for the next reload. The world's geometry is built once at
+ * boot, so — unlike `setQuality`, which can retune the live pipeline — a look
+ * change only takes effect on RELOAD, which is exactly the A/B gesture anyway.
+ * Returns the resolved name.
+ */
+export function setLook(name) {
+  const look = resolveLook(name)
+  try { localStorage.setItem(LOOK_KEY, look) } catch { /* private mode */ }
+  return look
+}
