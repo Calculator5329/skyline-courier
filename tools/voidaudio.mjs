@@ -291,7 +291,7 @@ const PROBE = async (page) => page.evaluate(async () => {
   // ---- 2/4. BED, low and high -----------------------------------------
   const low = place(spawn.x, spawn.y, spawn.z)
   out.states.bedLow = (await bed({ player: low })).m
-  const high = place(spawn.x, 215, spawn.z, { grounded: true })
+  const high = place(spawn.x, 470, spawn.z, { grounded: true })
   out.states.bedHigh = (await bed({ player: high })).m
   const falling = place(spawn.x, 60, spawn.z, { grounded: false, vy: -38 })
   out.states.falling = (await bed({ player: falling })).m
@@ -450,7 +450,7 @@ try {
     pass(`height is audible: bottom rms ${bl.rms} / centroid ${bl.centroid} Hz`
       + `  ->  top rms ${bh.rms} / centroid ${bh.centroid} Hz`)
   } else {
-    fail(`the bed at y=215 is too close to the bed at the floor`
+    fail(`the bed at the top of the shaft is too close to the bed at the floor`
       + ` (rms ${bl.rms}->${bh.rms}, centroid ${bl.centroid}->${bh.centroid})`)
   }
   if (vd.states.falling.rms > bl.rms * 1.05) {

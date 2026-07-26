@@ -135,7 +135,7 @@ const AUDIO_DEFAULTS = {
   // range of the low band's cutoff.
   wind: { bed: 0.15, sizzle: 0.035, airborne: 0.012, lowHz: 380, spanHz: 1900 },
   // Additive continuous layers. Absent = never built.
-  drone: null, shimmer: null, beam: null,
+  drone: null, shimmer: null, beam: null, height: null,
   // Additive one-shot layer, on landings.
   rune: null,
   // `ratios: null` = the circular-plate series in `_ring`, i.e. brass.
@@ -547,7 +547,8 @@ export class Audio {
     this.cfg = {
       room: block('room'), verb: block('verb'), wind: block('wind'),
       drone: block('drone'), shimmer: block('shimmer'), beam: block('beam'),
-      rune: block('rune'), bells: block('bells'), buses: block('buses'),
+      height: block('height'), rune: block('rune'),
+      bells: block('bells'), buses: block('buses'),
     }
   }
 

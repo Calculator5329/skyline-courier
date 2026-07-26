@@ -60,6 +60,7 @@ import { getTheme } from '../theme.js'
 //   jump 1.42 m up · double ~2.5 m · mantle <=1.45 m
 const REACH_COMMITTED = 19
 const REACH_GRAPPLE = 34
+const CROSSING = 31
 
 export function buildVoidCourse(collision) {
   const L = new Level(collision)
@@ -70,7 +71,7 @@ export function buildVoidCourse(collision) {
   L.spawnYaw = 0
   // Far deeper than the skyline's -52. The void has to read as bottomless
   // (§6), which means the player must fall long enough to believe it.
-  L.killY = -140
+  L.killY = -180
 
   const nodes = new Map()
   // Stable per-island seed. Placement order must not decide what an island
@@ -108,9 +109,13 @@ export function buildVoidCourse(collision) {
     // in this course gets one, and nothing that is not a landing ever does.
     runeSlab(L, x, y, z, {
       sizeX: w, sizeZ: d, detail: 2, seed: hash(id),
-      // Bigger landings get a proportionally quieter rune, or the hero islands
-      // read as light sources rather than as floors.
-      runeIntensity: 2.4 * Math.min(1, 7 / Math.max(4, w)) + 1.1,
+      // QUIET. At 2.3 the inlay clipped to white and stopped being violet at
+      // all — it read as a strip light set into the floor rather than as a
+      // glyph carved in glowing stone, and it was the brightest thing in every
+      // frame. §6 wants the rune to SAY "you may stand here", which needs it
+      // legible, not incandescent. Bigger landings get a proportionally
+      // quieter one so the hero islands do not become light sources.
+      runeIntensity: 0.85 * Math.min(1, 7 / Math.max(4, w)) + 0.55,
     })
     const n = { id, x, y, z, w, d }
     nodes.set(id, n)
@@ -246,10 +251,11 @@ export function buildVoidCourse(collision) {
   // with one characteristic distance has one characteristic feeling. The
   // radius grows as it climbs so the space opens OUT: the reference image is
   // vast, and a shaft of constant width reads as a corridor however tall.
-  const HEROES = 22
+  const HEROES = 40
   const heroIds = []
   let prev = 'plaza'
   let ang = 0.7
+  let lastR = 0
   for (let i = 0; i < HEROES; i++) {
     const t = i / (HEROES - 1)
     // The radius JITTER has to be counted against the crossing budget too: the
@@ -257,30 +263,58 @@ export function buildVoidCourse(collision) {
     // is another 24 m of chord the cap never saw. Kept modest for that reason —
     // the course gets its size from the growing radius and the count, not from
     // the wobble.
-    const r = 30 + t * 62 + 5 * Math.sin(i * 1.7)
+    const r = 32 + t * 106 + 7 * Math.sin(i * 1.7)
     // THE ANGULAR STEP IS CAPPED BY GRAPPLE RANGE, not chosen for looks. A
     // fixed step that reads well at r=18 throws the next island 43 m away at
     // r=56, which is past the cuff and therefore unbuildable. Chord = 2r
     // sin(step/2), so this is the largest step that keeps the next island
     // inside a 29 m reach with slack under the 34 m limit.
     if (i > 0) {
-      // 32 m of crossing: the midpoint anchor puts each leg at ~16 m, inside
-      // both the 31.9 m shot limit and the 19 m committed arrival. Chord =
-      // 2r sin(step/2). This is more than half again the old cap and it is the
-      // single number that decides how big the course feels.
-      const maxStep = 2 * Math.asin(Math.min(0.999, 30 / (2 * r)))
+      // 36 m of crossing. The midpoint anchor puts each leg at ~18 m, which is
+      // just inside the 19 m `committed` arrival and far inside the 31.9 m
+      // shot limit — so 38 m is the hard ceiling this geometry allows and 36
+      // leaves a metre of slack for the rim maths. Chord = 2r sin(step/2).
+      //
+      // Ethan: "we will have it be much longer, much bigger... we can cover
+      // more distance, both height-wise, but also distance-wise" and "release
+      // the constraints on yourself". This is the number that decides how big
+      // the course feels, and it is now at the physical limit of the cuff.
+      // THE LAW OF COSINES, not the chord formula. Consecutive islands do not
+      // share a radius — this spiral widens by up to 17 m in a step — and
+      // `2r sin(dtheta/2)` silently assumes they do. Two attempts at budgeting
+      // the radial change out of the arc still overran (39.4 m, then 38.8 m,
+      // against a 34 m cuff) because the error is not separable.
+      //
+      // CROSSING is centre-to-centre, and the 34 m cuff limit is what bounds
+      // it: the graph measures rim-to-rim (so it sees less than this) but the
+      // guard below measures centres (so it sees exactly this), and the guard
+      // is the stricter of the two. 33 leaves a metre of slack under it.
+      //
+      // Exactly: d^2 = r1^2 + r2^2 - 2 r1 r2 cos(dtheta). Solve it for the
+      // dtheta that lands d on the cap, and clamp when even dtheta = 0 is too
+      // far — which happens when the RADIAL step alone exceeds the cap, and is
+      // a real constraint on how fast the spiral may open out.
+      const r1 = lastR || r
+      const cosStep = (r1 * r1 + r * r - CROSSING * CROSSING) / (2 * r1 * r)
+      const maxStep = cosStep >= 1 ? 0 : cosStep <= -1 ? Math.PI : Math.acos(cosStep)
       // Alternate the direction of travel around the shaft every few islands,
       // so the route doubles back over itself and the player keeps seeing the
       // space they just crossed from a new side.
       ang += Math.min(2.1, maxStep) * (i % 5 === 0 ? -1 : 1)
     }
-    const y = 5 + i * 10.5 + 6 * Math.sin(i * 2.3)
+    // The VERTICAL variance is charged against the grapple shot as well. The
+    // anchor hangs `LIFT` above the higher of the two islands, so the shot is
+    // hypot(crossing/2, rise + LIFT) — and a +/-7 m wobble on a 12.5 m rise
+    // makes some steps a 26 m climb, which put the shot at 32.6 m against a
+    // 31.9 m limit. Halved for that reason, not for looks.
+    const y = 5 + i * 12.5 + 3.5 * Math.sin(i * 2.3)
     const id = `hero-${i}`
     // Landing size falls as the course goes on: the difficulty curve lives in
     // the TARGET, not in the distance, so late jumps ask for precision while
     // still feeling like flight.
     pad(id, Math.cos(ang) * r, y, Math.sin(ang) * r, 14 - t * 6)
     heroIds.push(id)
+    lastR = r
 
     const g = dist(nodes.get(prev), nodes.get(id))
     if (g > REACH_GRAPPLE) {
@@ -307,8 +341,23 @@ export function buildVoidCourse(collision) {
       // The sigil ring rides the wall face. §4.1 calls it the most memorable
       // element after the crystals, and it doubles as a landmark for reading
       // which way is on.
-      if (i % 4 === 0) {
-        sigilRing(L, wx, y + 6, wz, { radius: 7.5, axis, color: colors.sigil, detail: 2 })
+      // SEVERAL STOREYS ACROSS, and on most walls. art-direction-void.md §4.1
+      // calls the sigil ring "the most memorable element after the crystals"
+      // and notes the largest in the reference spans several storeys — ours
+      // were 7.5 m on a 46 m wall, which reads as a decal rather than as
+      // architecture. Ethan, on the current build: "continually iterating to
+      // look more like the reference screenshot."
+      //
+      // A big one low on the face where the player passes it, and on every
+      // third wall a second, smaller one high up, so the wall has a hierarchy
+      // rather than one centred badge.
+      sigilRing(L, wx, y + 9, wz, {
+        radius: 13 + (i % 3) * 2.5, axis, color: colors.sigil, detail: 2,
+      })
+      if (i % 3 === 1) {
+        sigilRing(L, wx, y + 27, wz, {
+          radius: 6.5, axis, color: colors.rune, detail: 1,
+        })
       }
     }
   }
@@ -320,7 +369,7 @@ export function buildVoidCourse(collision) {
   // is a trap and `verify()` says so. These are where a player who is good
   // with the cuff gets rewarded for looking around, which is the whole point
   // of giving them 34 m of grapple.
-  const BRANCH_AT = [2, 6, 10, 14, 18]
+  const BRANCH_AT = [3, 8, 13, 18, 23, 28, 33, 37]
   BRANCH_AT.forEach((h, k) => {
     const base = nodes.get(heroIds[h])
     const nxt = nodes.get(heroIds[Math.min(h + 1, HEROES - 1)])
@@ -351,9 +400,9 @@ export function buildVoidCourse(collision) {
 
   // Checkpoints along the flight. Sparse on purpose: a checkpoint every third
   // island keeps the stakes real without making a missed flight expensive.
-  for (let i = 3; i < HEROES; i += 4) {
+  for (let i = 4; i < HEROES; i += 5) {
     const n = nodes.get(heroIds[i])
-    L.checkpoint(n.x, n.y + 1.0, n.z, `ascent ${((i - 3) / 4 | 0) + 1}`)
+    L.checkpoint(n.x, n.y + 1.0, n.z, `ascent ${((i - 4) / 5 | 0) + 1}`)
   }
 
   // ============================================================== the spire
@@ -383,7 +432,20 @@ export function buildVoidCourse(collision) {
   //
   // They are also the LIGHT in this theme (§1), so placement is a lighting
   // decision, not a dressing one — every landing gets one within a few metres.
-  const CRYSTAL = [colors.rune, colors.sigil, colors.cool]
+  // RED IS PUNCTUATION. art-direction-void.md §3: red "is the rarest and most
+  // intense colour and it must stay rare. If red is everywhere, the image
+  // loses its focal points."
+  //
+  // This was `[rune, sigil, cool]` cycled per island, which made a THIRD of
+  // every hero cluster sigil-red — including the biggest crystal on the
+  // course, at the spawn vantage. The crystal lane flagged it while fixing
+  // their saturation. Violet is the body colour of this world, blue is the
+  // depth cue, and red appears about one island in nine.
+  const CRYSTAL = [
+    colors.rune, colors.rune, colors.cool,
+    colors.rune, colors.cool, colors.rune,
+    colors.cool, colors.rune, colors.sigil,
+  ]
   let ci = 0
   for (const n of nodes.values()) {
     const a0 = hash(n.id) / 0xffffffff * Math.PI * 2
@@ -441,7 +503,7 @@ export function buildVoidCourse(collision) {
   void glow
 
   const spineIds = ['plaza']
-  for (let i = 3; i < HEROES; i += 4) spineIds.push(heroIds[i])
+  for (let i = 4; i < HEROES; i += 5) spineIds.push(heroIds[i])
   spineIds.push('spire')
 
   // requireSafeLine: false — Ethan, 2026-07-25: "the rule should just be it's

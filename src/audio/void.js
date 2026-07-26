@@ -57,11 +57,6 @@
  * a transformer.
  */
 
-/** Where the shaft starts and stops, in metres. `levels/void.js` runs its
- *  spiral from y≈5 to y≈225 and hangs spurs below the line; the kill plane is
- *  at -140. These are the ends of the *audible* ramp, not of the level. */
-const Y_FLOOR = -25
-const Y_CEIL = 230
 
 /**
  * THE THEME BLOCK. This is the object `src/theme.js` should hang on the void
@@ -169,6 +164,21 @@ export const VOID_AUDIO = {
     fallAt: 26, fallGain: 0.55,
   },
 
+  /**
+   * THE SHAFT, as the two ends of the audible height ramp.
+   *
+   * A THEME NUMBER, not a module constant, and it has already been wrong once:
+   * these were hardcoded at -25 and 230 for a 22-island course, and
+   * `levels/void.js` then grew to 40 heroes at 12.5 m apiece — 508 m of climb.
+   * A ramp calibrated to the old course would have pinned the shimmer at full
+   * and the drone at its thinnest for the entire upper half of the level, which
+   * is to say the altimeter would have stopped working exactly where reading
+   * height gets hard. Quoted from the course rather than guessed: the top hero
+   * island is at y = 5 + 39 * 12.5 ≈ 492 with the spire above it, and the kill
+   * plane is at -180.
+   */
+  height: { floor: -30, ceil: 500 },
+
   /** THE SHIMMER — layer 2. Gated by `pow(height, 1.8)` so it is genuinely
    *  absent in the lower half rather than merely quiet there. */
   shimmer: { hz: 6100, q: 1.6, gain: 0.019, rateHz: 0.19, depth: 0.55 },
@@ -183,7 +193,7 @@ export const VOID_AUDIO = {
    * beside it.
    */
   beam: {
-    hz: 118, detune: 1.6, gain: 0.075, near: 12, range: 95,
+    hz: 118, detune: 1.6, gain: 0.075, near: 12, range: 110,
     coronaHz: 3200, coronaQ: 2.2, corona: 0.30, coronaRateHz: 3.7,
   },
 
@@ -431,7 +441,7 @@ export class VoidAmbience {
     if (!this._droneMix) { this._updateHigh(t, player); return }
     const d = this.cfg.drone
     // Height, 0 at the floor of the shaft to 1 at the top of the climb.
-    const h = clamp01((y - Y_FLOOR) / (Y_CEIL - Y_FLOOR))
+    const h = this._height(y)
 
     // Falling: only counted when actually airborne, so riding a lift or being
     // pushed down a slope does not swell the bed.
@@ -449,11 +459,17 @@ export class VoidAmbience {
     this._updateHigh(t, player)
   }
 
+  /** 0 at the floor of the shaft, 1 at the top of the climb. */
+  _height(y) {
+    const H = this.cfg.height
+    return clamp01((y - H.floor) / (H.ceil - H.floor))
+  }
+
   /** The two layers that do not depend on the drone existing. */
   _updateHigh(t, player) {
     if (this._shimmerGain) {
       const s = this.cfg.shimmer
-      const h = clamp01((player.position.y - Y_FLOOR) / (Y_CEIL - Y_FLOOR))
+      const h = this._height(player.position.y)
       // pow 1.8: genuinely absent below the middle of the course, rather than
       // present-but-quiet, so its arrival is information.
       const sg = Math.pow(h, 1.8) * s.gain

@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-07-25 — the stone is lit from inside
+
+Ethan, with the build beside the reference image: the rock is the right
+near-black violet and the lighting is fixed, but the reference has **glowing
+veins and cracks running through the rock** — thin magenta and violet fissures
+threading the dark masses, brightest deep in the crack and fading at the lips —
+and the build had none. They are everywhere in the reference, through the great
+walls and the floating masses alike, and they are a large part of why that
+image reads as magical rather than merely dark.
+
+- **`paintGlowVeins` (`src/materials/textures.js`) — where the fissures are.**
+  Its own fault lattice at ~0.8 m, seeded independently of the rock's two
+  `fracture()` octaves, so the veins CUT ACROSS the facet structure instead of
+  outlining it. One distance field is written into four channels at three
+  widths: a 1.4 cm incandescent core, a halo three times wider at a tenth the
+  brightness (purely so the signal survives the mip chain), and a lip four
+  times wider again that carries no light at all — it is a real cut in the
+  height field, so the normal map gives it relief and `SC_CAVITY` darkens and
+  violet-tints it. Dark rock hard against a bright core is the whole effect.
+  Albedo goes DOWN beside a vein and never up: light from inside means the
+  visible rock darkens and only the emissive channel carries the brightness.
+
+  **The structural finding, after three wrong versions.** Which cracks are lit
+  cannot be decided by a noise field, because that is a decision per texel. A
+  coarse field lights whole cell rings and the wall reads as crazing; a fine one
+  perforates every line into dashes and then into specks, and the wall reads as
+  glitter. Selection has to happen on the TOPOLOGY: `faultEdges` names both
+  cells at a boundary and `edgeKept` hashes the unordered pair, so a kept edge
+  is lit end to end and its neighbours chain onto it. `keep` is pinned at 0.46,
+  just under the lattice's bond-percolation threshold — high enough that edges
+  chain into long wandering paths, low enough that the paths do not close into
+  rings. A long path that does not close is a crack; a closed ring is a cell.
+
+- **`SC_VEIN` (`src/materials/shader.js`) — how it lights.** The mask rides in
+  the ORM canvas's RED channel, spare since that file was written, so it costs
+  no texture memory, no sampler and **no extra fetch** — the roughness chunk
+  was already sampling that map and now takes two channels off one read. It is
+  ADDED to `totalEmissiveRadiance`, which is the one term that skips the light
+  loop: a fissure with a fire in it does not dim on a rock's shaded side, and
+  is not occluded by the cavity signal darkening its own lips. It lands before
+  `render/patch.js`'s aerial perspective, so a vein twenty metres back washes
+  toward the fog with everything else and joins §5's three depth bands.
+
+  Coverage and hue are read off the macro field at ~12 m, not out of the tile.
+  A 2.4 m tiling texture answers a question about a PLACE by repeating the
+  answer several times per wall, which reads as a pattern — so "which rock is
+  cracked" and "which cracks burn red" are world-scale. That is also what keeps
+  §3's "red must stay rare" true: red is a handful of stretches of fault in a
+  level rather than a fixed share of every square metre.
+
+- **`theme.surfaces.veins` (`src/theme.js`) — whether, and how hard.** Off
+  unless a theme names it: with `vein` absent no define is set, no uniform is
+  allocated and no GLSL is emitted, so the skyline's programs are unchanged.
+  How brightly rock burns from inside is a statement about a world, like the
+  fog colour two blocks up, not a property of a rock.
+
+  Measured: **the void gains the channel at zero cost** — 73/71/71/59 draws and
+  961 705/961 305/961 345/958 905 triangles on `ascent`/`midclimb`/`plunge`/
+  `summit`, identical to before, with `ms/f` inside run-to-run noise. §2's
+  numbers move slightly the right way and none regress (`ascent` lum
+  34.5 → 35.7, p99 207.6 → 208.2, `summit` p99 66.8 → 68.4). **The skyline does
+  not move**: `closeup` holds at lum 111.1, sat 0.807, p1/p50/p99
+  21.6/116.8/187.9 exactly, and the ±1 drift on other shots reproduces on an
+  unmodified build.
+
+  Deliberately NOT done: the fissures do not pulse (needs a time uniform from
+  the frame loop, which is not this lane) and they do not light anything but
+  themselves (a real bounce is a lighting-budget decision under §7.3). Both are
+  on the roadmap.
 ## 2026-07-25 — the void gets its own ears
 
 Ethan, playing the void: **"Audio feels wrong in the void."** He is right, and
@@ -47,13 +116,20 @@ receipt at the bottom of this entry.
   archipelago's wind is not deleted, only cut to a tenth and moved an octave
   down: falling 100 m past a rock face still moves air, and that rush is the
   only continuous cue that scales with speed.
-- **Height is audible, because the course climbs 250 m through the shaft.** The
+- **Height is audible, because the course climbs 500 m through the shaft.** The
   drone is loudest and darkest at the floor and thins as you climb; a narrow
   6 kHz shimmer, gated by `pow(height, 1.8)` so it is genuinely absent in the
   lower half, opens as you rise. The two cross over mid-course, so the spectral
-  TILT of the bed is the altimeter. Floor to ceiling: **rms 0.025 -> 0.016,
-  centroid 490 Hz -> 4645**. A fast fall swells the bed 55%, because a
+  TILT of the bed is the altimeter. Floor to ceiling: **rms 0.026 -> 0.016,
+  centroid 490 Hz -> 4708**. A fast fall swells the bed 60%, because a
   bottomless drop is the one thing this level can kill you with.
+
+  The two ends of that ramp are a THEME number and not a module constant,
+  which they had to become the moment the course grew from 22 islands to 40 in
+  the same session: a ramp calibrated to 250 m of climb pins the shimmer at
+  full and the drone at its thinnest for the whole upper half of a 500 m one,
+  which is to say the altimeter stops working exactly where reading height gets
+  hard. They are quoted off `levels/void.js` rather than guessed.
 - **The energy beams hum.** `fx/voidfx.js` calls them level design —
   "unmissable vertical landmarks in a course whose whole problem is that the
   player must read height" — but only while they are in frame. Two sawtooths

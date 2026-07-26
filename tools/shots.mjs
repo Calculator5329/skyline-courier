@@ -201,15 +201,16 @@ export const SHOTS = {
  * this level sits above the frame.
  */
 export const VOID_SHOTS = {
-  // Coordinates read off `src/levels/void.js` at build time, not invented:
-  //   plaza    0.0    0.0    0.0   (26 m, the floor)
-  //   hero-3  -26.5  31.0   11.2
-  //   hero-7  -33.5  59.7  -27.4
-  //   hero-11 -11.9  93.6  -57.7
-  //   spire    -7.4 104.6  -35.8   (the finish)
+  // Read off `src/levels/void.js` at build time, not invented. The course is a
+  // widening spiral: 51 islands, 508 m of climb, 142 m of radius.
+  //   plaza     0.0    0.0    0.0
+  //   hero-8   30.4  103.5  -51.5
+  //   hero-20  -4.2  258.2   90.0
+  //   hero-39  61.7  496.0 -120.9
+  //   spire    38.3  507.0  -75.0
 
-  // On the floor of the shaft looking straight up the climb. The establishing
-  // shot, and the one that has to sell the scale.
+  // The floor of the shaft, looking up the whole 508 m. The establishing shot,
+  // and the one that has to sell the scale.
   ascent: {
     pos: [0, DECK, 0],
     yaw: yawTo(-1, 0.4),
@@ -217,32 +218,35 @@ export const VOID_SHOTS = {
     note: 'VOID: from the floor of the shaft, looking up the whole climb',
   },
 
-  // Standing on hero-3, looking on toward the next crossing. The readability
-  // test: in a dark level, can a player tell where to go next?
+  // Low on the spiral, reading the next crossing. The readability test: in a
+  // near-black level, can a player tell where to go next?
   midclimb: {
-    pos: [-26.5, 31.0 + DECK, 11.2],
-    yaw: yawTo(-0.3, -1),
+    // Backed off the island centre and turned outward. Standing dead centre
+    // put the camera inside the hero crystal cluster, which sits just off the
+    // rim — the frame was 40% pink shard and told you nothing about the route.
+    pos: [26.0, 103.5 + DECK, -47.0],
+    yaw: yawTo(-0.8, 0.6),
     pitch: 0.16,
-    vel: [9, 0, -3],
-    note: 'VOID: on hero-3, reading the next crossing',
+    vel: [9, 0, 6],
+    note: 'VOID: on hero-8, reading the next crossing',
   },
 
-  // Airborne off hero-7 with the void below. The depth read, and the frame
+  // Airborne high up with the whole shaft below. The depth read, and the frame
   // where a bottomless drop either works or does not.
   plunge: {
-    pos: [-30, 55, -22],
-    yaw: yawTo(0.6, 0.8),
-    pitch: -0.70,
-    vel: [10, -4, 12],
-    note: 'VOID: airborne over the shaft, looking back down',
+    pos: [-4.2, 262, 86],
+    yaw: yawTo(0.3, -1),
+    pitch: -0.72,
+    vel: [8, -5, -12],
+    note: 'VOID: airborne at mid-height, looking back down the shaft',
   },
 
-  // From the spire, back down over everything just climbed. The payoff.
+  // From the spire, back down over everything. The payoff.
   summit: {
-    pos: [-7.4, 104.6 + DECK, -35.8],
-    yaw: yawTo(-0.2, -1),
-    pitch: -0.34,
-    note: 'VOID: the spire, looking back down the whole course',
+    pos: [38.3, 507.0 + DECK, -75.0],
+    yaw: yawTo(-0.5, 0.86),
+    pitch: -0.30,
+    note: 'VOID: the spire at 507 m, looking back down the course',
   },
 }
 

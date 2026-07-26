@@ -58,21 +58,27 @@ import { SKY_GRADIENT_GLSL } from '../render/skygrad.js'
  * Read off `src/levels/void.js` — which this lane does not own and must not
  * edit — by evaluating its own spiral rather than by eyeballing a shot:
  *
- *   hero islands   r 30.0 .. 91.7,  y 5 .. 220, half-width up to 7 m
- *   great walls    r + 15, 26 m deep  ->  outer face at r + 28
- *   spire          (-14.2, 231.0, 52.3)
+ *   hero islands   r 32 .. 142, y 5 .. 496, half-width up to 14 m
+ *   great walls    r + 16, 26 m deep  ->  outer face at r + 29
+ *   spire          (38.3, 507.0, -75.0)
  *   plaza          26 m square at the origin
- *   kill plane     y = -140
+ *   kill plane     y = -180
  *
- * So a cylinder of radius 120 m spanning y -140 .. 245 contains every solid
- * surface in the level with room to spare. `tools/shots.mjs` already quotes
+ * So a cylinder of radius 185 m spanning y -180 .. 545 contains every solid
+ * surface in the level with room to spare.
+ *
+ * UPDATED 2026-07-26: the course grew from 29 islands to 51 — radius 92 -> 142,
+ * finish 232 m -> 508 m. These numbers were still describing the old course,
+ * which is exactly the quiet failure the comment below warns about: the
+ * clearance assertion was measuring against a play volume that no longer
+ * existed, so it could have passed while scenery sat inside the level. `tools/shots.mjs` already quotes
  * void.js coordinates by the same convention ("read off at build time, not
  * invented"); this is that convention applied to the extents.
  *
  * If void.js grows again, this is the one block to update — and `assertClear()`
  * will fail loudly rather than quietly shipping reachable scenery.
  */
-export const VOID_PLAY_VOLUME = { radius: 120, minY: -140, maxY: 245 }
+export const VOID_PLAY_VOLUME = { radius: 185, minY: -180, maxY: 545 }
 
 /**
  * The same 70 m `Archipelago.verify()` demands of the sunset level's ghost
@@ -340,16 +346,29 @@ function bandInstances(band, rand) {
  *
  * The distances are chosen against `CLEARANCE` first and composition second —
  * band A's inner radius minus its largest instance still has to clear the
- * 120 m play cylinder by 140 m, and `assertClear()` proves it rather than
- * trusting this comment.
+ * play cylinder by 140 m, and `assertClear()` proves it rather than trusting
+ * this comment.
+ *
+ * MOVED OUT 2026-07-26, and this is exactly the event the fail-closed check
+ * exists for. The course grew from 29 islands to 51 (radius 92 -> 142, finish
+ * 232 m -> 508 m); the moment `VOID_PLAY_VOLUME` was corrected to match,
+ * `assertClear()` threw at 109.2 m against its 140 m minimum and the level
+ * refused to boot. The near band and the fragments were, by then, genuinely
+ * inside the level. Every band is further out, and the counts are up roughly
+ * 2x with it — Ethan: "we have less depth and detail in the backdrop as well
+ * and less overall objects".
+ *
+ * The far band's outer edge stays bounded by the CAMERA FAR PLANE (1200 m):
+ * 1000 m of ring + 58 m of spread + 142 m of course radius = 1200 exactly, so
+ * its `spreadRad` came down as its radius went up.
  */
 const BANDS = [
   {
     name: 'near',
     // 10-gon: the only band close enough for a facet to be more than a pixel.
     sides: 10, seed: 0x7a1105, apex: 0.45,
-    radius: [360, 470], y: [-300, 300],
-    clusters: 9, per: [5, 9],
+    radius: [470, 600], y: [-430, 640],
+    clusters: 17, per: [7, 13],
     spreadAng: 0.30, spreadRad: 80, spreadY: 120,
     width: [30, 78], spireOdds: 0.16, tilt: 0.05, drift: 0,
     // THE DARK RUNG. Ratio to the dome behind it, on a side face: 0.74. This
@@ -361,8 +380,8 @@ const BANDS = [
   {
     name: 'mid',
     sides: 8, seed: 0x2c9f31, apex: 0.40,
-    radius: [600, 760], y: [-520, 430],
-    clusters: 11, per: [6, 11],
+    radius: [690, 850], y: [-640, 760],
+    clusters: 19, per: [8, 15],
     spreadAng: 0.36, spreadRad: 120, spreadY: 170,
     width: [34, 92], spireOdds: 0.28, tilt: 0.04, drift: 0,
     // THE NEUTRAL RUNG, 1.05. Almost exactly the dome's own value, so this
@@ -381,9 +400,9 @@ const BANDS = [
     // clips against the frustum's back would appear and disappear as the
     // player crossed the shaft. 780..1000 m of ring plus 92 m of course radius
     // is 1092 m, with 108 m of slack.
-    radius: [820, 960], y: [-820, 580],
-    clusters: 13, per: [7, 13],
-    spreadAng: 0.42, spreadRad: 80, spreadY: 240,
+    radius: [880, 1000], y: [-900, 880],
+    clusters: 24, per: [9, 17],
+    spreadAng: 0.42, spreadRad: 58, spreadY: 300,
     // NOTE the y floor above: -820 m. The bands run far BELOW the course as
     // well as above it, and that is the `plunge` shot's whole read — airborne
     // over the shaft looking down, the depth has to keep going. A backdrop
@@ -403,8 +422,8 @@ const BANDS = [
  * they cost instances and not a draw call.
  */
 const FRAGMENTS = {
-  radius: [330, 430], y: [-260, 340],
-  clusters: 14, per: [4, 8],
+  radius: [440, 560], y: [-380, 560],
+  clusters: 26, per: [5, 10],
   spreadAng: 0.30, spreadRad: 70, spreadY: 170,
   width: [2.5, 7.5], spireOdds: 0.18, tilt: 0.9, drift: 7, apex: 0.45,
 }
