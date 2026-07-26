@@ -135,6 +135,39 @@ export const SHOTS = {
     pitch: -0.30,
     note: 'sandstone deck meeting the brass wall, close enough to judge detail',
   },
+
+  // ---- The invisible-surface shots. -------------------------------------
+  //
+  // Ethan's report, 2026-07-25: "if you go below any of the floating platforms
+  // it looks like they're HOLLOW ... I can SEE UP THROUGH the platforms", and
+  // "between the main path and the guardrail on the side it's completely
+  // transparent". Both are acceptance shots, not beauty shots: they exist to
+  // be READ, and they fail while any sky is visible where mass should be.
+
+  // Under the terrace — `deck(14, 0, 0, 30, 10.4, BUILT, {bodyDepth: 3.2})`,
+  // so the drum body runs from about y=-0.5 down to y=-3.7 with boulder tiers
+  // below that. From 14 m under it, looking straight up, the whole underside
+  // fills the frame: a solid island shows stone, a hollow one shows sky.
+  underside: {
+    // 34 m down, not 14: the terrace hangs a boulder tail roughly 13 m under
+    // its deck, so the first attempt at this shot had the camera INSIDE the
+    // tier stack and photographed the inside of a rock.
+    pos: [14, -34, 0],
+    yaw: EAST,
+    pitch: 1.35,             // very nearly straight up
+    note: 'ACCEPTANCE: under the terrace looking up — must show no sky',
+  },
+
+  // The deck strip. The terrace deck is 10.4 m across (z -5.2..+5.2) and the
+  // balustrade sits at z=-4.7, so there is a ~0.3 m strip of deck OUTSIDE the
+  // guardrail. That strip is what reads as transparent. Shot from on the deck
+  // just inside the rail, looking down and out across it.
+  deckstrip: {
+    pos: [8, DECK, -3.6],
+    yaw: yawTo(0.35, -0.94),
+    pitch: -0.62,            // down at the rail's foot and the strip beyond it
+    note: 'ACCEPTANCE: the deck strip outside the balustrade — must show no sky',
+  },
 }
 
 export const SHOT_NAMES = Object.keys(SHOTS)

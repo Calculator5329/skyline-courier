@@ -705,6 +705,79 @@ function mossCapGeometry(rects, squash, thickness, overhang, bevel, rand) {
   return geo
 }
 
+/**
+ * Loft a (radial scale, height) profile around a closed outline.
+ *
+ * WHY THIS EXISTS. `lathe` revolves a profile about the axis, so it always
+ * produces a circle — or, scaled, an ellipse. Every other course of a
+ * `drumPlatform` follows `discOutline`, which is a chamfered RECTANGLE UNION.
+ * An ellipse inscribed in a rectangle touches it only at four points, so the
+ * cap above was overhanging thin air everywhere else: measured on the terrace,
+ * 0.52 m unsupported at mid-span and 3.94 m near the ends. Ethan, playing:
+ * "if you go below any of the floating platforms it looks like they're HOLLOW
+ * ... I can SEE UP THROUGH the platforms".
+ *
+ * That was NOT a winding or a cap-flag bug — `tools/backface.mjs` shows
+ * DoubleSide does not repaint those pixels, which is the signature of geometry
+ * that is absent rather than facing away. Lofting the same profile around the
+ * island's own outline makes the drawn body agree with the collider it is
+ * hidden behind, which is the actual invariant.
+ *
+ * `outline` is the closed [x, z] loop, ordered +X toward +Z (as `discOutline`
+ * emits it). `profile` is `[[k, y], ...]` BOTTOM TO TOP, where `k` scales the
+ * outline radially — the loop is star-shaped about the origin, so a scale of
+ * k <= 1 can never leave the collider.
+ */
+function loftOutline(outline, profile, opts = {}) {
+  const M = outline.length
+  const R = profile.length
+  const pos = [], uv = [], idx = []
+
+  let arc = 0
+  for (let i = 0; i < M; i++) {
+    const p = outline[i]
+    const prev = outline[(i - 1 + M) % M]
+    if (i > 0) arc += Math.hypot(p[0] - prev[0], p[1] - prev[1])
+    for (const [k, y] of profile) {
+      pos.push(p[0] * k, y, p[1] * k)
+      uv.push(arc, y)
+    }
+  }
+  for (let i = 0; i < M; i++) {
+    const a = i * R, b = ((i + 1) % M) * R
+    for (let k = 0; k < R - 1; k++) {
+      // Outward, worked rather than guessed. `discOutline` runs +X toward +Z,
+      // which is clockwise seen from above, so the wall quad has to go up the
+      // profile FIRST and round the loop second: (a, a+1, b+1, b). Wound the
+      // other way every island turns inside out, which is exactly the failure
+      // this function exists to fix.
+      idx.push(a + k, a + k + 1, b + k + 1, a + k, b + k + 1, b + k)
+    }
+  }
+  // Close the bottom. The tiers hung under an island are inset and narrower
+  // than it, so without this the ring is an open tube and the sky is visible
+  // straight up through the middle of it from underneath.
+  if (opts.capBottom ?? true) {
+    const y0 = profile[0][1], k0 = profile[0][0]
+    const centre = pos.length / 3
+    pos.push(0, y0, 0)
+    uv.push(0, 0)
+    for (let i = 0; i < M; i++) {
+      const p = outline[i], q = outline[(i + 1) % M]
+      const ai = pos.length / 3
+      pos.push(p[0] * k0, y0, p[1] * k0, q[0] * k0, y0, q[1] * k0)
+      uv.push(p[0], p[1], q[0], q[1])
+      idx.push(centre, ai, ai + 1)          // fans forward => -Y, a floor seen from below
+    }
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+  geo.setIndex(idx)
+  geo.computeVertexNormals()
+  return geo
+}
+
 // ----------------------------------------------------------- shape helpers
 
 /**
@@ -1016,20 +1089,31 @@ export function drumPlatform(L, x, y, z, opts = {}) {
   n += disc(S, x, bodyTop - bodyDepth / 2, z, radius * 0.9, bodyDepth, kind, facets, squash,
     { hidden: curves }, shape)
   if (curves) {
-    const rb = radius * 0.9
-    // Inscribed in the collider by construction: `lathe` puts vertices ON the
-    // circle of radius r, and the disc union's half-width across flats is rb,
-    // so a profile that never exceeds rb never leaves the box.
-    L.mesh(kind, latheGeometry([
-      [rb * 0.88, -bodyDepth],
-      [rb * 0.97, -bodyDepth * 0.72],
-      [rb * 0.985, -bodyDepth * 0.34],
-      [rb * 0.93, -bodyDepth * 0.30],   // string course, a real shadow line
-      [rb * 0.99, -bodyDepth * 0.24],
-      [rb, -0.06],
-      [rb * 0.97, 0],
-    ], detail >= 2 ? 16 : 9, { capTop: false, capBottom: false }),
-    place(x, bodyTop, z, _q.identity(), _sc.set(1, 1, squash)))
+    // LOFTED ALONG THE ISLAND'S OWN OUTLINE, not revolved.
+    //
+    // This was a `lathe`, which is a circle, sitting under a cap that follows
+    // the faceted rectangle union. The two only touch at four points, so the
+    // deck overhung nothing everywhere else — 0.52 m at the terrace's mid-span
+    // and 3.94 m near its ends — and you could see the sky straight up through
+    // an island from below. See `loftOutline` for the measurement.
+    //
+    // Inscribed in the collider by construction, same argument as before but
+    // now on the right shape: the body's collider IS this rectangle union at
+    // `radius * 0.9`, `discOutline` never leaves it, and every profile scale
+    // below is <= 1.
+    const rects = discRects(radius * 0.9, facets, squash, shape)
+    const outline = discOutline(rects, squash, 0.995,
+      Math.max(bevel * 2.6, rects[0].hx * 0.07))
+    L.mesh(kind, loftOutline(outline, [
+      [0.88, -bodyDepth],
+      [0.97, -bodyDepth * 0.72],
+      [0.985, -bodyDepth * 0.34],
+      [0.93, -bodyDepth * 0.30],   // string course, a real shadow line
+      [0.99, -bodyDepth * 0.24],
+      [1.00, -0.06],
+      [0.97, 0],
+    ]),
+    place(x, bodyTop, z, _q.identity()))
     n += 1
   }
 
