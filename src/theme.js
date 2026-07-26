@@ -87,6 +87,24 @@ const skyline = {
     wild: { capKind: 'moss', rimKind: 'terracotta', kind: 'stone', boulderKind: 'stone' },
   },
 
+
+  /**
+   * The lit signals: the finish beacon, the checkpoint gates, and the lantern
+   * glow that marks a grapple anchor.
+   *
+   * These were hardcoded in `level.js` and they are the loudest thing in any
+   * frame, so under the void they read as warm brass in a violet cavern —
+   * the single most out-of-palette element left in the theme. Grouped here
+   * because they are one artistic decision: "what colour does this world use
+   * to say YOU MAY USE THIS."
+   */
+  accents: {
+    beacon: 0xffd08a,
+    gateHot: 0xffc266,
+    gateCool: 0x9fd8c8,
+    lantern: null,          // null = PALETTE.brass, the shipped value
+  },
+
   // Foliage belongs to a living world. A void has none, and this is the flag
   // that says so rather than every prefab guessing.
   foliage: true,
@@ -453,6 +471,22 @@ const voidTheme = {
 
     built: { capKind: 'porcelain', rimKind: 'porcelain', kind: 'stone', boulderKind: 'stone' },
     wild: { capKind: 'porcelain', rimKind: 'porcelain', kind: 'stone', boulderKind: 'stone' },
+  },
+
+
+  /**
+   * Violet says "route", magenta says "objective". `voidkit.js` already reads
+   * `rune`/`sigil`/`cool` from here for its inlays, so the crystals, the runes
+   * and the signals all come out of one palette rather than three.
+   */
+  accents: {
+    beacon: 0xc08bff,
+    gateHot: 0xff4d7e,
+    gateCool: 0x6fd0ff,
+    lantern: 0xa77dff,
+    rune: 0x8b5cf6,
+    sigil: 0xff2d55,
+    cool: 0x3b82f6,
   },
 
   foliage: false,

@@ -470,6 +470,20 @@ export class Archipelago {
   }
 }
 
+/**
+ * One themed signal colour, with the shipped value as the fallback.
+ *
+ * Read at build time rather than baked, and tolerant of running under node
+ * (`tools/winding.mjs` and friends import this module with no boot).
+ */
+function themeAccent(key, fallback) {
+  try {
+    const t = getTheme()
+    const v = t && t.accents && t.accents[key]
+    return v == null ? fallback : v
+  } catch { return fallback }
+}
+
 export class Level {
   constructor(collision) {
     this.collision = collision
@@ -855,7 +869,10 @@ export class Level {
     // and never on the running line.
     if (this.lanterns.length) {
       const geo = new THREE.IcosahedronGeometry(0.34, 1)
-      const mat = glowMaterial(PALETTE.brass, 2.2)
+      // The lantern IS the grapple-anchor marker, so its colour is load-bearing
+      // signal rather than decoration — it has to belong to whichever world we
+      // are in. See `theme.accents`.
+      const mat = glowMaterial(themeAccent('lantern', PALETTE.brass), 2.2)
       const inst = new THREE.InstancedMesh(geo, mat, this.lanterns.length)
       const m = new THREE.Matrix4()
       this.lanterns.forEach((l, i) => {
@@ -928,8 +945,8 @@ export class Level {
     const uniforms = {
       uTime: { value: 0 },
       uState: { value: state },
-      uHot: { value: new THREE.Color(0xffc266) },
-      uCool: { value: new THREE.Color(0x9fd8c8) },
+      uHot: { value: new THREE.Color(themeAccent('gateHot', 0xffc266)) },
+      uCool: { value: new THREE.Color(themeAccent('gateCool', 0x9fd8c8)) },
     }
     const mat = new THREE.ShaderMaterial({
       transparent: true,
@@ -1056,7 +1073,7 @@ export class Level {
       // in half is a landmark you learn to distrust.
       depthTest: false,
       uniforms: {
-        uColor: { value: new THREE.Color(0xffd08a) },
+        uColor: { value: new THREE.Color(themeAccent('beacon', 0xffd08a)) },
         uRadius: { value: radius },
         uHeight: { value: height },
         uTime: { value: 0 },
