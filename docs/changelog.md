@@ -1,5 +1,107 @@
 # Changelog
 
+## 2026-07-26 — the far band is baked, so it can afford to be crowded
+
+Ethan's standing note on the void is that the build has "less depth and detail
+in the backdrop and less overall objects" than
+`docs/reference/theme2-void.png`. The reference's far distance is layer on
+layer of ruins; ours was 306 prisms scattered round a ring. The far band of
+`src/fx/voidbackdrop.js` is now **baked impostors**: ruin clusters rendered
+once at boot into a texture atlas and drawn as camera-facing cards at their
+real world positions.
+
+**What it actually cost, measured, because the premise needed checking.** The
+brief expected the three bands to be ~1.2 M triangles. They were 30 088, of a
+void frame that renders ~2.94 M (the course is drawn three times a frame:
+shadow maps, depth/normal prepass, beauty). The far band alone was **7 344
+triangles — 0.25 % of the frame — and 1 draw call**. Toggling it off inside a
+running page moved the frame by **0.00 to 0.08 ms**. So there was no triangle
+problem to solve, and converting it to cards "to save triangles" would have
+been a rounding error dressed up as a win.
+
+The win is the exchange rate. A card is 2 triangles and carries a whole ruin
+CLUSTER — 6 to 11 masses, slabs and spires overlapping in depth:
+
+| | far band before | far band after | same density as geometry |
+| --- | --- | --- | --- |
+| draw calls | 1 | 1 | 1 |
+| triangles | 7 344 | **1 976** | 152 472 |
+| apparent ruins | 306 | **~8 400** | 6 353 |
+| ms/f (isolated, on minus off) | 0.00-0.08 | **0.11-0.26** | 0.26-0.39 |
+
+The right-hand column is the control that makes this a real result: the same
+crowd built the old way costs **77x the triangles and about double the frame
+time** of the baked version. Whole-frame numbers move by less than the
+machine's own noise — draws unchanged at 95/85/119/93, triangles down 6 328,
+ms/f inside +/-0.3 on an interleaved A/B — which is the correct outcome for a
+layer that was already cheap: the frame did not get slower and the backdrop got
+27 times as much in it.
+
+**The five things this had to get right**, all argued at length in the file:
+
+- **It still parallaxes.** Every card is at its own world position, so climbing
+  508 m through a 142 m radius sweeps a card at 950 m by 8.5 degrees of azimuth
+  and up to 45 of elevation — all real. Only what is baked INTO the card is
+  frozen, and that error is bounded and measured: intra-cluster parallax is
+  b*t/d^2 = 142x150/880^2 = 1.6 degrees, ~18 px, accumulated over the whole
+  climb. Under a tenth of what the card's own motion provides.
+- **Elevation is not azimuth.** +/-45 degrees is far too much to freeze, so it
+  is baked as **five slices across +/-50 degrees** and cross-faded per fragment
+  between the two that bracket the camera. Re-baking on a threshold was
+  rejected: it puts an unbounded GPU spike on an arbitrary frame during play to
+  fix what a fifth of a megabyte fixes at boot.
+- **The fog is applied exactly once, at runtime.** The atlas stores shading
+  INPUTS, not shaded pixels — R the hemispheric up-factor, G the rim term, B
+  the per-piece value wobble, A coverage. The card's shader then runs the same
+  body-and-haze arithmetic the geometry bands run, off the same uniforms and
+  the same `scVoidGradient`. So a card cannot arrive un-hazed or double-hazed,
+  the palette stays live under a theme change, and 8 bits is plenty because
+  every channel is a 0..1 factor rather than a dark colour that would band.
+- **There is no sort.** Alpha-BLENDED cards would need back-to-front order
+  against each other and the two geometry bands every frame. These are
+  alpha-TESTED with depth write, which is order-independent by construction;
+  the usual cost — a staircase silhouette — is paid off by rescaling coverage
+  into one pixel either side of the contour and handing that to
+  `alphaToCoverage` against the pipeline's existing 4x MSAA scene target.
+- **Nothing is reachable.** The cards go through the same `assertClear()` as
+  the prisms, as boxes of their full world size. Closest approach 214.9 m
+  against a 140 m minimum.
+
+Two things found on the way that are worth keeping:
+
+- **The haze had to move to the vertex shader.** The cards cover the shell
+  about 1.4x and the quads carrying them far more, so `scVoidGradient` per
+  fragment cost 4-5 ms/f — the first working build was slower than the
+  geometry it replaced. It is a smooth function of view direction over a shape
+  a few hundred pixels across, so four corners and an interpolation are
+  visually identical and an order of magnitude cheaper. The geometry bands,
+  which cover a few percent of the frame, keep theirs per fragment.
+- **Past the far plane, squash rather than clip.** The ring runs 780-1010 m and
+  the cards +/-980 m vertically, so from the plaza the highest are 1 400 m out
+  against a 1 200 m far plane — the old band simply vanished there, which is
+  the hard cut across the top of `summit`. `VERT_CARD` maps everything beyond
+  0.99 NDC into the last 1 % of the range monotonically, so order survives and
+  nothing is cut.
+
+**Bake cost: 43-55 ms, of which 11-15 ms is CPU geometry.** It runs inside
+`buildWorld` at boot, before the first frame is presented — about 3 % of the
+1.4 s from navigation to a playable game. Every archetype x slice is baked in
+ONE draw call: rotating a cluster by an elevation and viewing it head-on is the
+same picture as viewing it from that elevation, so all 80 tiles are pre-rotated
+and pre-translated into their atlas cells and merged into one buffer, and the
+camera never moves. Building that buffer with a `Vector3` per vertex cost 42 ms
+on its own; flat arithmetic on typed arrays took it to 11.
+
+First build of the clusters was wrong in a way worth recording: twelve small
+stones per tile baked down to a spray of two-texel chips, and a thousand of
+those cards is gravel, not a ruined city. Density is the CARD count and detail
+is the PIECE count, and conflating them is what produced it. The lead mass now
+owns a third of the tile, `IMPOSTORS.pieces` is 6-11, and the rubble class is
+rare.
+
+Gate green, `tools/coverage.mjs` unchanged at 90.50 m2, skyline untouched
+(`closeup` lum 111.1, sat 0.807 — the theme does not build this layer at all).
+
 ## 2026-07-26 — the void stops being dark-on-light
 
 A harsh review of the rendered frames, and it was right about the biggest thing
