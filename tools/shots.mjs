@@ -242,10 +242,38 @@ export const VOID_SHOTS = {
   },
 
   // From the spire, back down over everything. The payoff.
+  //
+  // REFRAMED. Three reviews named this the weakest frame in the set, and it
+  // measured `lum` 61.3 (band is 28-55, §2) with 3.17% clipped high while every
+  // other void shot sat in band. The cause was the POSE, not the level: the old
+  // shot stood dead centre on the 14 m finish slab and pitched -0.30 straight
+  // INTO it, so the downward ray met the deck ~5 m ahead (1.53 / tan 0.30) and
+  // the slab — carrying its emissive rune inlay at point-blank, head-on range —
+  // filled the lower ~60% of the frame and blew out. Nothing in the sky or the
+  // background could touch that; it is the foreground.
+  //
+  // The reference (docs/reference/theme2-void.png) does the opposite: its
+  // foreground platform is a DARK, grazing sliver of carved stone with a
+  // restrained sigil across the bottom third, and the vast void fills the rest.
+  // The spire's rune is not the outlier to cut — at w=14 it computes to ~0.98,
+  // below the small hero islands' ~1.29 (src/levels/void.js pad()), and every
+  // other shot proves the rune language reads fine. Only this camera pointed at
+  // too much of it, too close, too square.
+  //
+  // So: step the feet 4.5 m INWARD along the look direction — toward the shaft
+  // axis the shot already faces — and raise the pitch to -0.19. Now barely 3-4 m
+  // of slab lies ahead before the rim drops into the void, the bright near-feet
+  // stone falls below the frame's lower edge, and what remains of the deck is a
+  // grazing foreground strip (~a third of the frame) exactly as the reference
+  // frames it. The pitch still tips down the shaft, so the descending course —
+  // the whole point of the payoff — fills the space above the strip.
+  //
+  // Feet = spire centre (38.3, 507, -75) + 4.5 * lookDir, lookDir being the unit
+  // of (-0.5, 0.86); worked once, written out, not re-derived each read.
   summit: {
-    pos: [38.3, 507.0 + DECK, -75.0],
+    pos: [36.04, 507.0 + DECK, -71.11],
     yaw: yawTo(-0.5, 0.86),
-    pitch: -0.30,
+    pitch: -0.19,
     note: 'VOID: the spire at 507 m, looking back down the course',
   },
 }
