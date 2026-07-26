@@ -12,11 +12,14 @@
  *   nobackdrop  the far ruin bands hidden
  *   nopost      composite straight from the scene target, bloom/contact off
  *   halfres     same scene at quarter the pixels — separates fill from geometry
+ *   chalf       contact buffer at half scale, everything else identical
+ *   clite       chalf plus the Lite tap counts (10 march / 6 AO / 4 near)
  *
  * Every measurement is a GPU-synced loop (readPixels after each tick), because
  * an unsynced loop measures the CPU queueing work and nothing else.
  *
  *   node tools/perfprobe.mjs [--theme void] [--only ascent] [--no-build]
+ *     [--modes base,chalf]     measure a subset — see pickModes
  */
 
 import { resolve } from 'node:path'
@@ -38,7 +41,39 @@ const MODES = [
   // frame ends up rendering both. Kept so nobody rebuilds it.
   'basicmat',
   'nocontact',   // the depth/normal prepass + contact-shadow march
+  // The two candidates the Lite Mode work is deciding between. Both KEEP the
+  // pass — see src/render/quality.js on why turning it off is a restyle rather
+  // than a setting.
+  'chalf',       // contact buffer at half scale, same 14/8/5 steps and taps
+  'clite',       // half scale AND the Lite tap counts, 10/6/4
+  // Diagnostic, not a candidate: where inside the contact pass the time sits.
+  // The bilateral is what makes the jittered march resolvable, so shipping
+  // without it is not an option — this only says how much of the pass is the
+  // march and how much is the two full-screen blur passes after it.
+  'noblur',
 ]
+
+/**
+ * `--modes base,chalf` measures a SUBSET.
+ *
+ * Not a convenience: every mode in a run is interleaved with every other one
+ * and the whole set is repeated four times, so an eight-mode run to answer a
+ * two-mode question spends three quarters of its wall clock adding drift to
+ * the two arms that matter. A tight subset is the more trustworthy A/B, not
+ * just the faster one.
+ */
+function pickModes(arg) {
+  if (!arg || arg === true) return MODES
+  const want = String(arg).split(',').map((s) => s.trim()).filter(Boolean)
+  const bad = want.filter((m) => !MODES.includes(m))
+  if (bad.length) {
+    console.error(`unknown modes: ${bad.join(', ')}\nknown: ${MODES.join(', ')}`)
+    process.exit(2)
+  }
+  // `base` is what everything is quoted against; a run without it is a table of
+  // absolute numbers from a box whose absolutes move 4x between runs.
+  return want.includes('base') ? want : ['base', ...want]
+}
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
@@ -51,6 +86,7 @@ async function main() {
   const names = args.only && args.only !== true
     ? String(args.only).split(',').map((s) => s.trim()).filter(Boolean)
     : allNames
+  const modes = pickModes(args.modes)
 
   if (!args['no-build']) buildDist()
   const server = await startStaticServer(resolve(REPO, 'dist'), port)
@@ -64,7 +100,7 @@ async function main() {
     await hideChrome(page, { hud: false })
     gl = await glRenderer(page)
     for (const name of names) {
-      const r = await page.evaluate(probe, { name, modes: MODES, dt: DEFAULTS.dt })
+      const r = await page.evaluate(probe, { name, modes, dt: DEFAULTS.dt })
       rows.push({ shot: name, ...r })
     }
   } finally {
@@ -74,9 +110,9 @@ async function main() {
 
   console.log(`\nablation probe — ${themeArg || 'skyline'}   ${width}x${height}`)
   console.log(`GL: ${gl ? gl.renderer : 'unknown'}\n`)
-  const head = ['shot', ...MODES.map((m) => `${m} ms`), 'draws', 'tris', 'shadowTris']
+  const head = ['shot', ...modes.map((m) => `${m} ms`), 'draws', 'tris', 'shadowTris']
   const body = rows.map((r) => [
-    r.shot, ...MODES.map((m) => String(r.ms[m])),
+    r.shot, ...modes.map((m) => String(r.ms[m])),
     String(r.draws), String(r.tris), String(r.shadowTris),
   ])
   const w = head.map((h, i) => Math.max(h.length, ...body.map((b) => b[i].length)))
@@ -149,6 +185,19 @@ function probe({ name, modes, dt }) {
       }
     }
     if (mode === 'nocontact') g.pipeline.contactShadows = false
+    // The contact pass owns its own scale and tap counts, so these two set the
+    // pass directly rather than going through g.setQuality — which would also
+    // move the pixel ratio and confound the two things being separated.
+    if (mode === 'noblur' && g.pipeline.contact) {
+      const c = g.pipeline.contact
+      if (!c._realBlur) c._realBlur = c.blur.render.bind(c.blur)
+      c.blur.render = () => {}
+    }
+    if (mode === 'chalf' && g.pipeline.contact) g.pipeline.contact.scale = 0.5
+    if (mode === 'clite' && g.pipeline.contact) {
+      g.pipeline.contact.scale = 0.5
+      g.pipeline.contact.setTaps({ steps: 10, ao: 6, aoNear: 4 })
+    }
     if (mode === 'noshadow') for (const o of casters) o.castShadow = false
     if (mode === 'nolevel') for (const o of surfaces) o.visible = false
     if (mode === 'nobackdrop') for (const o of backdrop) o.visible = false
@@ -164,6 +213,14 @@ function probe({ name, modes, dt }) {
   const teardown = (mode) => {
     if (mode === 'basicmat') for (const o of surfaces) o.material = o.userData._realMat
     if (mode === 'nocontact') g.pipeline.contactShadows = true
+    if (mode === 'noblur' && g.pipeline.contact && g.pipeline.contact._realBlur) {
+      g.pipeline.contact.blur.render = g.pipeline.contact._realBlur
+    }
+    if (mode === 'chalf' && g.pipeline.contact) g.pipeline.contact.scale = 1
+    if (mode === 'clite' && g.pipeline.contact) {
+      g.pipeline.contact.scale = 1
+      g.pipeline.contact.setTaps({ steps: 14, ao: 8, aoNear: 5 })
+    }
     if (mode === 'noshadow') for (const o of casters) o.castShadow = true
     if (mode === 'nolevel') for (const o of surfaces) o.visible = true
     if (mode === 'nobackdrop') for (const o of backdrop) o.visible = true

@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-07-26 — quality levels, and the proof there is no free frame time
+
+Ethan: *"do whatever you can with minimal cost to graphics and then add a Lite
+Mode for graphics in settings at a later date for the things that will impact
+graphics."*
+
+**Part 1 came back empty, and that is the finding.** The contact-shadow pass is
+40%+ of the frame, so it is where any free win would have to come from. It does
+not have one. Measured with two new `perfprobe` modes: dropping the march to 10
+steps and the AO to 6/4 taps is free, and skipping both bilateral blur passes
+is free — the pass is bound by its pixel count and its dependent texture
+fetches, not by arithmetic or by the blur. The only lever is resolution, and
+resolution is an image change. Nothing shipped silently, because nothing
+qualified.
+
+Two things that cost time and are worth knowing:
+
+- **The shot harness is not deterministic.** Re-rendering the unchanged build
+  and diffing gives a per-pixel mean deviation of 4.13/255 on `deckstrip`. Any
+  before/after without a same-build control run is reporting weather. Recorded
+  in `docs/perf.md` with the list of shots that ARE frame-stable.
+- The note in `RenderPipeline.setSize` claiming the contact buffer must match
+  the beauty pass exactly was **wrong**. The material samples it as a uv
+  (`gl_FragCoord.xy * scScreenTexel`), so it upsamples correctly at any size.
+
+**Part 2 — Lite Mode plumbing, no UI.** `src/render/quality.js` is one table of
+levels (`high` / `balanced` / `lite`) holding every knob that costs real frame
+time; the pipeline and `main.js` both read it. `high` restates the shipped
+values verbatim, and the shot set confirms the default is unchanged — skyline
+`closeup` still lum 111.1, sat 0.807, and `tools/ship-gate.sh` is green.
+
+Half-resolution contact shadows are worth **16–37% of the frame on every shot
+on both themes** and are what `balanced` and `lite` turn on. Whether they
+should be promoted into the default is a one-line change and an [ETHAN] item in
+`docs/roadmap.md`: globally the shift is at or below the harness noise floor,
+but distant thin geometry does lose some AO crease. `docs/lite-mode.md` has the
+per-shot numbers and the honest visual account.
+
+Settable now, so it can be evaluated before a menu exists:
+`__game.setQuality('lite')`, `?quality=lite`, `shotset.mjs --quality lite`.
+The UI is filed in `docs/roadmap.md` and deliberately not built here — the
+start menu belongs to other work.
+
 ## 2026-07-26 — the void stops being dark-on-light
 
 A harsh review of the rendered frames, and it was right about the biggest thing

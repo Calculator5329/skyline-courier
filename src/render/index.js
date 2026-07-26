@@ -8,6 +8,9 @@ import { GBuffer } from './gbuffer.js'
 import { ContactShadows } from './contact.js'
 import { MaterialPatcher } from './patch.js'
 import { SkyEnvironment } from './skyenv.js'
+import { DEFAULT_QUALITY, QUALITY_LEVELS, QUALITY_NAMES, resolveQuality } from './quality.js'
+
+export { QUALITY_LEVELS, QUALITY_NAMES, DEFAULT_QUALITY } from './quality.js'
 
 /** Rec.709 luminance of a linear-light colour, for the light-budget maths. */
 function colorLum(c) {
@@ -240,6 +243,22 @@ export class RenderPipeline {
       }
     }
     this._contactEnabled = options.contactShadows ?? true
+
+    /**
+     * Quality level. Applied AFTER the constructor has built everything, so a
+     * level is a set of overrides on a fully-formed default rather than a
+     * parallel construction path that could drift from it.
+     *
+     * `options.quality` is honoured, but the default is `high`, which restates
+     * the shipped values verbatim — see quality.js.
+     */
+    this._quality = DEFAULT_QUALITY
+    this.setQuality(options.quality ?? DEFAULT_QUALITY)
+    // An explicit `contactShadows: false` outranks the level, and has to be
+    // re-applied because setQuality above writes the level's own value. The
+    // harness's ablation modes rely on this switch, so it must be the last
+    // word on the subject.
+    if (options.contactShadows !== undefined) this._contactEnabled = !!options.contactShadows
 
     /**
      * How much a SKY texel votes in the exposure meter, relative to a texel
@@ -528,6 +547,56 @@ export class RenderPipeline {
   get grain() { return this._uLens.z }
   set grain(v) { this._uLens.z = v }
 
+  // --- quality level -------------------------------------------------------
+
+  /** Current level name. See `src/render/quality.js` and `docs/lite-mode.md`. */
+  get quality() { return this._quality }
+  set quality(name) { this.setQuality(name) }
+
+  /**
+   * Apply a quality level to everything this object owns.
+   *
+   * NOT the pixel-ratio cap — that belongs to the WebGLRenderer, which this
+   * pipeline does not own the sizing of. `main.js` reads the same level object
+   * and applies `pixelRatioCap` there. Splitting it that way keeps the one
+   * knob that changes the canvas backing store in the one place that already
+   * calls `renderer.setSize`, instead of giving the pipeline a second, hidden
+   * route to resize the window.
+   *
+   * @returns {string} the level actually applied (an unknown name yields the
+   *   default rather than throwing — this is reachable from a console and from
+   *   a stale localStorage value).
+   */
+  setQuality(name) {
+    const resolved = resolveQuality(name)
+    const q = QUALITY_LEVELS[resolved]
+    this._quality = resolved
+
+    this._contactEnabled = q.contactShadows
+    if (this.contact) {
+      this.contact.scale = q.contactScale
+      this.contact.setTaps({
+        steps: q.contactSteps,
+        ao: q.aoTaps,
+        aoNear: q.aoNearTaps,
+      })
+    }
+
+    // Resize only when the internal scale actually moved: setSize early-outs on
+    // an unchanged size, so re-applying the current level costs nothing.
+    if (q.renderScale !== this.renderScale) {
+      this.renderScale = q.renderScale
+      if (this._width > 1) {
+        // Re-derive from the canvas rather than from the stored size, which is
+        // already multiplied by the OLD scale.
+        const c = this.renderer.domElement
+        this._width = this._height = 1
+        this.setSize(c.width, c.height)
+      }
+    }
+    return resolved
+  }
+
   // --- contact shadows -----------------------------------------------------
 
   /** Master switch. Reads false on a context that cannot support them. */
@@ -788,10 +857,18 @@ export class RenderPipeline {
     this.sceneTarget.setSize(w, h)
     this.bloom.setSize(w, h)
     this.composite.uniforms.uTexel.value.set(1 / w, 1 / h)
-    // The prepass and the contact buffer are read by gl_FragCoord in the
-    // material, so they MUST stay exactly the size of the beauty pass — a
-    // half-resolution contact buffer here would offset every shadow by half a
-    // frame's width, not soften it.
+    // The PREPASS must stay exactly the size of the beauty pass: the contact
+    // march reconstructs view positions from it and the exposure meter reads
+    // its coverage channel as a sky mask, and both want the real depth of the
+    // real pixel.
+    //
+    // The CONTACT BUFFER does not, and an earlier note here claiming it did
+    // was wrong: the material samples it as `gl_FragCoord.xy * scScreenTexel`
+    // (patch.js), where scScreenTexel is the BEAUTY pass's texel — so the
+    // coordinate is a 0..1 uv and lands in the right place whatever size the
+    // target is. It is handed the full size and applies its own `scale`. The
+    // mistake the note was guarding against is real but different: sampling it
+    // by texel index rather than by uv would indeed shift every shadow.
     if (this.gbuffer) this.gbuffer.setSize(w, h)
     if (this.contact) this.contact.setSize(w, h)
     this.patcher.setScreenSize(w, h)

@@ -356,22 +356,23 @@ Measured 2026-07-26 with `tools/perfprobe.mjs`, `tools/perfinv.mjs` and
 these — it records what the numbers were, and, more usefully, which two
 plausible fixes were built, measured, and thrown away.
 
-- [ ] **Make the contact-shadow march cost less than 40% of the frame.**
-      `src/render/contact.js` is a 14-step screen-space ray march plus an
-      8-sample AO spiral at FULL resolution, and turning it off is worth
-      2.2–2.4 ms of a 4.4–5.5 ms frame at 1440p — the largest single item in
-      the renderer by a wide margin, on both themes. It is also the item that
-      scales worst with resolution, which is what makes it the thing a player
-      on a 4K panel feels. Half-resolution march with a bilateral upsample, or
-      fewer steps at distance, are the obvious moves; both are visual changes
-      and need a shot-set diff.
-- [ ] **Decide the pixel-ratio cap deliberately.** `src/main.js` uses
-      `Math.min(window.devicePixelRatio, 2)`, so a HiDPI display quietly asks
-      for up to 4x the fragments of the window it is drawn in. The frame is
-      fill-bound, so that multiplier lands directly on frame time.
-      `RenderPipeline` already carries a `renderScale` option that nothing
-      sets. This is a TASTE call, not a technical one — it trades sharpness
-      for frame rate — so it needs Ethan, not an agent.
+- [x] 2026-07-26: **Make the contact-shadow march cost less than 40% of the
+      frame.** Done as far as the measurements allow, and the answer is that
+      there is no free version of it. Half-resolution is worth 16–37% of the
+      whole frame on every shot on both themes, and it is what `balanced` and
+      `lite` turn on. Fewer steps/taps (10/6/4) and skipping both bilateral
+      blur passes were BOTH measured free — the pass is bound by its pixel
+      count and its dependent texture fetches, not by arithmetic or by the
+      blur — so neither is a lever and no level turns them. Numbers, and the
+      honest account of what half resolution costs to look at, are in
+      `docs/lite-mode.md`. Not promoted to the default; see the item below.
+- [x] 2026-07-26: **Decide the pixel-ratio cap deliberately.** It is now a
+      quality-level knob rather than a literal — `high` keeps the shipped cap
+      of 2, `balanced` 1.5, `lite` 1 (`src/render/quality.js`, applied in
+      `src/main.js`). It remains a taste call, and it is now Ethan's to make by
+      picking a level rather than an agent's to make by editing a constant.
+      Note the harness cannot measure it: headless Chromium runs at dpr 1, so
+      its size comes from the `halfres` ablation instead.
 - [ ] Re-measure on hardware that is not a 5070 Ti before concluding anything
       about geometry. Every "the world is too many triangles" hypothesis died
       against this GPU (see `docs/perf.md`); none of them has been tested on an
@@ -558,14 +559,34 @@ and by default; anything that COSTS a visible thing becomes the player's choice
 rather than ours. `docs/perf.md` has the measurements that say which is which —
 the renderer is fill-bound, and the contact-shadow march is 40%+ of the frame.
 
-- [ ] Lite Mode UI in the start menu, beside ROUTE and RULES. Plumbing and
-      `docs/lite-mode.md` land first (separate lane); this item is the UI only.
-      It must say honestly what each level costs visually, not just promise
-      "better performance".
+The plumbing and `docs/lite-mode.md` landed 2026-07-26. `src/render/quality.js`
+is the one table every consumer reads; `__game.setQuality('lite')` and
+`?quality=lite` both drive it; `node tools/shotset.mjs --quality lite` captures
+it. What is left is the menu.
+
+- [ ] Lite Mode UI in the start menu, beside ROUTE and RULES. The plumbing is
+      done — this item is the UI only, and it should be one call to
+      `__game.setQuality(name)` per option. Populate the labels from
+      `QUALITY_LEVELS[name].label` and `.note` rather than retyping them, so
+      the menu cannot drift from the table it is describing. It must say
+      honestly what each level costs visually, not just promise "better
+      performance"; `docs/lite-mode.md` has the measured wording.
+- [ ] **[ETHAN] Promote half-resolution contact shadows into the default?**
+      Worth 16–37% of the frame on every shot on both themes, for a whole-frame
+      luminance shift at or below the harness's own run-to-run noise floor
+      (under 0.06%). It was left out of `high` only because this lane's
+      acceptance test pinned the skyline `closeup` shot at lum 111.1 and
+      half-res prints 111.0 — a rounding boundary on a 0.07/255 shift, not a
+      visible change. The cost that IS real: distant thin geometry (far
+      balustrades, cornice lips, foliage silhouettes) loses some of its AO
+      crease; the near field is untouched. One-line change to `contactScale` in
+      `src/render/quality.js`. See "What it costs to look at" in
+      `docs/lite-mode.md`.
 - [ ] Decide the default. Today's look is the default and that is correct for a
       desktop GPU, but a high-DPI laptop may want Lite chosen FOR it on first
       boot — which needs a capability probe, not a guess.
-- [ ] `devicePixelRatio` cap (`src/main.js:51`, currently `min(dpr, 2)`) belongs
-      to Lite Mode, not to a silent change. On a 4K panel it is 4x the pixels
-      and the single largest lever available; it is also the one a player will
+- [x] 2026-07-26: `devicePixelRatio` cap belongs to Lite Mode, not to a silent
+      change — it is now `pixelRatioCap` on the quality level and `high` still
+      caps at 2, so nothing changed for anyone who does not pick a level. It is
+      still the single largest lever available and still the one a player will
       SEE, which is exactly why it is theirs to pull.

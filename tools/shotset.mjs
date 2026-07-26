@@ -4,6 +4,7 @@
  *
  *   node tools/shotset.mjs --out /path/to/dir
  *     [--port 5199] [--width 1600] [--height 900] [--frames 90] [--hud]
+ *     [--quality lite]   graphics quality level — see src/render/quality.js
  *     [--only terrace,vista] [--no-build] [--json]
  *
  * One launch, one build, one server: a shot set captured across several
@@ -60,7 +61,14 @@ async function main() {
     // is read once at boot from the URL (src/theme.js), so it has to be on the
     // address the harness opens, not poked in afterwards.
     const themeName = args.theme && args.theme !== true ? String(args.theme) : null
-    const url = themeName ? `${server.url}?theme=${encodeURIComponent(themeName)}` : server.url
+    // Query params rather than a settings click-through: both the theme and
+    // the graphics quality level are read once at boot (src/theme.js,
+    // src/main.js), so a shot set is captured by asking for the right page
+    // rather than by driving a menu that does not exist yet.
+    const q = new URLSearchParams()
+    if (themeName) q.set('theme', themeName)
+    if (args.quality && args.quality !== true) q.set('quality', String(args.quality))
+    const url = q.toString() ? `${server.url}?${q}` : server.url
     const { page, errors } = await openGame(browser, url, { width, height })
     await hideChrome(page, { hud: !!args.hud })
     gl = await glRenderer(page)
