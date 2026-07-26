@@ -260,6 +260,99 @@ export function buildVoidCourse(collision) {
   const HEROES = 40
   const heroIds = []
   const walls = []
+
+  // ---------------------------------------------------------- COLOSSAL SCALE
+  //
+  // Ethan's standing critique of the void frames is that NOTHING IN THEM IS
+  // ENORMOUS — everything sits within ~3x of everything else, so the eye has no
+  // yardstick and the 508 m shaft reads as merely tall rather than vast. The
+  // reference (docs/reference/theme2-void.png) is built on the opposite: a
+  // COLOSSAL violet shard filling the whole left edge and a CATHEDRAL-scale
+  // wall on the right carrying a rune circle several storeys across, sitting
+  // beside 2 m fragments. Range is the whole trick, and KEEPING THE SMALL END
+  // is half of it — everything below is additive, so the ordinary 46 m walls
+  // and the per-island shards it sits next to are untouched.
+  //
+  // A handful of islands — chosen to fall under the acceptance cameras
+  // (tools/shots.mjs VOID_SHOTS) rather than at random, so a colossus the route
+  // never passes is not built — get a SECOND, far bigger structure beside the
+  // ordinary wall: a ~140 m cathedral set back past the wall-run wall, and a
+  // tens-of-metres crystal erupting at its foot. Both are cheap by construction
+  // (a big object is not a detailed one):
+  //   - the cathedral uses coarse, monumental masonry courses, so a wall three
+  //     times taller carries about an ordinary wall's box count, and every box
+  //     merges into the one 'stone' batch — zero extra draw calls; and
+  //   - the crystal reuses the instanced hero buckets the per-island clusters
+  //     already built (crystals.js keys buckets on family/detail/variant, not
+  //     size), so it costs instances, never a draw call.
+  //
+  // SAFETY (CLAUDE.md rule 2, Archipelago.verify(), reachability.mjs): neither
+  // carries a route and neither can be landed on.
+  //   - The cathedral is SET BACK to r+26 — ten metres OUTSIDE the r+16
+  //     wall-run wall and well beyond every grapple arc on the spiral — and it
+  //     grows only UPWARD from the ordinary wall's base, so it adds mass in an
+  //     empty vertical column, never across a crossing. Its cornice sits ~120 m
+  //     over the nearest island, far from any graph landing, so it is no more
+  //     an accidental landing than the ordinary wall's cornice already was.
+  //   - The crystal has NO collider (crystals.js owns none), so it can neither
+  //     block a jump nor be stood on. Its base sits 14 m BELOW the island and
+  //     it erupts UP, so at the island's own height the shards are still at
+  //     their narrow root; the wide spray happens tens of metres overhead,
+  //     offset outward, framing the vantage without ever crossing the rune the
+  //     player has to read (§6).
+  const COLOSSAL_WALLS = new Set([0, 8, 16, 24, 32])
+  const placeColossus = (i, r, ang, yTop, axis) => {
+    const alongX = axis === 'x'
+    const cwx = Math.cos(ang) * (r + 26), cwz = Math.sin(ang) * (r + 26)
+    const height = 132 + (i % 3) * 14           // 132–160 m: ~3–3.5x an ordinary wall
+    const length = 54
+    // COARSE MASONRY so triple the height is not triple the boxes: bigger
+    // stones on a bigger wall is what real cathedral masonry does. runBand 0
+    // because nobody wall-runs a set-back landmark, which frees every course to
+    // carry pier/recess relief instead of a flat run plane.
+    const w = greatWall(L, cwx, yTop - 14, cwz, {
+      height, length, thickness: 5, axis, detail: 2,
+      panelWidth: 7.0, panelHeight: 7.0, runBand: 0,
+      seed: hash(`colossus-${i}`),
+    })
+    // Registered for the dressing pass exactly like an ordinary wall, so the
+    // arcades/spires/banners crown the cathedral head too.
+    walls.push({ x: cwx, y: yTop - 14, z: cwz, axis, height, length, i, ang })
+
+    // THE RUNE CIRCLE, several storeys across, on the face that looks back at
+    // the shaft. RED — the reference's cathedral circle is red, and §6 reserves
+    // the rune's VIOLET for "you may stand here", so a wall glyph must not share
+    // it. Placed 0.45 m PROUD of the nominal face: a pier panel can stand
+    // ~0.27 m past it, and a sigil on the core plane would be swallowed by the
+    // relief (which is the bug the ordinary-wall sigils quietly have).
+    const inward = alongX ? -Math.sign(cwz || 1) : -Math.sign(cwx || 1)
+    const ySig = yTop - 14 + height * 0.42
+    const proud = w.face + 0.45
+    if (alongX) {
+      sigilRing(L, cwx, ySig, cwz + inward * proud, {
+        radius: 22, plane: 'xy', side: inward, rings: 4, ticks: 36,
+        sigilColor: colors.sigil, detail: 2,
+      })
+    } else {
+      sigilRing(L, cwx + inward * proud, ySig, cwz, {
+        radius: 22, plane: 'zy', side: inward, rings: 4, ticks: 36,
+        sigilColor: colors.sigil, detail: 2,
+      })
+    }
+
+    // THE COLOSSAL SHARD at the cathedral foot, erupting up the inward face
+    // toward the route: tens of metres of violet, the reference's left-edge
+    // element. Straight up (tilt 0) — the cluster's own shard tilts give the
+    // spray, and a symmetric root centred on the wall foot keeps the wide part
+    // clear of the island rim it stands 26 m outside of.
+    crystals.add('hero',
+      alongX ? cwx : cwx + inward * (w.face + 1.5),
+      yTop - 14,
+      alongX ? cwz + inward * (w.face + 1.5) : cwz, {
+        color: colors.rune, detail: 2, size: 3.6 + (i % 3) * 0.5,
+      })
+  }
+
   let prev = 'plaza'
   let ang = 0.7
   let lastR = 0
@@ -370,6 +463,10 @@ export function buildVoidCourse(collision) {
           radius: 6.5, axis, color: colors.rune, detail: 1,
         })
       }
+      // A cathedral behind the ordinary wall on the chosen islands, giving the
+      // frame a mass many times the size of anything beside it. See COLOSSAL
+      // SCALE above for why it is safe and cheap.
+      if (COLOSSAL_WALLS.has(i)) placeColossus(i, r, ang, y, axis)
     }
   }
 
@@ -496,6 +593,17 @@ export function buildVoidCourse(collision) {
     }
     ci++
   }
+
+  // THE FLOOR COLOSSUS — the single most dominant shard on the course, and the
+  // one the establishing `ascent` camera (tools/shots.mjs: floor of the shaft,
+  // looking up) is built to catch. It stands to the -X/+Z side the camera faces
+  // so it fills the left edge exactly as the reference's colossal shard does,
+  // erupting from below the floor to tens of metres up. Off the spawn plaza and
+  // the teaching-wall line (both around the origin at z≈0), 20 m away in Z, and
+  // colliderless like every crystal — it cannot touch the route.
+  crystals.add('hero', -18, -10, 20, {
+    color: colors.rune, detail: 2, size: 5.0,
+  })
 
   // Broken obelisks for mid-ground silhouette. Decor by placement — they stand
   // off the route, so they read as ruin rather than as something to land on.
