@@ -4,9 +4,16 @@
 
 Acceptance is `docs/art-direction-void.md` §2, measured by
 `node tools/shotset.mjs --theme void`. The sky, atmosphere, exposure and
-energy beams landed 2026-07-25 (see the changelog); what is still short is
-listed here rather than in a reviewer's head.
+energy beams landed 2026-07-25, and the distant scenery layer and the
+six-beam rewrite landed the same day (see the changelog); what is still short
+is listed here rather than in a reviewer's head.
 
+- [ ] The far bands carry no light of their own. `src/fx/voidbackdrop.js` puts
+      three distance bands behind the course, but every mass in them is unlit
+      rock seen through haze. The reference has pinpricks out there — distant
+      sigils and crystal glints — and they are most of what sells the scale.
+      Wants an emissive speckle channel on the backdrop shader, kept rare
+      enough that §3's "red must stay rare" still holds at a kilometre.
 - [ ] Emissives in the emissive-poor shots. `tower`, `deckstrip` and
       `edgefeet` miss §2's `p99 > 215` and `clip hi 0.3-2.5%` for one reason:
       there is nothing bright in frame. This is §4.1-4.3 work — sigil rings on

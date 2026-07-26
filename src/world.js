@@ -3,6 +3,7 @@ import { PALETTE } from './materials.js'
 import { SKY, SKY_GRADIENT_GLSL } from './render/skygrad.js'
 import { getTheme, themeSunDir } from './theme.js'
 import { voidBeamSites } from './fx/voidfx.js'
+import { VoidBackdrop } from './fx/voidbackdrop.js'
 
 /**
  * Sky, light, and atmosphere.
@@ -368,9 +369,15 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
       const r = 2.0 + 26.0 * Math.random() * Math.random()
       const a = Math.random() * Math.PI * 2
       pos[i * 3] = s.x + Math.cos(a) * r
-      // Only the part of the column the player can plausibly see; the beams
-      // run from 100 m below the kill plane and dust down there is wasted.
-      pos[i * 3 + 1] = -12 + Math.random() * 110
+      // Only the part of the column the player can plausibly see. Derived
+      // from the SITE rather than from a literal: the beams now run from below
+      // the kill plane to well above the spire, and the old fixed -12..98 m
+      // window was sized for a course that topped out at y 88. It left the
+      // upper two thirds of every column — which is most of what the player
+      // climbs past — with no dust on it at all.
+      const lo = Math.max(s.y, -20)
+      const hi = Math.min(s.y + s.height, 270)
+      pos[i * 3 + 1] = lo + Math.random() * Math.max(1, hi - lo)
       pos[i * 3 + 2] = s.z + Math.sin(a) * r
     } else {
       // Spread is per-theme: the skyline's motes hug the route, the void's fill
@@ -427,6 +434,20 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
   motes.name = 'motes'
   scene.add(motes)
 
+  // --- the far bands ------------------------------------------------------
+  //
+  // art-direction-void.md §5: "depth in three bands... if everything sits in
+  // one band the space collapses." Until this, the void had one — the course,
+  // and then flat fog. See `src/fx/voidbackdrop.js`.
+  //
+  // It is built HERE, beside the sky and the fog, rather than in the level,
+  // and that placement is the argument: this layer carries no collider, is
+  // never reachable, and is part of what is BEHIND the world in exactly the
+  // sense the dome and the aerial perspective are. Building it in the level
+  // would put unreachable geometry in the file whose entire job is reachable
+  // geometry. Themes that do not ask for it pay nothing.
+  const backdrop = theme.backdrop ? new VoidBackdrop(scene, theme) : null
+
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   // Tone mapping belongs to the composite pass (AgX), not to the renderer.
@@ -438,8 +459,14 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
   return {
     sunDir,
     /** Keep the shadow frustum and sky centred on the player. */
+    /** Instances, triangles and measured clearance, for the harness to print. */
+    backdrop: backdrop
+      ? { instances: backdrop.instances, triangles: backdrop.triangles,
+          clearance: backdrop.clearance }
+      : null,
     update(time, playerPos) {
       moteMat.uniforms.uTime.value = time
+      if (backdrop) backdrop.update(time)
       sky.material.uniforms.uTime.value = time
       sky.position.copy(playerPos)
       sun.target.position.copy(playerPos)

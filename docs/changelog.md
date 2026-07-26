@@ -1,5 +1,75 @@
 # Changelog
 
+## 2026-07-25 — the void gets a background, and its beams get cut to six
+
+Two notes from Ethan with the build beside the reference image, answered
+together because they are the same complaint from two sides: the void was a
+course floating in front of flat violet fog, and the only thing in that fog was
+a dozen interchangeable red lines.
+
+- **`src/fx/voidbackdrop.js` (new) — the far bands.** `art-direction-void.md`
+  §5: "depth in three bands... if everything sits in one band the space
+  collapses." The void had one. This adds three: silhouetted ruin masses,
+  spires and drifting fragments in clustered districts at 360-470 m, 600-760 m
+  and 820-960 m, spanning y -820 to +580 so the depth keeps going below the
+  course as well as above it.
+
+  The mechanism is one number per band, and it took four measured attempts to
+  find: **the near band renders DARKER than the dome behind it (0.74x), the mid
+  band at the dome's own value (1.05x) and the far band LIGHTER (1.26x)**.
+  Every earlier version made the whole layer lighter at every range, which is a
+  fog bank with notches cut in it, not three bands. That needs a different
+  extinction curve per band, which is why there is a material per band rather
+  than one shared one.
+
+  Cost, measured on the void shot set: **3 draw calls, 360 instances,
+  11 728 triangles** — 35 draws and 23 393 tris total against 32 and 11 677
+  before. One archetype (a tapered n-gon prism with a broken point under it)
+  scaled into masses, spires and fragments; LOD is by band and decided at build
+  time, since a thing that can never be approached can never need a closer
+  mesh. Colours all come from the theme descriptor and the haze fades into
+  `scVoidGradient`, the same evaluation the dome and the aerial perspective
+  use.
+
+  **It is unreachable, and that is measured, not asserted.** No instance ever
+  enters the collision world, and `assertClear()` throws if any of them comes
+  within 140 m of the play volume — double the 70 m `Archipelago.verify()`
+  demands of the sunset level's ghost islands. Measured clearance: **174.2 m**.
+  The check found a real fault on its first run (a bounding-sphere
+  approximation reported 56 m for spires whose real approach was over 190),
+  which is the point of having it.
+
+- **`src/fx/voidfx.js` — twelve beams became six.** Ethan: "roughly a dozen in
+  frame, all similar, all pin-sharp, and several rake diagonally so they
+  converge like searchlights." The beams were geometrically plumb the whole
+  time; what was wrong is that they were laid out along +X across 250 m of a
+  course that no longer exists — the void runs +Y up a shaft around the origin
+  — so they stood in empty space and were only ever seen end-on and far away,
+  where perspective turns a row of parallel verticals into converging
+  searchlights.
+
+  They are now a hand-written table of six, not a loop over a PRNG. Four stand
+  on the radial line through the islands the side paths branch from, pushed
+  13 m past the great wall beyond each one so the wall silhouettes against them
+  (§5, "silhouette against glow"); two are far out in the backdrop's near band
+  so the middle distance has a vertical in it. Every site names its own length,
+  base height, radius, intensity and haze multiplier, and no two are close: the
+  brightest is 3x the dimmest, the thickest 1.6x the thinnest, one deliberately
+  ends below the top of the course so you climb past it, and one starts above
+  the plaza so it hangs with nothing under it.
+
+- **`src/world.js`** builds the backdrop beside the sky and the fog (it is
+  behind the world in the same sense they are), and the beam-clustered motes
+  now take their column from the site's own `y` and `height` instead of a
+  fixed -12..98 m window sized for a course that topped out at y 88 — the upper
+  two thirds of every beam had no dust on it.
+
+Void shot set, before -> after: `ascent` dyn 161.5 -> 181.4, `summit` dyn
+59.3 -> 78.0, `plunge` spread 37.6 -> 49.6. All four still inside §2's `lum`
+28-55 and `p50` 22-45. `bash tools/ship-gate.sh` exits 0 and the skyline set is
+unchanged to the last measured digit (`closeup` 111.1 / 0.807 /
+21.5,116.8,187.9, 59 draws, 2 211 509 tris — identical to the untouched tree).
+
 ## 2026-07-25 — crystal shards: the void theme's light, as geometry
 
 `docs/art-direction-void.md` §4.3 asks for two families of jagged faceted
