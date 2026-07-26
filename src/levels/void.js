@@ -1,7 +1,11 @@
 import * as THREE from 'three'
 import { Level, Archipelago } from '../level.js'
 import { trackedKit } from '../kit.js'
-import { greatWall, runeSlab, sigilRing, monolith, finishVoidKit, voidColors } from '../voidkit.js'
+import {
+  greatWall, runeSlab, sigilRing, monolith, finishVoidKit, voidColors, makeRand,
+  debrisCloud, brokenArch, ruinSpire, ziggurat, hangingChain, causeway, statue,
+  banner, voidOrb,
+} from '../voidkit.js'
 import { CrystalField } from '../crystals.js'
 import { getTheme } from '../theme.js'
 
@@ -253,6 +257,7 @@ export function buildVoidCourse(collision) {
   // vast, and a shaft of constant width reads as a corridor however tall.
   const HEROES = 40
   const heroIds = []
+  const walls = []
   let prev = 'plaza'
   let ang = 0.7
   let lastR = 0
@@ -338,6 +343,10 @@ export function buildVoidCourse(collision) {
       greatWall(L, wx, y - 14, wz, {
         height: 46, length: 40, thickness: 4, axis, detail: 2, seed: hash(`wall-${i}`),
       })
+      // Kept so the dressing pass below can build ON the walls. A wall is
+      // 40 m of cornice at 32 m over its island and it carried nothing at all;
+      // it is the largest unused surface in the level.
+      walls.push({ x: wx, y: y - 14, z: wz, axis, height: 46, length: 40, i, ang })
       // The sigil ring rides the wall face. §4.1 calls it the most memorable
       // element after the crystals, and it doubles as a landmark for reading
       // which way is on.
@@ -495,6 +504,445 @@ export function buildVoidCourse(collision) {
       height: 11 + (i % 3) * 4, detail: 1, seed: hash(`mono-${i}`),
     })
   }
+
+  // ============================================================ THE DRESSING
+  //
+  // Ethan, 2026-07-25, holding the build up against his reference image:
+  //
+  //   "we are significantly less detailed and have less cool unique additions
+  //   compared to the reference image and we have less depth and detail in the
+  //   backdrop as well and less overall objects we have."
+  //
+  // Correct, and the `plunge` capture is the proof: a 508 m shaft with four
+  // dark squares in it and violet fog everywhere else. The reference frame is
+  // DENSE — broken arcades, hanging chains, spires, statuary, ziggurat masses,
+  // debris at every depth, orbs receding into the haze, banners, cracked
+  // causeways, and ruin districts stacked layer on layer.
+  //
+  // Everything below places that, in the four bands §5 asks for. It runs AFTER
+  // every island exists, because where a thing is allowed to go is decided by
+  // measuring its distance to the route rather than by eye.
+  const dr = makeRand(0xD8E551)
+  const nodeList = [...nodes.values()]
+
+  /**
+   * Distance from a sphere of radius `r` at (x, y, z) to the nearest island.
+   *
+   * EXACTLY the expression `Archipelago.verify()` uses for decor clearance, so
+   * a placement that passes here passes there. That is the point: the ghost
+   * decision below is not a judgement, it is the same arithmetic the validator
+   * will re-run, and anything that gets it wrong takes the build down.
+   */
+  const clearance = (x, y, z, r = 0) => {
+    let best = Infinity
+    for (const n of nodeList) {
+      const d = Math.hypot(x - n.x, y - n.y, z - n.z) - r - Math.max(n.w, n.d) / 2
+      if (d < best) best = d
+    }
+    return best
+  }
+
+  // 70 m is `verify()`'s bar (the grapple sphere plus a dash off its far side
+  // plus slack). 78 is that with a margin, because the extents passed below are
+  // nominal and a ruin is allowed to be a little bigger than its footprint.
+  const GHOST_MIN = 78
+
+  /**
+   * THE KEEP-OUT VOLUME around a landing, and why it is a volume rather than
+   * a radius.
+   *
+   * The first cut gated solid dressing on one scalar — 3D distance to the
+   * nearest island — and it shipped a checkpoint INSIDE A RUIN:
+   *
+   *   archipelago: 1 trigger point(s) a player cannot stand on:
+   *     ascent 2: buried in stone (top 128.53, deck 120.86)
+   *
+   * A scalar cannot express what is actually wanted. A statue hung 14 m BELOW
+   * an island is fine at 18 m away; an arcade 18 m away at the island's own
+   * height is a wall across the landing. The two are the same distance, and
+   * only one of them is a bug.
+   *
+   * So: a cylinder round every island, 5.5 m proud of its rim, running from
+   * 4 m under the deck (the underside dressing lives below that) to 9 m over
+   * it (head-room, plus the arc of a landing). Nothing solid may touch it. The
+   * caller passes the prefab's real horizontal radius and its real vertical
+   * span, which is why every call site below states both.
+   */
+  const HEAD_ROOM = 9
+  const UNDER_ROOM = 4
+  const RIM_ROOM = 5.5
+  const blocksRoute = (x, z, rx, yLo, yHi, except = null) => {
+    for (const n of nodeList) {
+      if (n.id === except) continue
+      if (yHi < n.y - UNDER_ROOM || yLo > n.y + HEAD_ROOM) continue
+      const rr = Math.max(n.w, n.d) / 2 + RIM_ROOM
+      if (Math.hypot(x - n.x, z - n.z) <= rx + rr) return true
+    }
+    return false
+  }
+
+  let ghosted = 0, solidified = 0, skipped = 0
+
+  /**
+   * Place a dressing prefab at the honest collision level for where it lands.
+   *
+   *   far from the route  → `ghost` (drawn, no collider), registered as scenery
+   *                         so `verify()` PROVES nobody can reach it
+   *   clear of the route  → solid, with a real collider for every surface
+   *   in the keep-out     → not placed at all
+   *
+   * There is no fourth case, and in particular there is no "it is only decor,
+   * it is probably fine". Every hollow-collider bug this project has shipped
+   * came from that sentence.
+   *
+   * `lo` and `hi` are the prefab's vertical span RELATIVE TO `y`. They default
+   * to a mass standing on its anchor; anything that hangs (chains, banners) or
+   * is centred on it (debris clouds) must say so.
+   */
+  const dress = (fn, x, y, z, extent, opts = {}) => {
+    const lo = y + (opts.lo ?? 0)
+    const hi = y + (opts.hi ?? 12)
+    if (clearance(x, y, z, extent) >= GHOST_MIN) {
+      A.sceneryAt(x, y, z, extent * 2, extent * 2)
+      ghosted++
+      return fn(L, x, y, z, { ...opts, ghost: true })
+    }
+    if (!blocksRoute(x, z, extent, lo, hi)) {
+      solidified++
+      return fn(L, x, y, z, { ...opts, ghost: false })
+    }
+    skipped++
+    return null
+  }
+
+  /** Ghost-only: a mass with a genuinely flat top, which a landing must not be. */
+  const dressFar = (fn, x, y, z, extent, opts = {}) => {
+    if (clearance(x, y, z, extent) < GHOST_MIN) { skipped++; return null }
+    A.sceneryAt(x, y, z, extent * 2, extent * 2)
+    ghosted++
+    return fn(L, x, y, z, { ...opts, ghost: true })
+  }
+
+  /**
+   * An orb, with the radius QUANTISED and the colour taken from a short list.
+   *
+   * Both constraints are the draw-call budget rather than taste: the glow
+   * channel buckets by (shape, colour, intensity), so three radii and two
+   * colours is seven instanced draws for six hundred orbs, and a continuous
+   * radius would be six hundred draws. See `voidkit.voidOrb`.
+   */
+  // SMALL. The first pass ran 0.25/0.5/1.0 at intensity 1.5 and the metre-wide
+  // ones photographed as hard white hexagons hanging in mid-air — the single
+  // most obviously wrong thing in the capture. §4.5 asks for "fine dust motes
+  // drifting slowly, catching light" and "glowing orbs", not for lamps: these
+  // are points of light that give the fog something to recede past.
+  const ORB_R = [0.2, 0.3, 0.45]
+  const orb = (x, y, z, k = 0, red = false) => {
+    voidOrb(L, x, y, z, {
+      radius: ORB_R[k % ORB_R.length],
+      color: red ? colors.sigil : (k % 3 === 1 ? colors.rune : colors.cool),
+      intensity: 1.0,
+    })
+  }
+
+  // ------------------------------------------------------- band 1: the near
+  //
+  // Dressing hung ON and UNDER the islands. Everything here is solid and
+  // everything here is BELOW the landing plane or outside its rim — §6 keeps
+  // the standing surface clean so the rune stays the only thing that says
+  // "stand here", and CLAUDE.md rule 3 keeps the running line clear.
+  heroIds.forEach((id, i) => {
+    const n = nodes.get(id)
+    const h = hash(id)
+    const a0 = (h / 0xffffffff) * Math.PI * 2
+
+    // Chains hanging off the rim into the void. The reference is full of them
+    // and they do the one thing nothing else here does: they give the empty
+    // space under a floating island a scale, because you can see how far the
+    // chain falls before the fog takes it.
+    //
+    // A CHAIN IS TESTED AGAINST THE KEEP-OUT LIKE ANYTHING ELSE, excluding the
+    // island it hangs from. This is not belt-and-braces: the spiral doubles
+    // back over itself every five islands, so a 25 m chain dropped off one rim
+    // lands squarely in the headroom of the island below it. The first cut did
+    // exactly that and `Archipelago.assertTriggersClear` caught it —
+    // "ascent 2: buried in stone (top 128.53, deck 120.86)" — a checkpoint the
+    // player would have walked into a chain link to reach.
+    for (let k = 0; k < 2; k++) {
+      const a = a0 + 1.1 + k * 2.9
+      const cx = n.x + Math.cos(a) * n.w * 0.44
+      const cz = n.z + Math.sin(a) * n.w * 0.44
+      const len = 12 + (h % 17)
+      if (blocksRoute(cx, cz, 1.2, n.y - 1.1 - len, n.y - 1.1, id)) continue
+      hangingChain(L, cx, n.y - 1.1, cz, {
+        length: len, radius: 0.10, detail: 1, seed: h + k * 977, kind: 'stone',
+      })
+    }
+
+    // A SATELLITE RUIN, hung below and to one side of every island.
+    //
+    // Below, deliberately. The flight arc from one island to the next rises,
+    // so anything under the lower island is out of the line by construction —
+    // which is what lets these be real solid mass 15 m from a landing instead
+    // of scenery pushed 80 m away where it does nothing for the frame.
+    const sa = a0 + 2.2
+    const sr = 15 + (h % 10)
+    const sx = n.x + Math.cos(sa) * sr
+    const sz = n.z + Math.sin(sa) * sr
+    const sy = n.y - 11 - (h % 13)
+    const kind = i % 4
+    if (kind === 0) {
+      dress(statue, sx, sy, sz, 4, { height: 9 + (h % 7), detail: 2, seed: h, hi: 18 })
+    } else if (kind === 1) {
+      dress(brokenArch, sx, sy, sz, 12, {
+        hi: 11,
+        bays: 2, span: 7, rise: 4, depth: 2.2, crest: 2.6, detail: 2,
+        axis: Math.abs(Math.cos(sa)) > Math.abs(Math.sin(sa)) ? 'z' : 'x', seed: h,
+      })
+    } else if (kind === 2) {
+      dress(ruinSpire, sx, sy - 12, sz, 5, {
+        height: 22 + (h % 15), width: 3.2, detail: 2, seed: h, hi: 22 + (h % 15),
+      })
+    } else {
+      dress(monolith, sx, sy, sz, 4, { height: 9 + (h % 6), width: 1.7, detail: 2, seed: h, hi: 16 })
+    }
+    // Crystals on the satellite: §4.3's scatter family, whose job is exactly
+    // this — making the world continuous rather than a set of staged objects.
+    crystals.add('scatter', sx + 1.2, sy + 1.0, sz - 0.8, {
+      color: i % 5 === 0 ? colors.cool : colors.rune, detail: 1, size: 0.9,
+    })
+    // A pair of orbs behind and below the landing. §5: "every important edge
+    // needs a glow behind it — this is a composition rule, and it must be
+    // designed into the level layout." A dark slab rim against violet fog has
+    // no read at all; the same rim against an orb has one.
+    orb(n.x - Math.cos(a0) * (n.w * 0.5 + 6), n.y - 4.5, n.z - Math.sin(a0) * (n.w * 0.5 + 6), i)
+    orb(sx - 3, sy + 5, sz + 2.5, i + 1, i % 9 === 4)
+  })
+
+  // -------------------------------------------------- band 1b: the great walls
+  //
+  // The largest unused surface in the level. Each wall is 40 m long with its
+  // cornice 32 m over its island, and it carried nothing but a sigil ring.
+  for (const w of walls) {
+    const alongX = w.axis === 'x'
+    const top = w.y + w.height
+    // Which side faces the shaft axis — that is the face the player sees.
+    const inward = alongX
+      ? -Math.sign(w.z || 1)
+      : -Math.sign(w.x || 1)
+    const at = (a, c) => (alongX ? [w.x + a, w.z + c] : [w.x + c, w.z + a])
+
+    // A ruined arcade standing on the cornice. This is the single biggest
+    // silhouette change in the level: a wall used to end in a flat line 32 m
+    // over the route, and it now ends in arches with fog behind them.
+    {
+      const [ax, az] = at(0, 0)
+      dress(brokenArch, ax, top, az, 22, {
+        hi: 12,
+        bays: 3, span: 8.5, rise: 4.6, pierWidth: 2.2, depth: 3.0, crest: 3.4,
+        axis: w.axis, detail: 2, broken: 0.45, seed: hash(`arc-${w.i}`),
+      })
+    }
+    // Spires at both ends, so the wall reads as a gatehouse rather than a slab.
+    for (const end of [-1, 1]) {
+      const [px, pz] = at(end * w.length * 0.44, 0)
+      dress(ruinSpire, px, top, pz, 5, {
+        height: 20 + (w.i % 4) * 7, width: 3.4, detail: 2, hi: 20 + (w.i % 4) * 7,
+        seed: hash(`sp-${w.i}-${end}`),
+      })
+    }
+    // Statuary along the parapet, facing the route.
+    if (w.i % 4 === 0) {
+      for (const s of [-1, 1]) {
+        const [px, pz] = at(s * w.length * 0.20, inward * 1.4)
+        dress(statue, px, top, pz, 3.5, {
+          height: 8.5, detail: 2, hi: 10, seed: hash(`st-${w.i}-${s}`),
+        })
+      }
+    }
+    // Banners on the inward face, hung from under the cornice. High above the
+    // 7 m wall-run band, so they cannot put a step in a run.
+    for (const s of [-1, 1]) {
+      const [px, pz] = at(s * w.length * 0.30, inward * (2.0 + 0.34 + 0.10))
+      dress(banner, px, top - 2.5, pz, 7, {
+        lo: -(18 + (w.i % 3) * 4), hi: 1,
+        length: 13 + (w.i % 3) * 4, width: 2.6, axis: w.axis, detail: 2,
+        seamSide: inward, seed: hash(`bn-${w.i}-${s}`),
+      })
+    }
+    // Chains off the OUTWARD face, falling away from the route.
+    for (let k = 0; k < 3; k++) {
+      const [px, pz] = at((k - 1) * w.length * 0.28, -inward * 2.6)
+      const len = 16 + k * 9
+      if (blocksRoute(px, pz, 1.2, top - 1.0 - len, top - 1.0)) continue
+      hangingChain(L, px, top - 1.0, pz, {
+        length: len, radius: 0.11, detail: 1, seed: hash(`ch-${w.i}-${k}`),
+      })
+    }
+    // Crystal clusters clinging to the wall head, and an orb behind the
+    // arcade so the arches are backed by light rather than by fog.
+    for (let k = 0; k < 3; k++) {
+      const [px, pz] = at((k - 1) * w.length * 0.30, inward * 1.9)
+      crystals.add('scatter', px, top + 0.4, pz, {
+        color: k === 1 ? colors.cool : colors.rune, detail: 1, size: 0.8 + k * 0.16,
+      })
+    }
+    const [bx, bz] = at(0, -inward * 9)
+    orb(bx, top + 7, bz, w.i, w.i % 6 === 2)
+  }
+
+  // -------------------------------------------------- band 2: the mid ground
+  //
+  // The volume the course FLIES THROUGH and does not touch: the interior of the
+  // spiral, and the shell just outside it. This was completely empty, which is
+  // why `plunge` — the shot looking straight down the shaft — came back as four
+  // squares on a violet field.
+  //
+  // Everything here hangs 22-60 m BELOW the local route height. A player who
+  // falls passes it; a player on the line never meets it. It is also the depth
+  // §5 wants the mid band at: close enough to hold detail, far enough that the
+  // violet haze has started to take it.
+  const MID = 46
+  for (let i = 0; i < MID; i++) {
+    const t = i / (MID - 1)
+    // Follow the spiral's own opening-out, so the mid ruins sit inside the
+    // course rather than in a cylinder that the course grows out of.
+    const routeR = 32 + t * 106
+    const a = 1.4 + i * 2.399963          // golden angle: never repeats a spoke
+    const rr = routeR * (0.20 + dr() * 0.62)
+    const y = 6 + t * 500 - (24 + dr() * 40)
+    const x = Math.cos(a) * rr, z = Math.sin(a) * rr
+    const sh = 30 + dr() * 26
+    const pick3 = i % 5
+    if (pick3 === 0) {
+      dress(brokenArch, x, y, z, 26, {
+        hi: 13,
+        bays: 2 + (i % 3), span: 9, rise: 5, depth: 2.8, crest: 3.4, detail: 1,
+        axis: dr() > 0.5 ? 'x' : 'z', broken: 0.5, seed: 0xA0 + i,
+      })
+    } else if (pick3 === 1) {
+      dress(ruinSpire, x, y - 18, z, 8, {
+        height: sh, width: 4.0, detail: 1, seed: 0xB0 + i, hi: sh,
+      })
+    } else if (pick3 === 2) {
+      dress(statue, x, y, z, 6, { height: 13 + dr() * 8, detail: 1, seed: 0xC0 + i, hi: 24 })
+    } else if (pick3 === 3) {
+      dress(monolith, x, y, z, 5, { height: 13 + dr() * 9, width: 2.2, detail: 1, seed: 0xD0 + i, hi: 23 })
+    } else {
+      dress(debrisCloud, x, y, z, 24, {
+        lo: -17, hi: 17,
+        count: 22, radius: 22, spreadY: 16, size: 1.1, detail: 0, seed: 0xE0 + i,
+      })
+    }
+    // Chains and orbs go in regardless of what the mass is — they are what
+    // ties the band together and what backs its silhouettes.
+    dress(hangingChain, x + 6, y + 10, z - 4, 4, {
+      lo: -(42), hi: 1,
+      length: 18 + dr() * 22, radius: 0.13, detail: 1, seed: 0xF0 + i,
+    })
+    orb(x - 5, y + 8, z + 5, i, i % 11 === 3)
+    orb(x + 7, y - 9, z - 6, i + 2)
+  }
+
+  // ------------------------------------------------- band 3: the far district
+  //
+  // §5: "far structures washed almost to the fog colour." That only works if
+  // there ARE far structures — §8 names "fog thick enough to hide the fact that
+  // nothing was built behind it" as a specific failure mode, and that is what
+  // the build was doing.
+  //
+  // Four concentric rings of ruin districts, stacked over the whole 508 m of
+  // climb and well below and above it, each ring coarser than the last. At
+  // r >= 190 every one of these is over 78 m from any island, so they are ghost
+  // decor and `Archipelago.verify()` proves it.
+  const RINGS = [
+    { r: 195, count: 13, detail: 1, scale: 1.0 },
+    { r: 290, count: 15, detail: 1, scale: 1.5 },
+    { r: 400, count: 15, detail: 0, scale: 2.1 },
+    { r: 545, count: 13, detail: 0, scale: 3.0 },
+  ]
+  for (const ring of RINGS) {
+    const prev = []
+    for (let i = 0; i < ring.count; i++) {
+      const a = (2 * Math.PI * i) / ring.count + ring.r * 0.017
+      const rr = ring.r * (0.86 + dr() * 0.3)
+      const x = Math.cos(a) * rr, z = Math.sin(a) * rr
+      // Spread over more than the course's own height so the district reads as
+      // going on above and below the climb rather than as a wall around it.
+      const y = -160 + dr() * 820
+      const s = ring.scale
+      const ext = 30 * s
+      dressFar(ziggurat, x, y, z, ext, {
+        width: 22 * s, height: 17 * s, detail: ring.detail, seed: 0x1000 + i * 31,
+      })
+      for (let k = 0; k < 2; k++) {
+        const ox = x + (dr() - 0.5) * 60 * s, oz = z + (dr() - 0.5) * 60 * s
+        const oy = y + (dr() - 0.5) * 70 * s
+        dressFar(ruinSpire, ox, oy, oz, 14 * s, {
+          height: (34 + dr() * 30) * s, width: 4.2 * s, detail: ring.detail,
+          seed: 0x2000 + i * 17 + k,
+        })
+      }
+      dressFar(brokenArch, x + 26 * s, y + 20 * s, z - 18 * s, 26 * s, {
+        bays: 3, span: 9 * s, rise: 5 * s, pierWidth: 2.4 * s, depth: 3 * s,
+        crest: 4 * s, detail: ring.detail, axis: dr() > 0.5 ? 'x' : 'z',
+        broken: 0.5, seed: 0x3000 + i,
+      })
+      dressFar(debrisCloud, x, y + 24 * s, z, 46 * s, {
+        count: ring.detail >= 1 ? 34 : 22, radius: 44 * s, spreadY: 34 * s,
+        size: 1.5 * s, detail: 0, seed: 0x4000 + i,
+      })
+      dressFar(hangingChain, x + 12 * s, y - 6 * s, z + 10 * s, 6 * s, {
+        length: (30 + dr() * 40) * s, radius: 0.3 * s, detail: 1, seed: 0x5000 + i,
+      })
+      // A cracked causeway to the previous district in the ring. This is what
+      // turns a scatter of masses into a CITY: two ruins joined by a broken
+      // bridge read as one place, and the gap in the bridge is the thing that
+      // says the place is dead.
+      if (prev.length && dr() > 0.35) {
+        const p = prev[prev.length - 1]
+        if (Math.hypot(p[0] - x, p[2] - z) < 260 * s) {
+          dressFar(causeway, p[0], p[1] + 8 * s, p[2], 130 * s, {
+            to: [x, y + 12 * s, z], width: 5 * s, thickness: 1.2 * s,
+            detail: ring.detail, seed: 0x6000 + i,
+          })
+        }
+      }
+      prev.push([x, y, z])
+      for (let k = 0; k < 3; k++) {
+        orb(x + (dr() - 0.5) * 90 * s, y + (dr() - 0.5) * 90 * s, z + (dr() - 0.5) * 90 * s,
+          i + k, (i + k) % 13 === 5)
+      }
+    }
+  }
+
+  // ------------------------------------------- band 2b: drift down the axis
+  //
+  // The one part of the shaft the spiral never occupies: its own middle, high
+  // up, where the route has widened to 140 m and the centre line is 100 m from
+  // anything. That is the volume `ascent` looks straight up through and
+  // `plunge` looks straight down through, and it was pure fog.
+  for (let i = 0; i < 34; i++) {
+    const t = i / 33
+    const y = -40 + t * 640
+    const a = i * 2.399963
+    const rr = (12 + dr() * 46) * Math.min(1, 0.25 + t)
+    const x = Math.cos(a) * rr, z = Math.sin(a) * rr
+    dressFar(debrisCloud, x, y, z, 34, {
+      count: 26, radius: 30, spreadY: 26, size: 1.3, detail: 0, seed: 0x7000 + i,
+    })
+    if (i % 3 === 0) {
+      dressFar(ruinSpire, x, y, z, 12, {
+        height: 30 + dr() * 30, width: 4.0, detail: 1, seed: 0x7100 + i,
+      })
+    }
+    for (let k = 0; k < 4; k++) {
+      orb(x + (dr() - 0.5) * 70, y + (dr() - 0.5) * 70, z + (dr() - 0.5) * 70, i + k,
+        (i + k) % 17 === 6)
+    }
+  }
+
+  L.report_dressing = { ghosted, solidified, skipped }
 
   L.group.add(crystals.build())
   // Flushes the glow channel into instanced meshes, and asserts every rune it

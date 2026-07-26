@@ -1,5 +1,89 @@
 # Changelog
 
+## 2026-07-25 — the void gets dense
+
+Ethan, with the build beside the reference image:
+
+> "we are significantly less detailed and have less cool unique additions
+> compared to the reference image and we have less depth and detail in the
+> backdrop as well and less overall objects we have."
+
+Correct. The void had four prefab types (great wall, rune slab, sigil ring,
+monolith) spread over a 508 m shaft, and the `plunge` capture — the shot
+looking straight down the whole climb — was four dark squares on a flat violet
+field. The reference frame has, on top of everything we already had: broken
+arcades, hanging chains, thin spires, carved statuary, stepped ziggurat masses,
+small floating debris at every depth, glowing orbs receding into the haze,
+hanging banners, cracked causeways between masses, and ruin districts stacked
+layer on layer into the fog.
+
+- **Nine new prefabs in `src/voidkit.js`** — `brokenArch`, `ruinSpire`,
+  `ziggurat`, `hangingChain`, `causeway`, `statue`, `banner`, `debrisCloud`,
+  `voidOrb` — exported as `VOID_DRESSING`, deliberately separate from
+  `VOID_PREFABS` so `trackedVoidKit().assertAllPlaced()` stays an invariant
+  about the four load-bearing prefabs rather than a checklist.
+
+- **`brokenArch` is a PIERCED WALL, not a ring of voussoirs**, and the reason
+  is the collision contract. `level.js`'s `rot` channel shrinks a rotated box
+  until it fits back inside its declared AABB, so a voussoir at 45 degrees
+  touches the top of its own collider along one edge and leaves the rest of
+  that face standable with nothing drawn on it — several square metres per
+  arch, times every arch in the level. Sampling the wall in vertical slices,
+  each running from its own floor (the ground, or the elliptical intrados where
+  it crosses an opening) to its own ragged crest, has no rotated boxes in it at
+  all, and every slice's top face IS its own drawn surface at every angle.
+
+- **`levels/void.js` places it in four bands.** Islands get chains off the rim,
+  a satellite ruin hung below, and orbs behind their edges; the great walls —
+  40 m of cornice 32 m over the route, previously carrying nothing but a sigil
+  — get an arcade on top, spires at both ends, statuary on the parapet, banners
+  down the inward face and chains off the outward one; the interior of the
+  spiral gets ruins hung 24-60 m under the flight line; and four concentric
+  rings out to r = 545 carry ziggurat districts joined by broken causeways.
+
+- **Ghost or solid is decided by measurement, never by eye.** Beyond 78 m from
+  every island a piece is drawn with no collider and registered with
+  `Archipelago.sceneryAt`, so `verify()` re-runs the arithmetic and proves the
+  70 m clearance (it reports 79.5 m). Nearer than that it is fully solid. In
+  between there is nothing, and in particular there is no "it is only decor".
+
+- **The keep-out is a VOLUME, not a radius**, and it took a failure to learn.
+  The first cut gated solid dressing on 3D distance to the nearest island and
+  shipped a checkpoint inside a ruin — `assertTriggersClear`: "ascent 2: buried
+  in stone (top 128.53, deck 120.86)". A scalar cannot say that a statue 18 m
+  away and 14 m BELOW a landing is fine while an arcade 18 m away at the
+  landing's own height is a wall across it. It is now a cylinder 5.5 m proud of
+  every island rim, from 4 m under the deck to 9 m over it, and every call site
+  states the prefab's real vertical span.
+
+- **Three separate coverage bugs found and fixed by `tools/coverage.mjs
+  --page ?theme=void`**, which took the void from 0.50 m2 of standable-but-
+  undrawn surface to 152 m2 before they were: a blob is drawn inside its
+  bounding BOX and can never cover that box's four top corners — 21% of the
+  face, at any squash — so statue heads, chain counterweights, debris chips and
+  monolith fragments are all chamfered cuboids now; and a sagging chain
+  declaring one AABB per span left a 0.8 m box with a 10 cm tube through it,
+  fixed by cutting the free-hang drift to 5% of the length so each span's box
+  is under the 0.5 m sampling cell. Back to 9.00 m2 over 12,388 colliders.
+
+- **`runeSlab` gained broken corner posts**, on the diagonal only (the corners
+  of a square sit at 1.41 half-widths, well outside the 82% landing margin) and
+  capped under the 1.45 m mantle, so the worst case is a vault and never a
+  block. They draw from a DEDICATED RNG stream: the first cut inserted four
+  `rand()` calls into the middle of the existing sequence and re-rolled every
+  underside in the level, which is what moved a tier stack into the headroom of
+  the island below it.
+
+- **Cost, measured back to back on the same machine:** draws 83 → 99 (ascent),
+  107 → 125 (plunge); triangles 1.70 M → 2.93 M; frame time +5% to +41%
+  depending on shot. Draw calls barely move because `level.js` merges every box
+  and every `L.mesh()` of one kind into a single geometry, so density costs
+  vertex throughput rather than submissions, and the glow channel instances the
+  orbs by quantised radius (six hundred orbs, seven draws). `bash
+  tools/ship-gate.sh` exits 0, `node tools/reachability.mjs` passes, and the
+  §2 value numbers stay in band.
+
+
 ## 2026-07-25 — the stone is lit from inside
 
 Ethan, with the build beside the reference image: the rock is the right
