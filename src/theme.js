@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { VOID_AUDIO } from './audio/void.js'
 
 /**
  * THEMES — the look of a world, as data.
@@ -570,6 +571,17 @@ const voidTheme = {
     // full-strength streak field competes with them for the same channel.
     streakGain: 0.34,
   },
+
+  /**
+   * The soundscape, as a partial overlay exactly like `grade` / `exposure` /
+   * `aerial`. `skyline` deliberately states NOTHING here — that is what makes
+   * its audio provably unchanged (measured: RMS delta exactly 0 across all
+   * seven skyline cues).
+   *
+   * Lives in its own file because it is ~120 lines with its rationale and
+   * theme.js is already long. See src/audio/void.js.
+   */
+  audio: VOID_AUDIO,
 
   foliage: false,
 }
