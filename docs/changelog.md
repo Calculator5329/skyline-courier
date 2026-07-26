@@ -1,5 +1,68 @@
 # Changelog
 
+## 2026-07-25 — the cuff stops dropping the line the instant it bites
+
+Ethan, playing FUN: *"sometimes I'll hold down F and it'll like attach to the
+grapple thing and then immediately detach, which is annoying."*
+
+**Reproduced first, mechanically.** `tools/grapple-probe.mjs` is new: it drives
+the shipped controller against the shipped collision world on both courses and
+in both modes, puts the player at a spread of legal stand-off distances and
+approach speeds around every anchor the level places, aims squarely at it, holds
+F, and ticks at the fixed step until the line drops. A latch that ends within
+ten fixed steps (0.083 s) is the reported bug.
+
+    BEFORE   skyline/fun     406 / 9786  (4.1%)   skyline/normal  406 / 9786  (4.1%)
+             void/fun        244 / 4173  (5.8%)   void/normal     244 / 4173  (5.8%)
+             every one of them at fire distance 5.2 m, approach 28 m/s
+    AFTER    0 / 27918, on all four combinations
+
+**Root cause.** `grappleMinRange` (5 m, the gate on *aiming*) and
+`grappleArriveDist` (3.2 m, the gate on *releasing*) are two independent
+constants describing the same boundary, so the cuff would happily fire a line
+that was already 64% of the way to its own exit condition. Whether that exit
+fired in the same eyeblink depended only on the closing speed the player
+happened to arrive with — which is why it was intermittent, and why the void
+course hits it 40% more often: its anchors hang at the MIDPOINT of a crossing,
+so the player flies straight at them, fast, from close range.
+
+**Fix — no tuning constant moved.** `grappleArmTime` (0.25 s) already existed
+as the grace before *"I have landed, drop the line"* could fire; the arrival
+test never had it, and that omission is the whole bug. Both "you are done here"
+tests now wait the window out. Inside the arrival radius the line goes **slack**
+— latched for the shot, so a player who sails through the radius at 30 m/s is
+not hauled backwards when they come out the other side — and steering comes
+back, so the grace cannot read as a stutter. Nothing decelerates: `grapplePull`
+is removed, never reversed. Every shot whose flight is longer than the window,
+which is every crossing the course actually authors, is bit-identical: the
+probe's latch counts (9786 / 9786 / 4173 / 4173), median hold (94 / 96 / 62 /
+67 steps) and long-flight counts are unchanged to the unit.
+
+**Every release is now attributable.** Ethan: *"I want to know when and why
+grapples disconnect."* `_releaseGrapple` took a bare `reached` boolean and
+collapsed every cause into one event. It now takes an enumerated reason —
+`arrived`, `letgo`, `expired`, `landed`, `respawn` — which rides out on the
+event alongside `dist`, `fireDist` and `held`, and accumulates in
+`Player.releaseTally`. `Player.lastRelease` carries the most recent one. The
+list is exhaustive over the shipped code; three things people will look for are
+deliberately *not* causes and are named as such in the source: a min-range
+violation (min range gates aiming and has never ended a live line), losing line
+of sight (there is no occlusion test in the cuff at all — it latches through
+geometry by design), and running out of chain (`airChainLeft` also gates aiming
+only). The probe reads the reason off the player rather than inferring it.
+Nothing renders it yet: `src/hud.js` and `src/audio.js` belong to other lanes,
+so the two items are filed in `docs/roadmap.md` instead.
+
+**FUN-only forgiveness: a held F re-acquires.** `grappleHoldRelatch` is base
+behaviour and NORMAL is the overlay that takes it away, which keeps
+`MODES.fun.tuning` provably empty — FUN stays today's tuning by construction,
+with no second copy to drift. Airborne only, and that restriction is not
+timidity: firing off a rooftop while running is the common case and those are
+presses, unaffected, whereas a grounded auto-latch would yank a player off the
+roof they meant to be running along. Verified by the probe rather than by eye —
+FUN fires on 283/283 airborne poses on the skyline and 88/88 on the void with
+no key press at all, NORMAL fires on 0, and both modes fire on 0 grounded.
+
 ## 2026-07-25 — crystal shards: the void theme's light, as geometry
 
 `docs/art-direction-void.md` §4.3 asks for two families of jagged faceted

@@ -282,6 +282,16 @@ minor, and left on purpose rather than missed.
 - [ ] Extend the course past the current opening leg to a full 3–5 minute route.
 - [ ] Best-time persistence per checkpoint split (localStorage).
 - [ ] Register the repo in `workspace.json` (manifest change needs its own lane).
+- [ ] HUD: render the grapple release reason. `Player.lastRelease`
+      (`{reason, arrived, speed, dist, fireDist, held}`) and the cumulative
+      `Player.releaseTally` are populated and shipped; nothing draws them yet.
+      Ethan asked to *see* why a line disconnects, and `src/hud.js` belongs to
+      another lane. Suggested: a one-word tag by the HOOK lamp that persists
+      about a second after release, dimmed for `arrived` (the payoff) and
+      picked out for `expired` / `landed` (the two that cost you the crossing).
+- [ ] Audio: distinguish the release reasons. `src/audio.js` currently maps the
+      whole `grapplerelease` event to one cue; the event now carries `reason`,
+      so an arrival and a line that simply ran out can stop sounding identical.
 - [ ] Add a per-shot regression gate to `tools/shotset.mjs` — assert p1, clipped
       high/low and `regionSpread` against per-shot budgets so a grade change
       that lifts the blacks again fails the harness instead of shipping. The
