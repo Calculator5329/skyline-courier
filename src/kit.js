@@ -1245,7 +1245,21 @@ export function drumPlatform(L, x, y, z, opts = {}) {
   // the review measured a frame of architecture at 100% bare stone. An island
   // gets three layers of it: a scattered deck, ivy over the rim, and — where
   // the player will actually stand next to it — two hero vines as real tubes.
-  if (detail >= 1) {
+  //
+  // PLANTS GROW ON TURF, NOT ON A SWEPT MARBLE FLOOR. Ethan, playing: "can we
+  // remove foliage from the marble floors and just keep it on the green
+  // floors". The deck scatter used to run on every island regardless of what
+  // its cap was made of, so the BUILT islands — porcelain, the formal paved
+  // ones — came up with grass and ferns sprouting out of polished stone. That
+  // reads as neglect on a ruin and as a mistake on a swept terrace, and the
+  // terrace is the first thing anyone sees.
+  //
+  // The rim ivy below is deliberately NOT gated on this: it hangs off the
+  // outside of the stone lip rather than growing out of the floor, which is
+  // exactly what ivy does to a real balustrade, and it is most of what keeps a
+  // built island from reading as bare architecture.
+  const turfCap = capKind === 'moss'
+  if (detail >= 1 && turfCap) {
     const rects = discRects(radius, facets, squash, shape)
     scatterDisc(L, x, y + 0.02, z, rects, squash, rand, {
       // Scenery is backdrop: capped hard, because sixteen near-band islands at

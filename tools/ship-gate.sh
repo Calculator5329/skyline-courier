@@ -49,5 +49,21 @@ LOWLUM=$(echo "$SHOTS" | awk '/^(terrace|gaps|crossing|underpass|chain|tower|vis
 }' | head -3)
 [ -n "$LOWLUM" ] && fail "shots too dark (likely exposure regression): $LOWLUM"
 
-echo "GATE: OK — build green, all shots render, luminance sane"
+# 4. Floor coverage: no collider the player stands on may be missing the
+#    surface that is supposed to be drawn above it. Three separate bugs in one
+#    session had exactly this shape, and NOTHING else in this gate could see
+#    them — winding.mjs passed, backface.mjs passed, and every shot rendered a
+#    perfectly plausible frame. Absent geometry is not backfacing geometry.
+#
+#    RATCHET, not a target. 158.5 m2 is the measured debt on the day this was
+#    added — nearly all of it stepped dome and cornice roofs where a lathe
+#    shell sits over a faceted box collider, up at y 33-98 where no player
+#    stands. The number may go DOWN freely; it may never go up. Lower it as
+#    the remaining offenders are fixed. It is not allowed to grow because
+#    something new was shipped hollow.
+COVER=$(timeout 260 node tools/coverage.mjs --no-build --max-area 159 2>&1)
+echo "$COVER" | tail -3
+echo "$COVER" | grep -q "^FAIL" && fail "floor coverage regressed — a standable collider has no drawn surface above it"
+
+echo "GATE: OK — build green, all shots render, luminance sane, floors covered"
 exit 0
