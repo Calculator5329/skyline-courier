@@ -204,7 +204,27 @@ const BASE_TUNING = {
   grappleReleaseBoost: 1.14,
   grappleCooldown: 0.7,
   grappleArriveDist: 3.2,
-  // Grace before "I have landed, drop the line" can fire.
+  // Grace before a release can fire — for BOTH of the two "you are done here"
+  // tests, the landing one and the arrival one.
+  //
+  // Landing is the case it was written for (see below). Arrival is the case it
+  // was missing, and that omission is Ethan's bug: "sometimes I'll hold down F
+  // and it'll like attach to the grapple thing and then immediately detach."
+  // `grappleMinRange` (5) and `grappleArriveDist` (3.2) are two independent
+  // constants describing the same boundary, so the cuff will happily fire a
+  // line that is already 64% of the way to its own exit condition — and whether
+  // that exit fires in the same eyeblink depends only on the closing speed the
+  // player happened to arrive with. Measured on the shipped build: 4.1% of
+  // latches on the skyline course and 5.8% on the void ended within 0.083 s,
+  // every single one of them on the arrival test (tools/grapple-probe.mjs).
+  //
+  // So a latch is now never shorter than this window. Inside the arrival radius
+  // the line goes SLACK rather than continuing to pull — holding a player at
+  // the anchor by reversing the pull would scrub speed they never asked to lose,
+  // which is the one thing this controller may not do. Any shot whose flight is
+  // longer than the window (which is every shot the course actually authors)
+  // is bit-identical to before, because the window has already run out by the
+  // time the anchor arrives.
   //
   // The overwhelmingly common way to use the cuff is to fire it while running
   // along a roof — and the release test includes `this.grounded`, so the shot
@@ -228,6 +248,25 @@ const BASE_TUNING = {
   // unlimited chain this is the second half of free flight — every hook hands
   // back every other airborne verb, so the player never runs out of anything.
   grappleRefreshCharges: 1,
+  // May a HELD F re-acquire, or must every shot be a fresh key press?
+  //
+  // Ethan: "maybe make it more forgiving only in FUN mode", and (docs/intent.md)
+  // when in doubt in FUN, keep the player in the air. Holding a grapple button
+  // means "grapple" continuously; requiring a re-press means that after any drop
+  // the player is holding a dead key and does not know it, which is the same
+  // class of complaint as the insta-detach itself.
+  //
+  // Airborne only, and that restriction is not timidity. Firing off a rooftop
+  // while running is the overwhelmingly common use of the cuff (see
+  // `grappleArmTime`), and those are presses, which are unaffected. A GROUNDED
+  // auto-latch would instead yank a player off the roof they were deliberately
+  // running along every time they looked at a lantern with the key still down.
+  //
+  // This lives in the base table, not in a FUN overlay, so `MODES.fun.tuning`
+  // stays provably empty — FUN is today's tuning by construction and there is
+  // no second copy of it to drift. NORMAL is the overlay that takes it away,
+  // which is the same shape as every other difference between the modes.
+  grappleHoldRelatch: 1,
 
   maxSpeed: 34,
 }
@@ -248,8 +287,9 @@ const BASE_TUNING = {
  * must still be arrived at.
  *
  * What NORMAL takes away is *repetition*. One hook per launch, no free charges
- * back, real gravity through the pull, no exit multiplier, and a cooldown long
- * enough that you cannot simply turn round and re-hook what you just left. The
+ * back, real gravity through the pull, no exit multiplier, no re-acquiring on a
+ * held key, and a cooldown long enough that you cannot simply turn round and
+ * re-hook what you just left. The
  * cuff crosses the gap the designer built it for and then puts you back on your
  * feet — which is the difference between a traversal tool and a flight system.
  * No verb is removed in either mode.
@@ -263,6 +303,10 @@ export const MODES = {
       grappleRefreshCharges: 0,
       grappleReleaseBoost: 1.0,
       grappleCooldown: 1.4,
+      // Every shot is a decision you make with your finger. See
+      // `grappleHoldRelatch`: the forgiveness is base behaviour and this is the
+      // overlay that removes it, so FUN needs no overlay of its own.
+      grappleHoldRelatch: 0,
     },
   },
   fun: {
@@ -335,6 +379,44 @@ export class Player {
     this.grappleArm = 0
     this.grappleCooldown = 0
     this.grappleAnchor = new THREE.Vector3()
+    /**
+     * The line has delivered you and is no longer pulling.
+     *
+     * Latched the first time this shot comes inside `grappleArriveDist`, and
+     * cleared only on release. A slack line neither pulls nor pushes: the
+     * alternative — leaving the pull on once you are past the anchor —
+     * decelerates a player who never asked to slow down.
+     */
+    this.grappleSlack = false
+    /** How far the shot was when it bit, and how long it has been live. */
+    this.grappleFireDist = 0
+    this.grappleHeldTime = 0
+    /**
+     * Why the line last came off, and every reason so far this session.
+     *
+     * Ethan: "I want to know when and why grapples disconnect." Every release
+     * used to collapse into one undifferentiated `grapplerelease` event, so the
+     * only way to answer that question was to guess. The reasons are exhaustive
+     * over the shipped code — there is no fifth way for a live line to end:
+     *
+     *   arrived  inside `grappleArriveDist` once the arm window has run out.
+     *            This is the payoff release, and the only one that pays the
+     *            exit boost.
+     *   letgo    the player released F.
+     *   expired  `grappleMaxTime` ran out with the anchor still ahead.
+     *   landed   back on the ground after the arm window — the cuff has put
+     *            you on your feet.
+     *   respawn  the body was teleported out from under the line.
+     *
+     * Deliberately NOT causes, and worth naming so nobody hunts for them: a
+     * min-range violation (min range gates *aiming*, it has never ended a live
+     * line), losing line of sight (there is no occlusion test anywhere in the
+     * cuff — it latches through geometry by design), running out of chain
+     * (`airChainLeft` also gates aiming only), and a mode switch (that resets
+     * the run, so it arrives here as `respawn`).
+     */
+    this.lastRelease = null
+    this.releaseTally = { arrived: 0, letgo: 0, expired: 0, landed: 0, respawn: 0 }
     /**
      * Hooks left before the courier has to touch ground or wall again.
      *
@@ -475,7 +557,7 @@ export class Player {
     // and you reappeared at the checkpoint still on the line, and were promptly
     // yanked back toward the anchor you had just died under. Cheap to clear,
     // and the alternative is a bug that only shows up on the worst run.
-    this.grappling = false
+    this._releaseGrapple('respawn')
     this.grappleTimer = 0
     this.grappleArm = 0
     this.dashTimer = 0
@@ -683,7 +765,23 @@ export class Player {
       // a mode decision (`grappleGravity`): near-zero is flight, most of it is
       // a swing you have to aim.
       vel.y -= T.gravity * T.grappleGravity * dt
-      vel.addScaledVector(this._toAnchor, T.grapplePull * dt)
+      if (!this.grappleSlack) {
+        vel.addScaledVector(this._toAnchor, T.grapplePull * dt)
+        return
+      }
+      // Slack (see `grappleSlack`): no pull, but steering comes back. Freezing
+      // the view-to-velocity link for the rest of the grace window would turn
+      // the fix for one stutter into a different one, and the exit from a hook
+      // is exactly where a player is aiming hardest.
+      if (wishing) {
+        accelerate(vel, this._wish, T.airWishSpeed, T.airAccel, dt)
+        const sp = Math.hypot(vel.x, vel.z)
+        const scale = Math.max(
+          T.airSteerMinScale,
+          Math.min(1, T.sprintSpeed / Math.max(sp, 1)),
+        )
+        steerHorizontal(vel, this._wish, T.airSteerRate * scale, dt)
+      }
       return
     }
 
@@ -789,19 +887,34 @@ export class Player {
     if (this.grappling) {
       this.grappleTimer -= dt
       this.grappleArm = Math.max(0, this.grappleArm - dt)
-      const reached = this.position.distanceTo(this.grappleAnchor) < T.grappleArriveDist
-      // Release on: letting go, running out of line, arriving, or landing.
-      // The landing test only counts once the line has had `grappleArmTime` to
-      // pull the courier off their feet — otherwise firing from a rooftop, the
-      // normal case, cancelled itself on the next frame.
+      this.grappleHeldTime += dt
+      const dist = this.position.distanceTo(this.grappleAnchor)
+      // Reaching the arrival radius makes the line slack, permanently for this
+      // shot. Latched rather than re-tested every step on purpose: a player who
+      // sails through the radius at 30 m/s is OUT of it again a step later, and
+      // a pull that switched back on there would be hauling them backwards —
+      // deceleration nobody asked for, which is the one thing forbidden here.
+      if (dist < T.grappleArriveDist) this.grappleSlack = true
+      const arrived = this.grappleSlack
+
+      // Release on: arriving, letting go, running out of line, or landing.
+      // Both of the "you are done here" tests wait out `grappleArmTime`; see
+      // the note on that constant for why each of them needs it.
       const landed = this.grounded && this.grappleArm <= 0
-      if (!input.grappleHeld || this.grappleTimer <= 0 || reached || landed) {
-        this._releaseGrapple(reached)
-      }
-    } else if (input.grapplePressed && this.aimedAnchor) {
+      let reason = null
+      if (arrived && this.grappleArm <= 0) reason = 'arrived'
+      else if (!input.grappleHeld) reason = 'letgo'
+      else if (this.grappleTimer <= 0) reason = 'expired'
+      else if (landed) reason = 'landed'
+      if (reason) this._releaseGrapple(reason, dist, arrived)
+    } else if (this.aimedAnchor && (input.grapplePressed ||
+               (T.grappleHoldRelatch && input.grappleHeld && !this.grounded))) {
       this.grappling = true
+      this.grappleSlack = false
       this.grappleTimer = T.grappleMaxTime
       this.grappleArm = T.grappleArmTime
+      this.grappleHeldTime = 0
+      this.grappleFireDist = this.position.distanceTo(this.aimedAnchor)
       this.grappleAnchor.copy(this.aimedAnchor)
       this.grappleCooldown = T.grappleCooldown
       // Spend a link of the chain. In FUN this is Infinity and stays Infinity.
@@ -1314,18 +1427,37 @@ export class Player {
    * Releasing multiplies speed rather than adding to it, so a fast approach
    * is rewarded proportionally — the grapple amplifies a good line instead of
    * normalising every arrival to the same exit velocity.
+   *
+   * `reason` is one of the five enumerated on `lastRelease`, and it rides out
+   * on the event so that "when and why do grapples disconnect" is answerable
+   * from a tally rather than from a guess. `arrived` is carried separately
+   * because it decides the PAYOUT, not the cause: letting go of F on the last
+   * metre still counts as an arrival and still pays the boost, exactly as it
+   * did before the reasons existed.
    */
-  _releaseGrapple(reached) {
+  _releaseGrapple(reason, dist = 0, arrived = false) {
     if (!this.grappling) return
     this.grappling = false
+    this.grappleSlack = false
     this.grappleTimer = 0
-    if (reached) {
+    if (arrived) {
       this.velocity.multiplyScalar(TUNING.grappleReleaseBoost)
       // A little lift on arrival so you clear the anchor you just flew at
       // instead of clipping its underside.
       this.velocity.y = Math.max(this.velocity.y, 3.2)
     }
-    this.events.push({ type: 'grapplerelease', speed: this.speed })
+    this.releaseTally[reason] = (this.releaseTally[reason] || 0) + 1
+    const info = {
+      type: 'grapplerelease',
+      reason,
+      arrived,
+      speed: this.speed,
+      dist,                                // metres to the anchor at release
+      fireDist: this.grappleFireDist,      // metres to it when the line bit
+      held: this.grappleHeldTime,          // seconds the line was live
+    }
+    this.lastRelease = info
+    this.events.push(info)
   }
 
   _detachWall() {
