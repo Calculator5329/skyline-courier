@@ -1,5 +1,118 @@
 # Changelog
 
+## 2026-07-25 — the void gets its own ears
+
+Ethan, playing the void: **"Audio feels wrong in the void."** He is right, and
+the reason is structural rather than a mix problem. Every sound in this game was
+authored for a warm, sunlit archipelago — a wind bed, brass-flavoured impacts,
+footsteps on porous sandstone and turf, a small dry room modelled on the
+underpass bay. Play that over a silent near-black cavern of floating ruins and
+it is not a level with bad audio, it is the wrong game's audio.
+
+So the audio half of a theme is now DATA, exactly like the light half:
+`AUDIO_DEFAULTS` in `src/audio.js` holds the shipped skyline verbatim,
+`VOID_AUDIO` in the new `src/audio/void.js` is the overlay, and a theme states
+only what it changes. **The skyline renders bit-for-bit identically** — see the
+receipt at the bottom of this entry.
+
+- **The footsteps were the biggest thing wrong, and not for the reason it
+  looked like.** `theme.js` names `voidrock` and `voidcarved` in its
+  `surfaces.kinds` block, so it was natural to assume the audio just lacked
+  profiles for them. It lacked something worse: `Level.solid()` tags a collider
+  with the CALLER's kind, and `voidkit.js` emits every ruin as `'stone'`, so
+  those two names never reached `src/audio.js` at all and never would have.
+  `_profileFor` now resolves a tag through the theme's own alias map first —
+  the same table `materials.js` resolves its painters through, which is what
+  makes the material you hear provably the material you see. Then the two
+  profiles: void rock is dead, dark and gritty (texture band at 780 Hz against
+  sandstone's 1250, the lowest body in the table, no ring at all, the most
+  debris); void carved stone is a dressed face with a quasi-harmonic ring
+  (1 : 2 : 3.01 : 5.02, a struck glass rod) instead of brass's circular-plate
+  series. Measured: a void footstep's spectral centroid is **910 Hz against the
+  archipelago's 1565**.
+- **The room is a shaft, not a bay.** `makeImpulseResponse` now takes its
+  shoebox from the theme. The skyline keeps the 9 x 5.5 x 15 m underpass;
+  the void gets 44 x 120 x 44 m of unweathered rock at 0.88 reflection. The
+  number that does the work is the HEIGHT — at 5.5 m the first ceiling
+  reflection lands 30 ms after the direct sound, at 120 m it lands 700 ms after
+  it, and early-reflection pattern is what the ear sizes a space with. Measured
+  RT60 (Schroeder T20, off the convolver's own buffer): **4.11 s against 1.52**.
+  The wet floor goes 0.05 -> 0.30, because in the void "nothing around you"
+  means the middle of a cavern rather than outdoors.
+- **A sub-bass drone replaces the wind bed.** Wind is weather and weather needs
+  sky; a cavern has air pressure. 24.5 Hz with a stack of fifths and octaves
+  over it (no third, so it cannot fight the music), lowpassed, with breath
+  noise under it and two mutually-prime LFOs on the cutoff so it never settles
+  into a period. **99.9% of its energy is below 300 Hz, 92.8% below 80.** The
+  archipelago's wind is not deleted, only cut to a tenth and moved an octave
+  down: falling 100 m past a rock face still moves air, and that rush is the
+  only continuous cue that scales with speed.
+- **Height is audible, because the course climbs 250 m through the shaft.** The
+  drone is loudest and darkest at the floor and thins as you climb; a narrow
+  6 kHz shimmer, gated by `pow(height, 1.8)` so it is genuinely absent in the
+  lower half, opens as you rise. The two cross over mid-course, so the spectral
+  TILT of the bed is the altimeter. Floor to ceiling: **rms 0.025 -> 0.016,
+  centroid 490 Hz -> 4645**. A fast fall swells the bed 55%, because a
+  bottomless drop is the one thing this level can kill you with.
+- **The energy beams hum.** `fx/voidfx.js` calls them level design —
+  "unmissable vertical landmarks in a course whose whole problem is that the
+  player must read height" — but only while they are in frame. Two sawtooths
+  1.6 Hz apart (one is a test tone; two beat) with a band-passed corona over
+  them, placed at `voidBeamSites()` rather than at a second set of coordinates
+  that could drift. Distance is measured to the column's axis, not to a point.
+  Beside one vs 900 m from every one: **3.78x in the 80-300 Hz band**.
+- **The rune answers a boot.** `levels/void.js` puts a glowing inlay on every
+  landing and calls it "the ONLY such channel a near-black level has" for
+  saying you may stand here — which fails exactly when the player is not
+  looking at their feet, i.e. during every 30 m grapple crossing. A landing now
+  rings the inlay: quiet, high, cycled through three notes so 22 of them are
+  not a jingle, on the UI bus beside the checkpoint bell. A void landing
+  carries **6.9% of its energy above 2 kHz against the archipelago's 1.5%**.
+  The bells themselves went crystal too — same quasi-harmonic ratios, up a
+  fifth. There is no brass in this world.
+- **`tools/voidaudio.mjs` (new) — the receipt.** Audio has no visible output,
+  which is exactly why it is easy to get wrong and believe otherwise:
+  `Audio.update` swallows its own exceptions by design, so no console error is
+  evidence of nothing, and a node-graph inspection cannot tell a connected node
+  from an audible one. So this RENDERS. `Audio.init` takes an optional context,
+  the probe hands it an `OfflineAudioContext`, drives the shipped engine into
+  named game states with the real player in the real collision world, and
+  measures the samples: RMS, peak, spectral centroid, four band energies, and
+  RT60 by Schroeder backward integration. **19 assertions**, every one a number
+  that came out of a renderer.
+
+  It earned its keep immediately. The drone's summing node shipped its first
+  version at a gain of 0.0001 — copy-pasted from the output stage — which is a
+  bed 80 dB down: inaudible, and invisible to every check except a render.
+  Then, once it was audible, the probe caught the drone peaking at 0.21, above
+  the -18 dBFS safety compressor in `audio.js`, which would have turned a
+  device that is meant to see signal only when cues stack into a permanently
+  engaged one. Both are now guarded assertions.
+
+- **SKYLINE DID NOT REGRESS, and this is the measurement rather than the
+  claim.** A detached worktree at `07d5a47` with two lines added to `init()`,
+  built and rendered against the same seven-cue skyline sequence:
+
+  | cue | rms before | rms after | Δ |
+  |---|---|---|---|
+  | step | 0.00094796 | 0.00094796 | 0 |
+  | land | 0.01840182 | 0.01840182 | 0 |
+  | walljump | 0.00431326 | 0.00431326 | 0 |
+  | checkpoint | 0.01260696 | 0.01260696 | 0 |
+  | finish | 0.03545635 | 0.03545635 | 0 |
+  | sequence | 0.01643755 | 0.01643755 | 0 |
+  | wind at speed | 0.06898946 | 0.06898946 | 0 |
+
+  Peak agrees to 7 decimal places; the residual (<= 9e-8) is at or below the
+  run-to-run floor, established by rendering the SAME tree twice and getting
+  differences of the same magnitude — Chromium's convolver and compressor are
+  not bit-reproducible. Getting to zero took one real correction: deriving the
+  reverb's two INITIAL param values from the config instead of leaving them as
+  the shipped literals moved every skyline render by 0.2%, because
+  `setTargetAtTime` starts from wherever the param is and a different starting
+  point is a different trajectory. Inaudible, and not worth being unable to say
+  the number is zero.
+
 ## 2026-07-25 — the void gets a background, and its beams get cut to six
 
 Two notes from Ethan with the build beside the reference image, answered

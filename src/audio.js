@@ -56,6 +56,13 @@
 // climb running out cannot drift away from a climb actually running out.
 // Read-only; nothing in this file touches the player.
 import { TUNING } from './player.js'
+// A theme decides what this world sounds like, the same way it decides what it
+// looks like — see `AUDIO_DEFAULTS` below and `src/audio/void.js`. Read-only.
+import { getTheme } from './theme.js'
+import { VOID_AUDIO, VoidAmbience } from './audio/void.js'
+// The energy beams are already placed in the world; the hum stands where they
+// stand rather than at a second set of coordinates that could drift from them.
+import { voidBeamSites } from './fx/voidfx.js'
 
 // ---------------------------------------------------------------- constants
 
@@ -98,6 +105,47 @@ const BUSES = {
   air:    { trim: 0.80, send: 0.22 },   // dash, cape, line whip — mostly dry
   ui:     { trim: 0.90, send: 0.85 },   // checkpoint / finish bells
   amb:    { trim: 0.90, send: 0.00 },   // wind, wall scrape, gear whir
+}
+
+/**
+ * THE AUDIO HALF OF A THEME — the shipped skyline, as data.
+ *
+ * Every number here was LIFTED VERBATIM from where it was hardcoded a few lines
+ * further down this file, for the same reason `src/theme.js` says it about the
+ * skyline's light: selecting the default theme must produce a soundscape
+ * identical to the one before this table existed. If it does not, that is a bug
+ * in this refactor and not a new artistic decision.
+ *
+ * A theme states only what it CHANGES (`getTheme().audio`), exactly like
+ * `grade`, `exposure` and `aerial` in theme.js — the merge is per-block and
+ * per-key, so an overlay that names three numbers gets the other forty from
+ * here. `src/audio/void.js` exports the void's overlay and documents every
+ * departure from these values against the thing it is trying to make audible.
+ *
+ * The four blocks that are `null` here are ADDITIVE LAYERS, not settings: a
+ * theme that does not name them does not construct them, so the archipelago
+ * pays nothing at all for the void's drone, shimmer, beam hum and rune chime.
+ */
+const AUDIO_DEFAULTS = {
+  // The underpass bay — see `makeImpulseResponse`, which is the only consumer.
+  room: { width: 9.0, height: 5.5, depth: 15.0, reflect: 0.62, rtLow: 1.7, rtHigh: 0.42, duration: 1.9 },
+  // Wet floor + enclosure range, and the lowpass on the return.
+  verb: { floor: 0.05, range: 0.45, toneBase: 2200, toneRange: 5200 },
+  // The speed-driven air bed: peak levels, the airborne bonus, and the sweep
+  // range of the low band's cutoff.
+  wind: { bed: 0.15, sizzle: 0.035, airborne: 0.012, lowHz: 380, spanHz: 1900 },
+  // Additive continuous layers. Absent = never built.
+  drone: null, shimmer: null, beam: null,
+  // Additive one-shot layer, on landings.
+  rune: null,
+  // `ratios: null` = the circular-plate series in `_ring`, i.e. brass.
+  bells: {
+    ratios: null,
+    checkpointHz: 520, checkpointDur: 1.1,
+    finish: [520, 660, 784], finishDur: 2.0, finishSubHz: 130,
+  },
+  // Per-bus overrides over the BUSES table above. null = use it unchanged.
+  buses: null,
 }
 
 /**
@@ -161,6 +209,63 @@ const SURFACES = {
     texHz: 620, texQ: 0.70, texGain: 0.80, texDecay: 0.075,
     ring: 0, ringHz: 0, damp: 0.72, debris: 0,
   },
+
+  // ------------------------------------------------------------- the void
+  //
+  // Two profiles for the two surfaces `src/theme.js` names in its void
+  // `surfaces.kinds` block. They are reached the same way the void's MATERIALS
+  // are — the theme's alias map, applied in `_profileFor` — so a `stone`
+  // collider in the void course sounds like void rock without one line of
+  // `levels/void.js` or `voidkit.js` knowing that this file exists.
+  //
+  // Both are the OPPOSITE of the archipelago's palette in the one dimension
+  // that matters. Sandstone is porous, warm and bright-edged, because it is
+  // weathered and sunlit. Void rock is dense, cold, unweathered stone in a
+  // cavern: darker in the texture band by nearly an octave, a lower and longer
+  // body, and no ring at all. A boot on it should sound like a boot on
+  // something that has never been outside.
+
+  voidrock: {
+    // Blunt contact. Sandstone's 2900 Hz edge is grit and crust catching a
+    // boot; unweathered rock has neither, so the transient is low, soft and a
+    // little slower — the leading edge of a THUD rather than of a crack.
+    tType: 'highpass', tFreq: 2000, tGain: 0.60, tDecay: 0.021,
+    // The lowest body in the table. This mass has no cavity behind it: it is
+    // rock all the way in, and it answers a footfall at the bottom of its
+    // range and holds there.
+    bodyHz: 62, bodyTo: 0.55, bodyDur: 0.098,
+    // 780 Hz, against sandstone's 1250. This one number is most of the
+    // difference — the texture band is where the ear reads "what am I standing
+    // on", and moving it down this far is what stops the void sounding like a
+    // sunlit terrace in a dark room. Q stays low: coarse rock is broadband.
+    texHz: 780, texQ: 0.85, texGain: 1.05, texDecay: 0.064,
+    // No ring, ever. §3 of art-direction-void.md keeps this world's brightness
+    // in the emissives; a resonant rock face would put it in the mass.
+    ring: 0, ringHz: 0, ringRatios: null,
+    damp: 0.94,
+    // The most debris in the table. These are RUINS — a hard landing on a
+    // fractured slab throws grit, and it is the one place the void's surfaces
+    // are livelier than the archipelago's.
+    debris: 1.30,
+  },
+
+  voidcarved: {
+    // Dressed stone: a worked face has an arris and an arris has an edge, so
+    // the transient comes back up. Still under the archipelago's porcelain —
+    // this is carved rock, not glazed tile.
+    tType: 'highpass', tFreq: 3500, tGain: 0.76, tDecay: 0.015,
+    bodyHz: 74, bodyTo: 0.58, bodyDur: 0.080,
+    // Above voidrock and below sandstone, tighter Q: a flat cut face rings a
+    // narrower band than a fractured one.
+    texHz: 1080, texQ: 1.45, texGain: 0.92, texDecay: 0.048,
+    // A ring, and it is CRYSTAL rather than metal. `ringRatios` overrides the
+    // circular-plate series in `_ring`; 1 : 2 : 3.01 : 5.02 is quasi-harmonic,
+    // which is a struck glass rod. That is the sigil-fire and rune inlay of
+    // this world answering, and it is deliberately a different family of sound
+    // from brass so the two levels cannot be confused with eyes closed.
+    ring: 0.34, ringHz: 1560, ringRatios: [1, 2.0, 3.01, 5.02],
+    damp: 0.98, debris: 0.70,
+  },
 }
 
 /**
@@ -169,6 +274,10 @@ const SURFACES = {
  * must degrade to something plausible rather than to silence or a throw.
  */
 const SURFACE_ALIASES = [
+  // FIRST, because `voidrock` contains "rock" and `voidcarved` contains
+  // nothing else in this table — a void tag must never fall through to the
+  // archipelago's palette on a substring accident.
+  ['voidcarved', 'voidcarved'], ['voidrock', 'voidrock'], ['void', 'voidrock'],
   ['moss', 'moss'], ['grass', 'moss'], ['vine', 'moss'], ['leaf', 'moss'],
   ['brass', 'brass'], ['metal', 'brass'], ['copper', 'brass'], ['gear', 'brass'],
   ['bronze', 'brass'],
@@ -273,6 +382,9 @@ export class Audio {
     this._rr = {
       step: 0, land: 0, walljump: 0, vault: 0,
       dash: 0, grapple: 0, airjump: 0, wallrun: 0,
+      // The void's rune chime. Absent here and `_next` returns NaN, which
+      // indexes nothing and silently drops the cue.
+      rune: 0,
     }
 
     // Deterministic jitter source. Seeded so that a given sequence of events
@@ -317,20 +429,44 @@ export class Audio {
     this._voiceWindow = -1
     this._voiceCount = 0
     this._tagCache = null
+
+    /** Resolved theme audio config. Set by `init`; see `AUDIO_DEFAULTS`. */
+    this.cfg = AUDIO_DEFAULTS
+    /** The theme's surface alias map, so the material you hear is the one you
+     *  see. Same table `materials.js` resolves its painters through. */
+    this._kinds = null
+    /** The void's continuous layers, or null. See `src/audio/void.js`. */
+    this._voidAmb = null
   }
 
-  /** Must be called from a real user gesture or the context stays suspended. */
-  init() {
+  /**
+   * Must be called from a real user gesture or the context stays suspended.
+   *
+   * Both arguments exist for the verification harness and are never passed in
+   * play. Audio has no visible output, so the only honest way to check a change
+   * is to RENDER it — `tools/voidaudio.mjs` hands this an OfflineAudioContext
+   * and a theme, renders the graph to samples, and measures them. A test that
+   * can only inspect a node graph cannot tell a connected node from an audible
+   * one, and this file has been wrong in exactly that way before.
+   *
+   * @param {BaseAudioContext} [ctxOverride]
+   * @param {object} [themeOverride]
+   */
+  init(ctxOverride, themeOverride) {
     try {
       if (this.ctx) {
         if (this.ctx.state === 'suspended') this.ctx.resume()
         return
       }
-      const Ctx = window.AudioContext || window.webkitAudioContext
-      if (!Ctx) return
-      const ctx = new Ctx()
+      let ctx = ctxOverride
+      if (!ctx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext
+        if (!Ctx) return
+        ctx = new Ctx()
+      }
       this.ctx = ctx
       this._tagCache = new Map()
+      this._resolveTheme(themeOverride)
 
       // --- master chain ---------------------------------------------------
       // 0.55 leaves ~5 dB of headroom before the compressor does any work at
@@ -363,6 +499,7 @@ export class Audio {
       this._buildWind()
       this._buildScrape()
       this._buildGearbox()
+      this._buildVoid()
       this.ready = true
     } catch (err) {
       // Callers do not check, and a missing AudioContext must never take the
@@ -370,6 +507,67 @@ export class Audio {
       // out of a pointer-lock click handler is not.
       this.ready = false
     }
+  }
+
+  /**
+   * Merge the active theme's audio overlay over the shipped defaults.
+   *
+   * Per-block and per-key, so an overlay that names three numbers gets the rest
+   * from `AUDIO_DEFAULTS` — the same partial-overlay contract `theme.js` uses
+   * for `grade`, `exposure` and `aerial`, and the reason skyline can name
+   * nothing and be bit-identical.
+   *
+   * THE `VOID_AUDIO` FALLBACK IS A BRIDGE, not the design. The overlay belongs
+   * in `theme.js` beside the light and the surfaces, but that file is another
+   * lane's; until `audio: VOID_AUDIO` is wired there, a theme that calls itself
+   * the void gets the void's soundscape from here so the level is not shipped
+   * with the archipelago's. Wiring it makes this branch dead and changes
+   * nothing audible — `theme.audio` is preferred whenever it exists.
+   */
+  _resolveTheme(themeOverride) {
+    let theme = themeOverride
+    if (!theme) {
+      try { theme = getTheme() } catch { theme = null }
+    }
+    this._theme = theme || null
+    const kinds = theme && theme.surfaces && theme.surfaces.kinds
+    this._kinds = kinds || null
+
+    let overlay = (theme && theme.audio) || null
+    if (!overlay && theme && theme.name === 'void') overlay = VOID_AUDIO
+
+    const D = AUDIO_DEFAULTS
+    if (!overlay) { this.cfg = D; return }
+    const block = (key) => {
+      const o = overlay[key]
+      if (o === undefined) return D[key]
+      if (o === null || D[key] == null) return o
+      return { ...D[key], ...o }
+    }
+    this.cfg = {
+      room: block('room'), verb: block('verb'), wind: block('wind'),
+      drone: block('drone'), shimmer: block('shimmer'), beam: block('beam'),
+      rune: block('rune'), bells: block('bells'), buses: block('buses'),
+    }
+  }
+
+  /**
+   * The void's continuous layers. Built only for a theme that names them, so
+   * the archipelago allocates not one extra node.
+   */
+  _buildVoid() {
+    const c = this.cfg
+    if (!c.drone && !c.shimmer && !c.beam) return
+    let sites = []
+    // The beam hum is only built if the theme actually draws beams — a hum
+    // coming off a landmark that is not in the frame would be worse than
+    // silence, and `theme.beams` is already the flag that decides.
+    try {
+      if (c.beam && this._theme && this._theme.beams) sites = voidBeamSites()
+    } catch { sites = [] }
+    this._voidAmb = new VoidAmbience(
+      this.ctx, c, this._ambDuck, this._noise, this._rand.bind(this), sites,
+    )
   }
 
   // ------------------------------------------------------------------ graph
@@ -384,8 +582,12 @@ export class Audio {
   _buildBuses() {
     const ctx = this.ctx
     this._buses = {}
+    // A theme may retune the sends: in a cavern the footfalls and the air are
+    // IN the room, and hearing them dry is what makes a big space collapse to
+    // a corridor. `null` (the default) leaves the shipped table untouched.
+    const over = this.cfg.buses
     for (const name in BUSES) {
-      const spec = BUSES[name]
+      const spec = over && over[name] ? { ...BUSES[name], ...over[name] } : BUSES[name]
       const g = ctx.createGain()
       g.gain.value = spec.trim
       g.connect(this.master)
@@ -423,13 +625,26 @@ export class Audio {
     this._verbIn.gain.value = 1
 
     const conv = ctx.createConvolver()
-    conv.buffer = makeImpulseResponse(ctx, this._rand.bind(this))
+    // The room is a theme decision — the underpass bay for the archipelago, a
+    // hundred-metre shaft for the void. Same generator, different shoebox.
+    conv.buffer = makeImpulseResponse(ctx, this._rand.bind(this), this.cfg.room)
+    // Kept only so `tools/voidaudio.mjs` can measure the room's actual RT60 off
+    // the samples rather than trusting the constants that asked for it.
+    this._conv = conv
 
     // Post-convolution tone control, driven by enclosure. Close hard surfaces
     // return bright early energy; a diffuse open-sky wash should be darker and
     // vaguer or it reads as a room that is not there.
     this._verbTone = ctx.createBiquadFilter()
     this._verbTone.type = 'lowpass'
+    // These two are the SHIPPED LITERALS and are deliberately not the theme's:
+    // `update()` owns both from the first frame onward (`verb.floor + enc *
+    // verb.range` and `verb.toneBase + enc * verb.toneRange`), so all these
+    // decide is the 16 ms before it first runs. Deriving them from the config
+    // instead measured as a 0.2% difference in every skyline render — because
+    // `setTargetAtTime` starts from wherever the param happens to be, so a
+    // different starting point is a different trajectory for the next second.
+    // Not audible; not worth being unable to say the skyline is untouched.
     this._verbTone.frequency.value = 3800
     this._verbTone.Q.value = 0.5
 
@@ -599,14 +814,18 @@ export class Audio {
       // information. Enclosure pulls it down further: under the underpass the
       // sky is not blowing on you, and that contrast is free spatial telling.
       const shelter = 1 - enc * 0.45
-      const windTarget = (Math.pow(s, 1.7) * 0.15 + (player.grounded ? 0 : 0.012)) * shelter
+      // Peak levels and the sweep range are the theme's, the SHAPE is not: the
+      // s^1.7 curve and the s^4 sizzle gate were tuned against Ethan's "the
+      // wooshing sound is a bit over the top" and are not a per-world decision.
+      const W = this.cfg.wind
+      const windTarget = (Math.pow(s, 1.7) * W.bed + (player.grounded ? 0 : W.airborne)) * shelter
       this._windGain.gain.setTargetAtTime(windTarget, t, 0.14)
       // Sizzle is gated by s^4, so it is inaudible until roughly the top third
       // of the range and then arrives quickly. Peak 0.035 — a seasoning.
-      this._windSizzle.gain.setTargetAtTime(Math.pow(s, 4) * 0.035 * shelter, t, 0.2)
+      this._windSizzle.gain.setTargetAtTime(Math.pow(s, 4) * W.sizzle * shelter, t, 0.2)
       // Open the filter with speed too, so it brightens as well as swells —
       // that spectral change is most of what the ear reads as "faster".
-      this._wind.frequency.setTargetAtTime(380 + s * 1900, t, 0.2)
+      this._wind.frequency.setTargetAtTime(W.lowHz + s * W.spanHz, t, 0.2)
 
       this._updateScrape(player, s, t)
 
@@ -628,8 +847,15 @@ export class Audio {
       // Room: send scales with enclosure, and the return brightens with it.
       // Open sky keeps a token 0.05 so cues do not sound anechoic and pasted
       // on; a tight bay reaches 0.5, which is obvious without being a cave.
-      this._verbWet.gain.setTargetAtTime(0.05 + enc * 0.45, t, 0.35)
-      this._verbTone.frequency.setTargetAtTime(2200 + enc * 5200, t, 0.35)
+      // In the void the FLOOR is the point: "nothing around you" there means
+      // the middle of a cavern, not outdoors, so the probe only adds the last
+      // part of a wet level that starts six times higher.
+      const V = this.cfg.verb
+      this._verbWet.gain.setTargetAtTime(V.floor + enc * V.range, t, 0.35)
+      this._verbTone.frequency.setTargetAtTime(V.toneBase + enc * V.toneRange, t, 0.35)
+
+      // The void's own bed, height and landmarks. Null for any other theme.
+      if (this._voidAmb) this._voidAmb.update(t, player)
     } catch (err) {
       /* never throw at a caller that does not check */
     }
@@ -881,14 +1107,29 @@ export class Audio {
     return bestTag != null ? this._profileFor(bestTag) : SURFACES.brass
   }
 
-  /** Tag → acoustic profile, memoised. Unknown tags resolve by substring. */
+  /**
+   * Tag → acoustic profile, memoised. Unknown tags resolve by substring.
+   *
+   * THE THEME ALIAS IS APPLIED FIRST, and this is the fix for the void's most
+   * wrong sound rather than a nicety. `Level.solid()` puts the CALLER'S kind on
+   * the collider — `voidkit.js` emits every ruin as `'stone'` and
+   * `materials.js` only swaps in `voidrock` when it builds the material. So the
+   * tag this file reads off a box in the void is `stone`, and without this line
+   * the whole level plays the archipelago's dry sunlit stone no matter how many
+   * void profiles the table above contains. Resolving through the same
+   * `surfaces.kinds` map `materials.js` uses is also the guarantee that the
+   * material you hear cannot drift from the material you see.
+   */
   _profileFor(tag) {
     if (!tag) return SURFACES.stone
     const cached = this._tagCache.get(tag)
     if (cached) return cached
-    let hit = SURFACES[tag]
+    const themed = (this._kinds && this._kinds[tag]) || tag
+    let hit = SURFACES[themed] || SURFACES[tag]
     if (!hit) {
-      const lower = String(tag).toLowerCase()
+      // The THEMED name, so a theme that aliases a new kind gets the substring
+      // rules applied to what it asked for rather than to what the level said.
+      const lower = String(themed).toLowerCase()
       for (let i = 0; i < SURFACE_ALIASES.length; i++) {
         if (lower.indexOf(SURFACE_ALIASES[i][0]) !== -1) {
           hit = SURFACES[SURFACE_ALIASES[i][1]]
@@ -984,6 +1225,7 @@ export class Audio {
       this._ring({
         freq: surf.ringHz * jitter, gain: v * 0.045 * surf.ring,
         dur: 0.16 + surf.ring * 0.2, partials: 2, dest: bus,
+        ratios: surf.ringRatios,
       })
     }
 
@@ -1036,6 +1278,7 @@ export class Audio {
       this._ring({
         freq: surf.ringHz * 0.8 * jitter, gain: g * 0.16 * surf.ring,
         dur: 0.3 + impact * 0.5, partials: 3, dest: bus,
+        ratios: surf.ringRatios,
       })
     }
     if (impact > 0.45 && surf.debris > 0) {
@@ -1047,10 +1290,47 @@ export class Audio {
         decay: 0.3, at: t + 0.045, dest: bus,
       })
     }
+    this._rune(impact, t)
     // Duck proportionally: a scuff on landing should not silence the world,
     // a 12 m drop should. Capped at 0.5 so the bed never fully disappears —
     // a hole in the ambience is more noticeable than the duck it enables.
     this._duck(Math.min(0.5, 0.12 + impact * 0.45))
+  }
+
+  /**
+   * The rune inlay answering a boot. Void only; absent for any theme that does
+   * not name a `rune` block.
+   *
+   * `levels/void.js` puts a glowing rune on EVERY landing in the course and
+   * calls it "the ONLY such channel a near-black level has" for saying you may
+   * stand here. That is a lot of weight for one visual channel, and it fails
+   * precisely when the player is not looking at their feet — which during a
+   * 30 m grapple crossing onto a 8 m pad is every time. So the slab gets a
+   * second channel: it rings.
+   *
+   * Three things keep this from becoming a jingle over 22 landings. It is a
+   * cycled pitch set rather than one note; it scales with impact, so a scuffed
+   * arrival barely wakes it; and it sits on the UI bus, which is the only bus
+   * whose meaning is already "the game is telling you something" — the same
+   * place the checkpoint bell lives.
+   */
+  _rune(impact, t) {
+    const R = this.cfg.rune
+    if (!R || impact < R.minImpact) return
+    const notes = R.notes
+    const i = this._next('rune', notes.length)
+    // Softly compressed against impact rather than proportional: the rune says
+    // WHERE you are, not how hard you hit — the impact stack above already
+    // says that, and doubling the dynamic here would make a heavy landing on a
+    // hero island twice as loud as the checkpoint bell.
+    const g = R.gain * (0.55 + 0.45 * Math.min(1, impact * 1.6))
+    this._ring({
+      freq: notes[i], gain: g, dur: R.dur, partials: 3,
+      at: t + R.delay, dest: this._buses.ui,
+      // Quasi-harmonic: crystal, not brass. Same family as the void's carved
+      // stone and its bells, so all three read as one world.
+      ratios: this.cfg.bells.ratios,
+    })
   }
 
   /** Ground jump: the spring unloading, and the courier leaving the surface. */
@@ -1099,7 +1379,10 @@ export class Audio {
       gain: 0.11 * rr.scuff * surf.texGain, decay: 0.1, at: t + 0.055, dest: this._buses.step,
     })
     if (surf.ring > 0) {
-      this._ring({ freq: surf.ringHz * 1.3 * jitter, gain: 0.05 * surf.ring, dur: 0.24, partials: 2, dest: bus })
+      this._ring({
+        freq: surf.ringHz * 1.3 * jitter, gain: 0.05 * surf.ring,
+        dur: 0.24, partials: 2, dest: bus, ratios: surf.ringRatios,
+      })
     }
     this._duck(0.16)
   }
@@ -1123,7 +1406,7 @@ export class Audio {
       // is a surface the level intends you to use.
       this._ring({
         freq: surf.ringHz * 1.6 * jitter, gain: 0.055 * surf.ring,
-        dur: 0.42, partials: 3, dest: bus,
+        dur: 0.42, partials: 3, dest: bus, ratios: surf.ringRatios,
       })
     }
     this._duck(0.14)
@@ -1155,6 +1438,7 @@ export class Audio {
     this._ring({
       freq: (surf.ring > 0 ? surf.ringHz : 690) * rr.ring * jitter,
       gain: 0.10 * (0.5 + surf.ring * 0.5), dur: 0.34, partials: 3, dest: bus,
+      ratios: surf.ringRatios,
     })
     this._duck(0.22)
   }
@@ -1316,11 +1600,24 @@ export class Audio {
     this._duck(0.14)
   }
 
-  /** Checkpoint: a small brass bell, struck once. */
+  /**
+   * Checkpoint: a small bell, struck once.
+   *
+   * WHAT KIND of bell is the theme's. The archipelago's is brass, because
+   * brass is its signature material; the void has no brass in it at all, so
+   * `bells.ratios` swaps the circular-plate series for a quasi-harmonic one —
+   * a struck glass rod — and the pitch comes up a fifth into the crystal
+   * register. The cue keeps its meaning and changes its material, which is
+   * exactly what a theme is allowed to do.
+   */
   checkpoint() {
     if (!this.ready) return
     try {
-      this._ring({ freq: 520, gain: 0.16, dur: 1.1, partials: 3, dest: this._buses.ui })
+      const B = this.cfg.bells
+      this._ring({
+        freq: B.checkpointHz, gain: 0.16, dur: B.checkpointDur,
+        partials: 3, dest: this._buses.ui, ratios: B.ratios,
+      })
       this._duck(0.3)
     } catch (err) { /* never throw */ }
   }
@@ -1330,15 +1627,19 @@ export class Audio {
     if (!this.ready) return
     try {
       const t = this.ctx.currentTime
-      const notes = [520, 660, 784]       // a major triad on the checkpoint bell
-      const delays = [0, 0.09, 0.2]       // rolled, not struck together
-      for (let i = 0; i < 3; i++) {
+      const B = this.cfg.bells
+      const notes = B.finish                // skyline: a major triad
+      const delays = [0, 0.09, 0.2]         // rolled, not struck together
+      for (let i = 0; i < notes.length; i++) {
         this._ring({
-          freq: notes[i], gain: 0.13, dur: 2.0, partials: 2,
-          at: t + delays[i], dest: this._buses.ui,
+          freq: notes[i], gain: 0.13, dur: B.finishDur, partials: 2,
+          at: t + delays[i], dest: this._buses.ui, ratios: B.ratios,
         })
       }
-      this._tone({ freq: 130, type: 'sine', dur: 2.4, gain: 0.14, at: t, attack: 0.02, dest: this._buses.ui })
+      this._tone({
+        freq: B.finishSubHz, type: 'sine', dur: B.finishDur * 1.2, gain: 0.14,
+        at: t, attack: 0.02, dest: this._buses.ui,
+      })
       this._duck(0.35)
     } catch (err) { /* never throw */ }
   }
@@ -1391,8 +1692,14 @@ export class Audio {
    * decay faster, which is simply what happens in real metal: the small modes
    * radiate their energy away first.
    */
-  _ring({ freq, gain = 0.1, dur = 0.3, partials = 3, at, dest }) {
-    const ratios = RING_PARTIALS
+  /**
+   * @param {number[]} [ratios] override the plate series — a surface profile's
+   *   `ringRatios`, or a theme's bell. The void's carved stone is quasi-
+   *   harmonic (a struck glass rod), which is what makes its ring read as
+   *   crystal rather than as the archipelago's brass.
+   */
+  _ring({ freq, gain = 0.1, dur = 0.3, partials = 3, at, dest, ratios: over }) {
+    const ratios = over || RING_PARTIALS
     const n = Math.min(partials, ratios.length)
     for (let i = 0; i < n; i++) {
       // A few cents of detune per partial per strike, so two hits on the same
@@ -1594,9 +1901,9 @@ function makeNoiseBuffer(ctx, seconds, rand) {
  * uses to size a room — far more than the tail, which mostly says "how
  * reverberant" and not "how big".
  */
-function makeImpulseResponse(ctx, rand) {
+function makeImpulseResponse(ctx, rand, room = AUDIO_DEFAULTS.room) {
   const sr = ctx.sampleRate
-  const dur = 1.9                     // longest tail we ever want, in seconds
+  const dur = room.duration           // longest tail we ever want, in seconds
   const len = Math.floor(sr * dur)
   const buf = ctx.createBuffer(2, len, sr)
 
@@ -1604,11 +1911,20 @@ function makeImpulseResponse(ctx, rand) {
   // from centre on purpose: a listener at the exact centre of a box gets
   // coincident image sources, which collapses the early pattern into a comb
   // filter and sounds like a metal pipe.
-  const RW = 9.0, RH = 5.5, RD = 15.0
+  //
+  // THESE ARE THE THEME'S. The shipped defaults are the underpass bay, which
+  // is the one enclosed space on the archipelago and therefore the only place
+  // its room has to be right rather than merely present. The void hands this a
+  // 44 x 120 x 44 m shaft instead, and the number that does the work is the
+  // HEIGHT: at 5.5 m the first ceiling reflection lands 30 ms after the direct
+  // sound, at 120 m it lands 700 ms after it. That gap is what the ear sizes a
+  // space with — far more than the tail, which only says how live it is.
+  const RW = room.width, RH = room.height, RD = room.depth
   const lx = RW * 0.42, ly = RH * 0.35, lz = RD * 0.4
   // Reflection coefficient per bounce. 0.62 is a hard-ish room — carved stone
-  // and brass with moss and vines taking the edge off.
-  const REFL = 0.62
+  // and brass with moss and vines taking the edge off. The void has none of
+  // those soft things in it and runs 0.88.
+  const REFL = room.reflect
   const ORDER = 3
 
   const L = buf.getChannelData(0)
@@ -1654,8 +1970,8 @@ function makeImpulseResponse(ctx, rand) {
   // band and its complement and giving each its own RT60 is the cheapest
   // convincing way to get that, and its absence is the single most
   // recognisable signature of a bad synthetic reverb.
-  const RT_LOW = 1.7          // seconds to -60 dB below ~1.2 kHz
-  const RT_HIGH = 0.42        // ...and above it. Highs die first.
+  const RT_LOW = room.rtLow   // seconds to -60 dB below ~1.2 kHz
+  const RT_HIGH = room.rtHigh // ...and above it. Highs die first.
   // e^(-t/T) = 10^-3 at RT60, so T = RT60 / ln(1000).
   const TAU_LOW = RT_LOW / 6.9078
   const TAU_HIGH = RT_HIGH / 6.9078

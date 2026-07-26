@@ -312,10 +312,33 @@ minor, and left on purpose rather than missed.
 
 ## Next — feel and content
 
+- [ ] **Wire `audio: VOID_AUDIO` into `src/theme.js`.** The void's soundscape
+      is a theme overlay of exactly the shape `grade`/`exposure`/`aerial`
+      already use, and it currently reaches the engine through a named fallback
+      in `Audio._resolveTheme` (`theme.name === 'void'`) because `theme.js`
+      belongs to another lane. Two lines close it — `import { VOID_AUDIO } from
+      './audio/void.js'` and `audio: VOID_AUDIO` in the void block — after
+      which the fallback branch is dead and can go. Nothing audible changes:
+      `theme.audio` is already preferred whenever it exists, and
+      `node tools/voidaudio.mjs` proves it either way.
+- [ ] The beam hum is mono. `Audio.update` is handed the player but not the
+      camera yaw, so a landmark can say "near" and not "which way" — a
+      StereoPannerNode fed from `rig.yaw` would make the beams navigable in the
+      dark rather than merely present. Needs one extra argument at the
+      `audio.update` call site in `main.js`.
 - [ ] Hands-on playtest by Ethan — the acceptance gate for movement feel.
 - [ ] Audio pass: current cues are placeholder-grade. Adopt the reference's
       `transient + body + texture + debris` layering, round-robin timbre
       variants per event, and a 9-ray space probe driving reverb blend.
+      (The layering, the round-robins, the probe and the surface profiles are
+      all in `src/audio.js` now; what is left under this item is a pass with
+      ears on the archipelago's own cue set.)
+- [ ] Crystals have no voice. `src/crystals.js` places ~300 shards through the
+      void course and `CrystalField.emitters()` already ranks the brightest,
+      but nothing in `src/audio.js` reads them — the beams got a proximity hum
+      and the crystals did not. Same mechanism, a much higher and sparser
+      voice, and it would give the mid-course landmarks the readability the
+      beams have.
 - [ ] Visible courier hands with spring-driven lag and a grapple-cuff
       silhouette — the fiction already calls for them.
 - [ ] Extend the course past the current opening leg to a full 3–5 minute route.
