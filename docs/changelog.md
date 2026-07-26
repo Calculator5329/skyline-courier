@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-07-26 — where the frame time actually goes
+
+No render change shipped. That is the result, not a shortfall.
+
+The brief was to fix the void's frame time by chunking `Level.build()`'s merged
+per-material meshes so the frustum culler could reject them, and to stop distant
+chunks casting shadows. The structural claim behind it checks out exactly —
+`tools/perfinv.mjs` shows the void's `surface:stone` as one 881k-triangle mesh
+with an **815 m bounding sphere**, submitted three times a frame (shadow map,
+depth/normal prepass, beauty pass) because nothing can ever cull it.
+
+It is not the bottleneck. The frame is **fill-bound**: quartering the pixels
+roughly halves it, the shadow pass measures as free, and the largest single
+item in the renderer is the full-resolution contact-shadow march at 40%+ of the
+frame. Chunking was built in full and measured across seven cell sizes, two
+themes and two resolutions; it culled 60% of the triangles and came out
+**6–12% slower**, because the draw calls it costs are real and the triangles it
+saves were not being paid for. It was thrown away rather than shipped.
+
+`tools/hitch.mjs` also shows zero frames over 16.7 ms across 20 s of real
+running, so the complaint is throughput on a high-DPI display, not a stutter.
+
+- **New: `tools/perfprobe.mjs`** — ablation probe. Turns one thing off at a
+  time (shadow pass, level, backdrop, bloom, contact, half resolution) and
+  re-measures GPU-synced, taking the minimum of four repeats with the mode
+  order rotated per repeat. Both of those matter: with a fixed order, cold
+  clocks reliably penalised whichever mode ran first, which was `base`.
+- **New: `tools/perfinv.mjs`** — scene inventory. Triangles, world bounding
+  sphere radius and shadow-caster flag per drawable. The radius column is the
+  one that matters; it is how the 815 m sphere was found.
+- **New: `tools/hitch.mjs`** — frame-time distribution while the course is
+  actually being run. p50/p95/p99/max and a count of dropped frames, because a
+  mean from a parked camera cannot see the thing players call lag.
+- **New: `docs/perf.md`** — the measurements, and the three fixes that were
+  built or planned and then discarded, with the numbers that killed each one.
+  Written so the next agent does not spend a day re-deriving the same wrong
+  answer from the same correct-looking diagnosis.
+- `docs/roadmap.md` gains the two items the measurements actually point at:
+  the cost of the contact march, and the undeliberate `devicePixelRatio` cap
+  in `src/main.js` — the second of which is a taste call for Ethan, since it
+  trades sharpness for frame rate.
+
 ## 2026-07-25 — the void gets dense
 
 Ethan, with the build beside the reference image:
