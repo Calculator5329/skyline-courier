@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-07-25 — crystal shards: the void theme's light, as geometry
+
+`docs/art-direction-void.md` §4.3 asks for two families of jagged faceted
+crystal, and §7.3 makes instancing and LOD requirements rather than
+optimisations. Three pieces, all new, none of them touching the level:
+
+- **`src/props.js` — `shard()` and `shardCluster()`.** An n-gonal frustum stack
+  with a bent axis and an off-centre apex, every face emitted with its own
+  vertices and its own plane normal, so there is a hard normal break on every
+  edge by construction. `lathe` was rejected because it revolves one radius per
+  profile point and therefore cannot be asymmetric or bent; `chamferHex` was
+  the right idea but caps the facet count at four and chamfers exactly the
+  arris a crystal needs to keep sharp. The comment in `props.js` carries the
+  full argument, including the planarity proof that lets a facet be flat-shaded
+  from three of its four corners.
+- **`src/crystals.js` — `crystalMaterial()` and `CrystalField`.** One
+  `InstancedMesh` per (family, detail band, variant): a measured **300 clusters
+  in 12 draw calls**. Colour is a parameter everywhere and there is not one
+  colour literal in the file (§7.2).
+- **`tools/crystal-shot.mjs` + `tools/crystal-preview.html`** — a scratch shot
+  harness, because the crystals are not in the course yet and `shotset.mjs`
+  photographs the course. It uses the real `RenderPipeline` and the real void
+  theme, so the frames are comparable with §2's acceptance table.
+
+Two findings that only a render could have produced, both now fixed and
+documented where they were made:
+
+- **Flat normals are not enough on an emissive object.** Emissive has no normal
+  term, so a shard lit mostly by its own glow shades identically on every facet
+  however hard the break is. The first render came back a smooth pale monolith.
+  `facetVariance` bakes a seeded brightness step per facet column into the
+  colour attribute, which puts the value break back on the arris.
+- **The vertex-colour ramp was pushing albedo over 1.** `vColor` multiplies the
+  diffuse term as well as the emissive one, so a 1.7 tip meant a surface
+  reflecting more light than reached it; every shard came back a clipped white
+  spike. The ramp now tops out at 0.78 and brightness above white is the
+  emissive's job, where the bloom threshold can see it.
+
+Triangle counts per LOD, from `node src/crystals.js`: a single hero shard is
+24 / 36 / 48 triangles at FAR / MID / NEAR; a hero cluster averages 110 / 164 /
+219 and a scatter cluster 119 / 178 / 237. Silhouettes are identical across
+bands to 2 cm — only the ring-station count moves, deliberately, so a cluster
+never pops when it changes band.
+
+Not yet placed: nothing imports `crystals.js`, so the bundle is unchanged.
+Wiring it into the void course belongs to the level lane.
+
 ## 2026-07-25 — the underpass left flank was passable
 
 Reported: *"at the underpass you can go LEFT and leave the play volume

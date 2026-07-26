@@ -1561,6 +1561,403 @@ export function triangleCount(geo) {
   return (geo.index ? geo.index.count : geo.attributes.position.count) / 3
 }
 
+// ------------------------------------------------------------------ shards
+
+/**
+ * `shard(seed, opts)` — one jagged, FLAT-FACETED crystal splinter.
+ *
+ * WHY THIS IS NOT `blob()` AND NOT `lathe()`. `docs/art-direction-void.md` §4.3
+ * is explicit: "Facets must be flat and sharp with hard normal breaks — the
+ * whole read depends on light snapping between faces. A smooth-shaded crystal
+ * looks like a jelly." `blob()` welds and calls `computeVertexNormals()`, which
+ * is the jelly. So the two routes on the table were:
+ *
+ *   (a) `lathe` with `creaseAngle` near 0 and a profile closing to r = 0.
+ *       REJECTED, and the reason is structural rather than aesthetic: a lathe
+ *       revolves ONE radius per profile point, so every facet at a given height
+ *       is the same width and the same distance from the axis. That produces a
+ *       regular n-gonal spire — a pencil, not a splinter — and the brief asks
+ *       for asymmetry. It also cannot bend: `lathe` has no path, so a leaning
+ *       or kinked shard is not expressible at all. `thetaLength < TAU` would
+ *       give an open shell, which then fails the self-test's signed-volume
+ *       check and cannot be lit from inside.
+ *
+ *   (b) `chamferHex` with hand-computed non-parallel corners. This is the right
+ *       IDEA — arbitrary convex corners, every face emitted flat through
+ *       `Builder.face` — but a hexahedron has exactly six faces, so it caps the
+ *       facet count at four around the axis and the brief asks for 4-7. Worse,
+ *       the chamfer is the opposite of what a crystal wants: it exists to round
+ *       an arris into a highlight strip, and a crystal's arris must stay a
+ *       zero-width edge.
+ *
+ * So this takes route (b) and generalises the hexahedron to an n-gonal
+ * frustum stack with a bent axis and an off-centre apex, keeping its two load-
+ * bearing properties: corners hand-computed with no parallelism assumed, and
+ * every face emitted with its OWN vertices carrying its OWN plane normal. No
+ * vertex is shared between facets, so there is a hard normal break on every
+ * edge by construction — not by a crease-angle threshold that a later weld or
+ * a non-uniform placement scale could quietly undo.
+ *
+ * PLANARITY, which is the one thing that has to be got right. A quad whose four
+ * corners are not coplanar has no single plane, and flat-shading it from three
+ * of its points leaves the fourth lit wrong. Here every ring is the SAME 2D
+ * polygon under a UNIFORM scale plus a translation, so for the side face
+ * between ring points i and i+1 the two cross-edges are
+ * `s_a * (d[i+1] - d[i])` and `s_b * (d[i+1] - d[i])` — parallel, therefore
+ * coplanar, for any bend of the axis and any taper. That is why the ring radii
+ * are jittered once and reused, rather than re-jittered per station.
+ *
+ * opts:
+ *   length     tip-to-base along the axis, metres (default 1)
+ *   radius     MAXIMUM cross-section radius (default length * 0.16)
+ *   taper      radius multiplier at the shoulder, where the point begins
+ *              (default 0.55). Small values give a needle.
+ *   shoulder   fraction of the length at which the point begins (default 0.70)
+ *   facets     faces around the axis, 3-9, clamped (default seeded 4-7)
+ *   irregular  0 is a regular prism, 0.5 is a badly broken splinter. Pulls
+ *              radii INWARD and jitters angles (default 0.34)
+ *   bend       lateral drift of the axis over the length, as a fraction of it
+ *              (default 0.10); `bendAzimuth` picks the direction
+ *   lean       radians of tilt off +Y; `leanAzimuth` picks the direction
+ *   tipOffset  apex displacement off the axis, as a fraction of the tip radius
+ *              (default 0.4, hard-clamped so the tip can never fold)
+ *   detail     FAR / MID / NEAR -> 2 / 3 / 4 ring stations
+ *   color      [r,g,b] at the BASE
+ *   tipColor   [r,g,b] at the APEX (default `color`). The void theme wants the
+ *              tip brighter than the base — §3, "they transmit light along
+ *              their length" — and this bakes that into the colour attribute so
+ *              one instanced draw can carry it. `crystals.js` routes the same
+ *              attribute into `emissive`.
+ *   tipGamma   shapes that ramp (default 1.4: dark body, hot point)
+ *   facetVariance  per-facet brightness spread, 0-1 (default 0.30)
+ *
+ * WHY `facetVariance` EXISTS, and it is not decoration. §4.3 wants "light
+ * snapping between flat faces". Flat normals alone do not deliver that on THESE
+ * objects, because the crystals are EMISSIVE and emissive has no normal term at
+ * all: a shard lit mostly by its own glow shades identically on every facet no
+ * matter how hard the normal break is, and the first render of this generator
+ * came out a smooth pale monolith for exactly that reason. Baking a seeded
+ * brightness step per facet column into the colour attribute puts the value
+ * break back where the normal break already is, and it survives being the only
+ * light source in a near-black frame. Applied per COLUMN, so a facet is one
+ * flat value from base to tip and the break lands on the arris.
+ *
+ * INSCRIPTION / COLLISION CONTRACT (props.js header). Every ring vertex sits at
+ * `axis(t) + r_i * dir_i` with `r_i <= radius` by construction (the jitter only
+ * ever subtracts) and `|axis_xz(t)| <= bend * length`, and the apex is clamped
+ * inside the tip ring. So before `lean`, EVERY vertex lies inside the box
+ * `x,z in +-(radius + bend*length)`, `y in [0, length]`. After a `lean` of a
+ * radians it lies inside that box rotated by a. Callers must still size their
+ * hidden collider from `boundsOf()` rather than from these bounds — the
+ * measured number is the one that cannot drift. Like everything else in this
+ * file, `shard` returns geometry and never a collider.
+ */
+export function shard(seed = DEFAULT_SEED, opts = {}) {
+  const rand = opts.rand || makeRand(seed)
+  const length = Math.max(1e-3, opts.length ?? 1)
+  const radius = Math.max(1e-4, opts.radius ?? length * 0.16)
+  const taper = clamp(opts.taper ?? 0.55, 0.02, 1)
+  const shoulder = clamp(opts.shoulder ?? 0.70, 0.15, 0.96)
+  const irregular = clamp(opts.irregular ?? 0.34, 0, 0.6)
+  const bend = opts.bend ?? 0.10
+  const bendAz = opts.bendAzimuth ?? rand() * TAU
+  const stations = Math.max(2, opts.stations ?? lod(opts.detail, 2, 3, 4))
+  const base = opts.color || [1, 1, 1]
+  const tipCol = opts.tipColor || base
+  const tipGamma = opts.tipGamma ?? 1.4
+  const facets = clamp(Math.round(opts.facets ?? (4 + Math.floor(rand() * 4))), 3, 9)
+  const facetVariance = clamp(opts.facetVariance ?? 0.30, 0, 1)
+
+  // --- the cross-section, jittered ONCE (see PLANARITY above) --------------
+  const dir = new Array(facets)
+  const tone = new Array(facets)
+  const arcU = new Array(facets + 1)
+  const sector = TAU / facets
+  let ang = 0
+  for (let i = 0; i < facets; i++) {
+    // See WHY `facetVariance` EXISTS above. Drawn once per facet column so the
+    // value break lands exactly on the arris and nowhere else.
+    tone[i] = 1 + (rand() - 0.5) * 2 * facetVariance
+    // Angle jitter stays under half a sector so the ring never reorders itself
+    // and the polygon stays star-shaped about the axis — which is what makes
+    // the centroid fan on the base cap valid and the signed volume positive.
+    const a = i * sector + (rand() - 0.5) * sector * irregular * 0.9
+    const r = radius * (1 - irregular * rand())
+    dir[i] = [Math.cos(a) * r, Math.sin(a) * r]
+    ang = a
+  }
+  arcU[0] = 0
+  for (let i = 0; i < facets; i++) {
+    const a = dir[i], c = dir[(i + 1) % facets]
+    arcU[i + 1] = arcU[i] + Math.hypot(c[0] - a[0], c[1] - a[1])
+  }
+  void ang
+
+  // --- the axis and the taper ----------------------------------------------
+  const bx = Math.cos(bendAz) * bend * length
+  const bz = Math.sin(bendAz) * bend * length
+  // t^2 rather than t: a straight lean is what `lean` is for, so the bend has
+  // to be a CURVE or the two knobs do the same thing.
+  const axis = (t) => [bx * t * t, length * t, bz * t * t]
+  const ringT = new Array(stations)
+  const ringS = new Array(stations)
+  for (let k = 0; k < stations; k++) {
+    const f = stations === 1 ? 0 : k / (stations - 1)
+    ringT[k] = shoulder * f
+    // Concave ramp: the body stays fat and the narrowing happens near the
+    // shoulder, which is what makes a shard read as a splinter rather than a
+    // cone. Uniform per ring — non-uniform would break planarity.
+    ringS[k] = 1 + (taper - 1) * Math.pow(f, 1.6)
+  }
+
+  const rings = new Array(stations)
+  for (let k = 0; k < stations; k++) {
+    const c = axis(ringT[k]), s = ringS[k]
+    rings[k] = dir.map((d) => [c[0] + d[0] * s, c[1], c[2] + d[1] * s])
+  }
+
+  // Apex, pushed off the axis but kept strictly inside the tip ring so no tip
+  // triangle can fold back on itself.
+  const tipC = axis(1)
+  const offMax = radius * taper * (1 - irregular) * 0.55
+  const off = clamp(opts.tipOffset ?? 0.4, 0, 1) * offMax
+  const apexAz = opts.tipAzimuth ?? rand() * TAU
+  const apex = [tipC[0] + Math.cos(apexAz) * off, tipC[1], tipC[2] + Math.sin(apexAz) * off]
+
+  // --- emit ----------------------------------------------------------------
+  const b = new Builder()
+  const shade = (t, k2 = 1) => {
+    const k = Math.pow(clamp(t, 0, 1), tipGamma)
+    return [(base[0] + (tipCol[0] - base[0]) * k) * k2,
+      (base[1] + (tipCol[1] - base[1]) * k) * k2,
+      (base[2] + (tipCol[2] - base[2]) * k) * k2]
+  }
+  const vAt = (t) => t * length
+
+  for (let k = 0; k < stations - 1; k++) {
+    const lo = rings[k], hi = rings[k + 1]
+    const cLo = axis(ringT[k]), cHi = axis(ringT[k + 1])
+    const mid = [(cLo[0] + cHi[0]) / 2, (cLo[1] + cHi[1]) / 2, (cLo[2] + cHi[2]) / 2]
+    for (let i = 0; i < facets; i++) {
+      const j = (i + 1) % facets
+      const w = tone[i]
+      facetFace(b,
+        [lo[i], lo[j], hi[j], hi[i]], mid,
+        [[arcU[i], vAt(ringT[k])], [arcU[i + 1], vAt(ringT[k])],
+          [arcU[i + 1], vAt(ringT[k + 1])], [arcU[i], vAt(ringT[k + 1])]],
+        [shade(ringT[k], w), shade(ringT[k], w),
+          shade(ringT[k + 1], w), shade(ringT[k + 1], w)])
+    }
+  }
+
+  // Tip fan. `inside` is the axis at the shoulder, so "away from it" is
+  // up-and-out for every one of these triangles.
+  const top = rings[stations - 1]
+  const tipInside = axis(ringT[stations - 1] * 0.5)
+  for (let i = 0; i < facets; i++) {
+    const j = (i + 1) % facets
+    const w = tone[i]
+    facetFace(b, [top[i], top[j], apex], tipInside,
+      [[arcU[i], vAt(shoulder)], [arcU[i + 1], vAt(shoulder)],
+        [(arcU[i] + arcU[i + 1]) / 2, length]],
+      [shade(shoulder, w), shade(shoulder, w), shade(1, w)])
+  }
+
+  // Base cap. Centroid fan rather than a corner fan: the ring is star-shaped
+  // about the axis but not necessarily convex, and a corner fan on a reflex
+  // polygon emits inverted triangles.
+  if (opts.capBase ?? true) {
+    const bot = rings[0]
+    const c0 = axis(0)
+    const above = [c0[0], c0[1] + length * 0.25, c0[2]]
+    const cBase = shade(0)
+    for (let i = 0; i < facets; i++) {
+      const j = (i + 1) % facets
+      facetFace(b, [c0, bot[i], bot[j]], above,
+        [[0, 0], [arcU[i], 0], [arcU[i + 1], 0]], [cBase, cBase, cBase])
+    }
+  }
+
+  const geo = b.geometry()
+  const lean = opts.lean ?? 0
+  if (Math.abs(lean) > 1e-6) {
+    const az = opts.leanAzimuth ?? rand() * TAU
+    // Tilt AWAY along `az`: the rotation axis is the horizontal perpendicular
+    // to it. `applyMatrix4` carries the normals through the normal matrix, so
+    // flat facets stay flat and stay outward.
+    const m = new THREE.Matrix4().makeRotationAxis(
+      new THREE.Vector3(Math.sin(az), 0, -Math.cos(az)).normalize(), lean)
+    geo.applyMatrix4(m)
+  }
+  return geo
+}
+
+/**
+ * Emit one flat facet: its own vertices, its own plane normal, wound outward.
+ *
+ * `inside` is any point on the shard's axis near this facet. Outward is "away
+ * from the axis", which is well defined for a star-shaped section and is the
+ * same test `chamferHex` makes against its centroid — generalised here because
+ * a bent shard has no single centroid that works for both ends.
+ */
+function facetFace(b, pts, inside, uvs, cols) {
+  const [p0, p1, p2] = pts
+  const ax = p1[0] - p0[0], ay = p1[1] - p0[1], az = p1[2] - p0[2]
+  const bx = p2[0] - p0[0], by = p2[1] - p0[1], bz = p2[2] - p0[2]
+  let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx
+  const l = Math.hypot(nx, ny, nz)
+  if (l < 1e-12) return false                 // degenerate: emit nothing at all
+  nx /= l; ny /= l; nz /= l
+  let cx = 0, cy = 0, cz = 0
+  for (const p of pts) { cx += p[0] / pts.length; cy += p[1] / pts.length; cz += p[2] / pts.length }
+  const flip = nx * (cx - inside[0]) + ny * (cy - inside[1]) + nz * (cz - inside[2]) < 0
+  if (flip) { nx = -nx; ny = -ny; nz = -nz }
+  const order = flip
+    ? (pts.length === 4 ? [3, 2, 1, 0] : [2, 1, 0])
+    : (pts.length === 4 ? [0, 1, 2, 3] : [0, 1, 2])
+  const start = b.n
+  for (const i of order) {
+    const c = cols[i]
+    b.vert(pts[i][0], pts[i][1], pts[i][2], nx, ny, nz, uvs[i][0], uvs[i][1], c[0], c[1], c[2])
+  }
+  if (order.length === 4) b.quad(start, start + 1, start + 2, start + 3)
+  else b.tri(start, start + 1, start + 2)
+  return true
+}
+
+/**
+ * Preset shapes for the two families in `docs/art-direction-void.md` §4.3.
+ *
+ * "Hero shards — huge ... big enough to be architecture" and "scatter shards —
+ * small ... on ruin edges, in fractures, on platform undersides". Sizes only:
+ * NO COLOUR LIVES HERE. Colour is a parameter all the way down, because
+ * §7.2 binds a new prefab to be theme-neutral in shape and take its colours
+ * from the theme descriptor.
+ */
+export const SHARD_SCALE = {
+  hero: {
+    count: [3, 6],
+    length: [4.5, 13],
+    radiusRatio: 0.115,
+    tilt: [0.10, 0.62],
+    spread: 0.30,
+    taper: [0.42, 0.66],
+    irregular: 0.40,
+  },
+  scatter: {
+    count: [3, 7],
+    length: [0.28, 1.15],
+    radiusRatio: 0.16,
+    tilt: [0.18, 0.95],
+    spread: 0.45,
+    taper: [0.34, 0.62],
+    irregular: 0.42,
+  },
+}
+
+/**
+ * `shardCluster(seed, opts)` — three to seven shards erupting from one base,
+ * merged into ONE geometry.
+ *
+ * §4.3 again: "erupting from rock at an angle in clusters of three to seven at
+ * varied lengths and tilts". One merged geometry rather than a group, because
+ * `crystals.js` hands this to an `InstancedMesh` and a cluster that costs more
+ * than one draw call per bucket defeats the point of instancing it.
+ *
+ * The cluster grows out of the XZ plane at the origin and its bases are SUNK
+ * below y = 0 by `sink * length`, so it can be pushed against rock without a
+ * visible gap where the shard meets the surface. That is why the returned
+ * bounds go negative on Y and it is not a bug.
+ *
+ * opts:
+ *   scale        'hero' | 'scatter' | a SHARD_SCALE-shaped object (default 'hero')
+ *   count        override the preset's shard count
+ *   size         metres; scales the preset's length range (default 1)
+ *   color / tipColor / tipGamma   passed to every shard
+ *   detail       FAR / MID / NEAR — ring stations, 4 / 3 / 2
+ *   sink         base depth below y = 0 as a fraction of length (default 0.10)
+ *   seed
+ *
+ * LOD, and what it deliberately does NOT do. The only thing `detail` moves is
+ * the number of ring stations, 4 -> 3 -> 2, which halves the triangle count
+ * between NEAR and FAR. It changes no silhouette on a straight shard and only
+ * the sag of a bent one.
+ *
+ * Dropping the shortest shards at FAR was tried and reverted. It saved little
+ * beyond the station reduction and it broke `blob()`'s rule, which is the one
+ * this library already committed to: a far LOD must be a SMOOTHER version of
+ * the same object, "not a different rock, so the silhouette does not jump when
+ * it swaps detail band". Measured, dropping two shards took one hero variant
+ * from 5.34 m wide to 2.41 m — a pop you would see across a whole level.
+ *
+ * COLLISION CONTRACT: geometry only, no collider, same as everything else in
+ * this file. A cluster big enough to stand on needs `L.solid(..., { hidden:
+ * true })` sized from `boundsOf()` by the caller. Crystals are explicitly NOT a
+ * hazard (§6), so the usual case is no collider at all.
+ *
+ * INSCRIPTION: each shard is inscribed in its own pre-lean box (see `shard`),
+ * rotated by its tilt and translated by at most `spread * radius` from the
+ * origin. The union of those boxes is what `boundsOf()` measures; nothing here
+ * can put a vertex outside it, because nothing here is drawn after the merge.
+ */
+export function shardCluster(seed = DEFAULT_SEED, opts = {}) {
+  const rand = opts.rand || makeRand(seed)
+  const preset = typeof opts.scale === 'string'
+    ? (SHARD_SCALE[opts.scale] || SHARD_SCALE.hero)
+    : (opts.scale || SHARD_SCALE.hero)
+  const size = opts.size ?? 1
+  const detail = opts.detail
+  const count = clamp(Math.round(opts.count
+    ?? (preset.count[0] + rand() * (preset.count[1] + 1 - preset.count[0]))), 1, 9)
+
+  const lMin = preset.length[0] * size, lMax = preset.length[1] * size
+  const sink = opts.sink ?? 0.10
+
+  // Lengths first, longest first: §4.3 asks for "varied lengths", and a cluster
+  // where the dominant shard is chosen rather than hoped for reads as a growth
+  // habit instead of a pile. Sorting also makes the FAR count drop above
+  // deterministic — it always removes the shortest.
+  const lengths = []
+  for (let i = 0; i < count; i++) {
+    const f = i === 0 ? 1 : Math.pow(rand(), 1.45)
+    lengths.push(lMin + (lMax - lMin) * f)
+  }
+  lengths.sort((a, c) => c - a)
+
+  const parts = []
+  const az0 = rand() * TAU
+  for (let i = 0; i < count; i++) {
+    const len = lengths[i]
+    const rad = len * preset.radiusRatio * (0.8 + rand() * 0.45)
+    // Fan the azimuths rather than drawing them: `count` independent draws puts
+    // two shards on top of each other about a third of the time.
+    const az = az0 + (i / count) * TAU + (rand() - 0.5) * (TAU / count) * 0.7
+    const tilt = preset.tilt[0] + rand() * (preset.tilt[1] - preset.tilt[0])
+    const g = shard((seed ^ (0x9e3779b1 * (i + 1))) | 0, {
+      length: len,
+      radius: rad,
+      taper: preset.taper[0] + rand() * (preset.taper[1] - preset.taper[0]),
+      irregular: opts.irregular ?? preset.irregular,
+      shoulder: 0.62 + rand() * 0.24,
+      bend: 0.05 + rand() * 0.10,
+      facets: opts.facets,
+      detail,
+      color: opts.color,
+      tipColor: opts.tipColor,
+      tipGamma: opts.tipGamma,
+      rand,
+    })
+    const m = new THREE.Matrix4().makeRotationAxis(
+      new THREE.Vector3(Math.sin(az), 0, -Math.cos(az)).normalize(), tilt)
+    const off = preset.spread * rad * (0.3 + rand())
+    m.premultiply(new THREE.Matrix4().makeTranslation(
+      Math.cos(az) * off, -sink * len, Math.sin(az) * off))
+    g.applyMatrix4(m)
+    parts.push(g)
+  }
+  return mergeGeometries(parts, { dispose: true })
+}
+
 // ---------------------------------------------------------------- self test
 
 const r3 = (v) => Math.round(v * 1000) / 1000
@@ -1669,6 +2066,26 @@ export function propsSelfTest() {
 
   add('arch.segmental', () => arch(5.0, 1.2, 0.7, 13, { ringDepth: 0.5 }), null,
     'shallow segmental arch over a terrace')
+
+  // Crystals. The interesting checks here are the ones the audit below already
+  // makes: a shard that came out inside-out, or whose apex folded through its
+  // own tip ring, fails the winding and signed-volume tests rather than looking
+  // subtly wrong in a screenshot nobody takes.
+  add('shard.hero', () => shard(0xC0FFEE, { length: 9, radius: 1.05, facets: 6 }),
+    null, 'single hero splinter, six flat facets, bent axis, off-centre apex')
+
+  add('shard.needle', () => shard(0x51CE, {
+    length: 2.2, radius: 0.16, facets: 4, taper: 0.18, irregular: 0.5, lean: 0.5,
+  }), null, 'four-sided leaning needle at maximum irregularity')
+
+  add('shard.far', () => shard(0xC0FFEE, { length: 9, radius: 1.05, facets: 6, detail: FAR }),
+    null, 'the hero shard at silhouette detail — two ring stations')
+
+  add('shardCluster.hero', () => shardCluster(0x5EED, { scale: 'hero', count: 5 }),
+    null, 'five-shard hero eruption, one merged geometry')
+
+  add('shardCluster.scatter', () => shardCluster(0x5EED, { scale: 'scatter', count: 6, detail: MID }),
+    null, 'ruin-edge scatter cluster')
 
   add('merge.mixed', () => mergeGeometries([
     chamferBox(0.4, 0.4, 0.4, 0.03),
