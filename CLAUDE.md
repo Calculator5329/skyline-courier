@@ -30,7 +30,19 @@ to art is verified by a screenshot from the actual gameplay camera.
    the opposite of what it is for. A written description of a reference is a
    lossy copy of a file we could simply have kept.
 
-   **The one exception is music** (Ethan, 2026-07-25): `public/audio/*.ogg` are
+   **The second exception is a far sky dome** (Ethan, 2026-07-26, approving
+   option C when asked): ONE painted panorama per theme, drawn at effectively
+   infinite distance behind everything, may be a real image file. It carries
+   the "and it keeps going forever" read that no affordable amount of geometry
+   can, and it is the cheapest pixel in the renderer — one textured sphere.
+
+   It qualifies on exactly the terms the music exception qualifies on: authored
+   once, judged once, and never reconciled against geometry, rigging or a
+   camera. It has none of the properties that stalled the predecessor. This is
+   NOT permission to reopen the art-asset pipeline — a dome is a backdrop, and
+   anything the player can approach, occlude, or land on is still generated.
+
+   **The first exception is music** (Ethan, 2026-07-25): `public/audio/*.ogg` are
    generated tracks and are allowed. All *sound effects* remain Web Audio
    synthesis with no files — footsteps, landings, brass, wind, the lot.
 
