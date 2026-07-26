@@ -56,11 +56,48 @@ import { macroTexture, MACRO_SIZE } from './noise.js'
 // ---------------------------------------------------------------- uniforms
 
 /**
+ * EMITTER BOUNCE — how many nearby emitters a fragment is lit by at once.
+ *
+ * The void is "lit BY OBJECTS" (art-direction-void.md §1): crystals, sigils,
+ * runes and beams spill coloured light onto the stone they grow from. There is
+ * no light in the engine that does that — the emissives GLOW but do not LIGHT —
+ * so this is a forward proximity term that feeds the shader the N nearest
+ * emitters as a uniform array and pools their light onto every surface. The
+ * pool is populated CPU-side each frame with the emitters closest to the
+ * camera; render/index.js owns the selection (see `_selectEmitters`).
+ *
+ * 16 is the whole array. The loop breaks at `scEmitCount`, so the skyline (which
+ * feeds zero) pays one comparison per fragment and nothing else, and a void
+ * frame that only has four emitters in range pays for four. The count is what
+ * gates the whole term off — there is no define, because the materials are
+ * built in materials.js (which this lane does not own) and a runtime count of 0
+ * is exactly as free as a stripped permutation once the driver's branch
+ * predictor has seen it.
+ */
+export const EMIT_MAX = 16
+
+/**
  * ONE shared uniform object, referenced (not copied) by every patched material.
  * `Object.assign(shader.uniforms, SHARED)` copies the uniform *objects*, so a
  * single write to `SHARED.scGroundLevels.value` reaches every material.
  */
 export const SHARED = {
+  /**
+   * THE EMITTER POOL. `scEmitPos[i].xyz` is a world position and `.w` its glow
+   * radius in metres — the distance at which its pool falls to zero, so a light
+   * is a bounded pool and not a global tint (art-direction-void.md §8's first
+   * failure mode is uniform murk, and a term with no cutoff is exactly that).
+   * `scEmitCol[i]` is the emitter's own linear colour. `scEmitCount` is how many
+   * of the 16 slots are live this frame; `scEmitP.x` is the overall gain.
+   *
+   * Filled and re-selected every frame by render/index.js. Default count 0 so a
+   * material that renders before the first selection — or a theme that never
+   * enables the term — is lit exactly as it was.
+   */
+  scEmitPos: { value: Array.from({ length: EMIT_MAX }, () => new THREE.Vector4(0, 0, 0, 1)) },
+  scEmitCol: { value: Array.from({ length: EMIT_MAX }, () => new THREE.Vector3(0, 0, 0)) },
+  scEmitCount: { value: 0 },
+  scEmitP: { value: new THREE.Vector4(1.0, 0, 0, 0) },
   scMacroTex: { value: null },
   /**
    * Up to four world-Y floor planes the dust wedge can sit on. The level is
@@ -257,6 +294,12 @@ uniform vec4 scVeinP;     // x emissive amount, y red-region width, z red-region
 uniform vec2 scVeinC;     // x cracked-rock threshold, y transition width
 uniform vec3 scVeinCol;   // the fissure's own light: violet, the common case
 uniform vec3 scVeinRedCol;// the rare one. §3: red is punctuation, never a field
+
+// EMITTER BOUNCE — the N nearest emitters, world space. See SHARED / EMITTER_LIGHT.
+uniform vec4 scEmitPos[ ${EMIT_MAX} ];  // xyz world pos, w glow radius (m)
+uniform vec3 scEmitCol[ ${EMIT_MAX} ];  // linear emitter colour
+uniform int  scEmitCount;               // live slots this frame; 0 disables the term
+uniform vec4 scEmitP;                   // x overall gain
 
 // Written by the map_fragment block, consumed by the chunk overrides further
 // down main(). GLSL globals, so no varyings and no recomputation. scCavity is
@@ -841,6 +884,68 @@ const WRAP_DIFFUSE = /* glsl */ `
 `
 
 /**
+ * ========================= LIGHT FROM THE EMITTERS =========================
+ *
+ * The one thing the void was missing. Its crystals, sigils, runes and beams
+ * GLOW — that is the emissive vein/crystal work already in this file — but not
+ * one of them LIGHTS the rock around it, and art-direction-void.md §1 is
+ * explicit that this world is "lit BY OBJECTS". In the reference a crystal
+ * cluster spills violet onto the stone it grows from and a sigil ring washes
+ * the wall it is cut into; here every surface saw only the dim raked "sun" and
+ * the sky IBL, so the emitters floated in front of unlit stone.
+ *
+ * This is a forward proximity term: render/index.js selects the emitters
+ * nearest the camera each frame and hands them over as a small uniform array,
+ * and every fragment sums the pools it sits inside. It is added to
+ * `directDiffuse`, so it is albedo-tinted, tonemapped and — critically — walks
+ * through render/patch.js's aerial perspective with everything else, so a pool
+ * twenty metres back washes toward the fog rather than punching through it.
+ *
+ * WHY IT DOES NOT LIFT THE DARKS (art-direction-void.md §8's murk failure, and
+ * the value structure was corrected at real cost this session):
+ *
+ *   - FALLOFF THAT READS. Each pool is windowed to zero at its own radius
+ *     `ep.w`, so it is a bounded pool with a soft edge, not a level-wide tint.
+ *     A fragment beyond every emitter's radius — which is most of the frame's
+ *     dark mass — receives literally nothing and its p1 is untouched.
+ *   - A RECEIVING-FACE TERM. A face turned away from a pool gets none of it, so
+ *     the term paints the lit SIDE of a mass and leaves the shaded side crushed,
+ *     which is the contrast the reference lives on rather than a flat wash.
+ *   - INVERSE-SQUARE CORE. The pool is bright at the source and drops fast, so
+ *     the light READS as coming from the crystal instead of hanging in the air.
+ *
+ * The world normal comes from the geometric varying, not the normal-mapped
+ * `geometryNormal`: a broad bounce does not want per-texel normal detail, and
+ * the varying is already in world space where the emitter positions live.
+ */
+const EMITTER_LIGHT = /* glsl */ `
+{
+  vec3 scEmN = normalize( vScWNrm );
+  vec3 scEmSum = vec3( 0.0 );
+  for ( int i = 0; i < ${EMIT_MAX}; i++ ) {
+    if ( i >= scEmitCount ) break;
+    vec4 ep = scEmitPos[ i ];
+    vec3 d = ep.xyz - vScWPos;
+    float dist2 = dot( d, d );
+    float r2 = ep.w * ep.w;
+    // Windowed cutoff (UE4-style): 1 at the centre, smooth to a hard 0 at the
+    // radius. Squared so the edge of the pool is soft rather than a ring.
+    float win = clamp( 1.0 - dist2 * dist2 / ( r2 * r2 + 1e-4 ), 0.0, 1.0 );
+    win *= win;
+    // Inverse-square, softened by 1 m^2 so the very centre does not blow up.
+    float atten = win / ( dist2 + 1.0 );
+    // Receiving face, with a modest wrap: a face square-on to the pool takes it
+    // all, a grazing face a little, a face turned away nothing. The 0.72/0.28
+    // split keeps a crevice lip lit while its shaded return stays dark.
+    float ndl = dot( scEmN, d ) * inversesqrt( dist2 + 1e-4 );
+    ndl = clamp( ndl * 0.72 + 0.28, 0.0, 1.0 );
+    scEmSum += scEmitCol[ i ] * ( atten * ndl );
+  }
+  reflectedLight.directDiffuse += scEmSum * material.diffuseColor * ( scEmitP.x * RECIPROCAL_PI );
+}
+`
+
+/**
  * Chunk overrides. `<color_fragment>` is deliberately absent: level.js owns the
  * vertex colour channels and they must apply exactly as they do today.
  */
@@ -935,9 +1040,12 @@ roughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );`,
   normal = normalize( normal + mat3( viewMatrix ) * scTiltW );
 #endif`,
   ],
-  // Wrapped and back-lit diffuse, added to the direct chain right after three
-  // has finished accumulating it.
-  ['#include <lights_fragment_begin>', '#include <lights_fragment_begin>\n' + WRAP_DIFFUSE],
+  // Wrapped and back-lit diffuse, and the emitter bounce, added to the direct
+  // chain right after three has finished accumulating it.
+  [
+    '#include <lights_fragment_begin>',
+    '#include <lights_fragment_begin>\n' + WRAP_DIFFUSE + EMITTER_LIGHT,
+  ],
   // The sun's aureole and the horizon band, into the IBL specular accumulator
   // only. Placed after <lights_fragment_maps> because that is where `radiance`
   // is filled and before <lights_fragment_end>, which is where it is consumed.
@@ -952,7 +1060,7 @@ roughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );`,
  * invalidate a warm program cache — three keys programs on the chunk set plus
  * this string, and will happily reuse a stale compiled program otherwise.
  */
-const SHADER_VERSION = 'sc5'
+const SHADER_VERSION = 'sc6'
 
 export const DEFAULT_PARAMS = {
   /** macro tiles per metre. 0.085 -> ~11.8 m period, so features land at 1-4 m. */

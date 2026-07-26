@@ -9,6 +9,7 @@ import { ContactShadows } from './contact.js'
 import { MaterialPatcher } from './patch.js'
 import { SkyEnvironment } from './skyenv.js'
 import { DEFAULT_QUALITY, QUALITY_LEVELS, QUALITY_NAMES, resolveQuality } from './quality.js'
+import { SHARED, EMIT_MAX } from '../materials/shader.js'
 
 export { QUALITY_LEVELS, QUALITY_NAMES, DEFAULT_QUALITY } from './quality.js'
 
@@ -344,6 +345,33 @@ export class RenderPipeline {
     // Bound once so scene.traverse() allocates no closure per frame.
     this._visit = (object) => this._visitObject(object)
 
+    // --- emitter bounce ----------------------------------------------------
+    /**
+     * "Lit BY OBJECTS" (art-direction-void.md §1). The void's crystals, sigils,
+     * runes and beams pool coloured light onto the stone; see EMITTER_LIGHT in
+     * materials/shader.js. Enabled by the same `voidMode` flag that already
+     * carries the theme's sky, so the skyline never pays for it and never lifts.
+     */
+    this._emitterLighting = !!(options.sky && options.sky.voidMode)
+    // The gain the shader multiplies the whole pool by. The bounce is
+    // albedo-multiplied and windowed to each emitter's radius, so this can be
+    // reasonably strong without lifting the frame's dark mass — a fragment past
+    // every radius, or facing away, still receives nothing whatever the gain.
+    // 1.6 lands a clearly-read violet pool on the near crystal-lit stone;
+    // `options.emitterGain` (or `pipeline.emitterGain`) tunes it live.
+    this._emitterGain = options.emitterGain ?? 1.6
+    SHARED.scEmitP.value.x = this._emitterGain
+    SHARED.scEmitCount.value = 0
+    // Built once from the scene the first time the walk runs with the term on;
+    // the emitters never move, so there is nothing to rebuild. Ranked strongest
+    // first, then re-sorted by distance to the camera each frame into the array.
+    this._emitterPool = null
+    this._emitterRaw = this._emitterLighting ? [] : null
+    // Preallocated scratch for the per-frame nearest-N selection, so render()
+    // allocates nothing. Holds indices + squared distances into the pool.
+    this._emitterOrder = []
+    this._emitScratch = new THREE.Vector3()
+
     /**
      * Self-registration, so the verification harness can reach the pipeline.
      *
@@ -446,6 +474,13 @@ export class RenderPipeline {
     if (this._sunAuto && this._sunLight) {
       this._lightDirection(this._sunLight, this._sunDirWorld)
     }
+
+    // Once the scene is populated, cluster the emissive geometry the traverse
+    // just collected into the bounce pool. Emitters never move, so this runs
+    // exactly once. Guarded on the raw list still existing.
+    if (this._emitterLighting && this._emitterRaw && this._emitterRaw.length) {
+      this._buildEmitterPool()
+    }
   }
 
   /**
@@ -503,6 +538,170 @@ export class RenderPipeline {
         this.patcher.patch(mat)
       }
     }
+
+    // Emitter discovery rides the same traverse, once, until the pool is built.
+    if (this._emitterRaw) this._collectEmitter(object, mat)
+  }
+
+  /**
+   * Accumulate the raw emissive instances of one object for the bounce pool.
+   *
+   * The emitters in this world are `glowMaterial()` instances (crystals.js and
+   * voidkit.js): a MeshStandardMaterial with a non-black `emissive` and a
+   * positive `emissiveIntensity`, drawn as InstancedMeshes. That signature is
+   * the identifier — no scene-side tagging is needed, which matters because the
+   * level is built in files this lane does not own. Each instance contributes
+   * its world centre, a weight from its size, and a colour (per-instance where
+   * `instanceColor` carries it — the crystals — else the material's emissive).
+   * `_buildEmitterPool` then clusters these into a bounded set of pools.
+   */
+  _collectEmitter(object, mat) {
+    if (!object.isMesh) return
+    const m = Array.isArray(mat) ? mat[0] : mat
+    if (!m || !m.emissive) return
+    const ei = m.emissiveIntensity ?? 0
+    const e = m.emissive
+    if (ei <= 0 || e.r + e.g + e.b <= 1e-4) return
+
+    object.updateWorldMatrix(true, false)
+    const raw = this._emitterRaw
+    if (object.isInstancedMesh) {
+      const im = new THREE.Matrix4()
+      const wp = new THREE.Vector3()
+      const scl = new THREE.Vector3()
+      const q = new THREE.Quaternion()
+      const col = object.instanceColor
+      for (let i = 0; i < object.count; i++) {
+        object.getMatrixAt(i, im)
+        im.premultiply(object.matrixWorld)
+        im.decompose(wp, q, scl)
+        const size = Math.max(scl.x, scl.y, scl.z)
+        // Colour: the crystals bake colour*gain per instance into instanceColor;
+        // the inlay bakes it into the shared material's emissive * intensity.
+        let r, g, b
+        if (col) {
+          r = col.getX(i); g = col.getY(i); b = col.getZ(i)
+        } else {
+          r = e.r * ei; g = e.g * ei; b = e.b * ei
+        }
+        const lum = r * 0.2126 + g * 0.7152 + b * 0.0722
+        if (lum <= 1e-4) continue
+        raw.push({ x: wp.x, y: wp.y, z: wp.z, r, g, b, w: lum * size * size, size })
+      }
+    } else {
+      const geo = object.geometry
+      if (!geo) return
+      if (!geo.boundingSphere) geo.computeBoundingSphere()
+      const bs = geo.boundingSphere
+      if (!bs) return
+      const wp = this._emitScratch.copy(bs.center).applyMatrix4(object.matrixWorld)
+      const scl = new THREE.Vector3().setFromMatrixScale(object.matrixWorld)
+      const size = bs.radius * Math.max(scl.x, scl.y, scl.z)
+      const r = e.r * ei, g = e.g * ei, b = e.b * ei
+      const lum = r * 0.2126 + g * 0.7152 + b * 0.0722
+      raw.push({ x: wp.x, y: wp.y, z: wp.z, r, g, b, w: lum * size * size, size })
+    }
+  }
+
+  /**
+   * Cluster the raw emissive instances into a bounded set of light POOLS.
+   *
+   * A sigil ring is dozens of small inlay quads and a crystal cluster is many
+   * shards; treating each as its own light would flood the uniform slots with
+   * near-identical points and give each a radius too small to read as a pool.
+   * A coarse voxel grid merges the instances of one feature into one pool at
+   * their weighted centre, with a radius grown from the cluster's own extent —
+   * which is exactly "a visible pool of light around a source" the brief asks
+   * for.
+   *
+   * The BEAMS are deliberately NOT in here. They are bright HDR RED columns
+   * (voidfx.js SIGNATURE/DEEP/MAGENTA), and §3 rations red hard — pooling their
+   * light onto the stone would paint red across the level, which is the one
+   * thing the palette section forbids. The crystals, sigils and runes already
+   * carry the level's authored violet-common / red-rare ratio in their own
+   * emissive colours, so a bounce built only from them inherits that ratio for
+   * free; adding the beams is the only thing that would break it.
+   */
+  _buildEmitterPool() {
+    const CELL = 11 // metres; a hero crystal is one cell, a sigil ring a few
+    const cells = new Map()
+    for (const s of this._emitterRaw) {
+      const key =
+        Math.floor(s.x / CELL) + ',' + Math.floor(s.y / CELL) + ',' + Math.floor(s.z / CELL)
+      let c = cells.get(key)
+      if (!c) {
+        c = { w: 0, x: 0, y: 0, z: 0, r: 0, g: 0, b: 0, ex: 0 }
+        cells.set(key, c)
+      }
+      c.w += s.w
+      c.x += s.x * s.w
+      c.y += s.y * s.w
+      c.z += s.z * s.w
+      c.r += s.r * s.w
+      c.g += s.g * s.w
+      c.b += s.b * s.w
+      c.ex = Math.max(c.ex, s.size)
+    }
+
+    const pool = []
+    for (const c of cells.values()) {
+      const inv = 1 / c.w
+      const x = c.x * inv, y = c.y * inv, z = c.z * inv
+      // Radius: the cell spans CELL metres and a pool should reach a little
+      // past the feature that made it, so light lands on the stone AROUND the
+      // crystal, not only on the crystal. Clamped so no single source floods.
+      const radius = Math.min(34, Math.max(9, CELL * 1.4 + c.ex * 1.6))
+      pool.push({
+        x, y, z, radius,
+        r: c.r * inv, g: c.g * inv, b: c.b * inv,
+        weight: c.w,
+      })
+    }
+
+    // Strongest first, then cap: the array is 16 slots and the per-frame
+    // selection keeps the nearest of whatever survives here.
+    pool.sort((a, b) => b.weight - a.weight)
+    this._emitterPool = pool.slice(0, 96)
+    // Reusable sort scratch, one entry per pooled emitter, so the per-frame
+    // nearest-N selection allocates nothing.
+    this._emitterOrder = this._emitterPool.map(() => ({ i: 0, d: 0 }))
+    this._emitterRaw = null // discovery is done; the emitters never move
+  }
+
+  /**
+   * Fill the uniform array with the emitters nearest the camera this frame.
+   *
+   * The pool can be ~100 features; only the closest EMIT_MAX can light the
+   * fragments on screen (everything past its own radius contributes nothing),
+   * so this is a cheap partial sort of squared distances, written straight into
+   * the shared uniform vectors. Allocation-free after the first frame.
+   */
+  _selectEmitters() {
+    const pool = this._emitterPool
+    if (!pool || pool.length === 0) {
+      SHARED.scEmitCount.value = 0
+      return
+    }
+    const cam = this.camera.position
+    const order = this._emitterOrder
+    for (let i = 0; i < pool.length; i++) {
+      const p = pool[i]
+      const dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z
+      const o = order[i]
+      o.i = i
+      o.d = dx * dx + dy * dy + dz * dz
+    }
+    order.sort((a, b) => a.d - b.d)
+
+    const n = Math.min(EMIT_MAX, order.length)
+    const posU = SHARED.scEmitPos.value
+    const colU = SHARED.scEmitCol.value
+    for (let k = 0; k < n; k++) {
+      const p = pool[order[k].i]
+      posU[k].set(p.x, p.y, p.z, p.radius)
+      colU[k].set(p.r, p.g, p.b)
+    }
+    SHARED.scEmitCount.value = n
   }
 
   // ---------------------------------------------------------------- tunables
@@ -513,6 +712,13 @@ export class RenderPipeline {
    */
   get meterSkyWeight() { return this._meterSkyWeight }
   set meterSkyWeight(v) { this._meterSkyWeight = v }
+
+  /** Overall gain on the emitter bounce (void only). See EMITTER_LIGHT. */
+  get emitterGain() { return this._emitterGain }
+  set emitterGain(v) {
+    this._emitterGain = v
+    SHARED.scEmitP.value.x = v
+  }
 
   /** Stops of brightness on top of the meter. +1 = one stop brighter. */
   get exposureCompensation() {
@@ -906,6 +1112,11 @@ export class RenderPipeline {
       this._walkCountdown = 60
     }
     this._walkCountdown--
+
+    // Re-rank the emitter pool by distance to the camera and hand the nearest
+    // few to the shader. Cheap (a ~100-entry partial sort) and off entirely
+    // when the theme did not enable the term. See EMITTER_LIGHT in shader.js.
+    if (this._emitterLighting && this._emitterPool) this._selectEmitters()
 
     // --- 0a. sky IBL -------------------------------------------------------
     // Internally a no-op unless the sun has actually moved (~0.8 degrees) or a
