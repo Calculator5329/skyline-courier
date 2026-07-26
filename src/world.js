@@ -35,7 +35,89 @@ const SKY_FRAG = /* glsl */`
   // layer, z: the same for the bank layer, w: unused.
   uniform vec4 uDeck;
 
+  // --- the painted void dome (theme.sky.dome; skyline leaves these at zero) --
+  //
+  // See the long note on sky.dome in src/theme.js for why an image is allowed
+  // here at all and what it is and is not permitted to do. The short version:
+  // this samples a MULTIPLIER, never a colour. The colour and the whole
+  // vertical ramp remain scSkyGradient's — the same single evaluation the
+  // aerial perspective and scene.fog read.
+  uniform sampler2D uDomeMap;
+  // x: horizontal repeats, y: sin(elTop), z: sin(elBottom), w: master amount
+  // (0 disables the whole branch, which is the shipped skyline path).
+  uniform vec4 uDomeGeo;
+  // x: lo multiplier, y: hi multiplier, z: gamma, w: fade width, in v units.
+  uniform vec4 uDomeTone;
+  // x: black point, y: white point — the window of the PAINTING's own range
+  // that is expanded across the whole output range. zw unused.
+  uniform vec4 uDomeLevels;
+
   ${SKY_GRADIENT_GLSL}
+
+  /**
+   * The painted dome, expressed ENTIRELY in scVoidGradient's own two anchors.
+   *
+   * This function does not introduce a colour. It picks, per direction, a point
+   * on the line between two values the void gradient already produces:
+   *
+   *   SILHOUETTE, base * lo  — darker than the void behind it. Architecture
+   *     at infinity is made by removing light, not by adding it, and this end
+   *     of the range is what puts real crushed black (§2's clip lo) into a
+   *     frame that had almost none.
+   *   OPEN HAZE, haze * hi with hi below 1 — the deep violet the gradient
+   *     itself reaches when you look straight down, which is also the colour
+   *     scene.fog and the aerial perspective terminate on.
+   *
+   * THAT CEILING IS THE WHOLE SAFETY ARGUMENT, and it is arithmetic rather than
+   * taste. The brightest pixel this dome can produce is haze * hi, which is
+   * strictly less than the brightest pixel the background could ALREADY produce
+   * before the image existed. So the painting cannot raise the background's
+   * ceiling by one bit, and the inversion a previous session shipped —
+   * background brighter than the mass, every rock a black cutout — is not
+   * reachable from here whatever is in the file. Lit rock in these frames sits
+   * around p99 200; the haze anchor renders under 90.
+   *
+   * MAPPING. Azimuth is the obvious wrap. Elevation is mapped through sin(el) —
+   * straight off d.y — rather than through the angle: d.y is what
+   * scVoidGradient ramps on, so the painting's vertical structure and the
+   * gradient's stay locked together under any future change to either, and it
+   * costs no asin.
+   *
+   * NO HORIZON LINE. Outside the painted band the texture clamps and would
+   * repeat its edge row forever, which is a ruled line across the frame and
+   * exactly what §3 forbids. The blend ramps to zero over fade at both edges
+   * — 30 degrees of dome, not a few — so there is no elevation at which this
+   * function's derivative spikes. A first pass used a 22 degree fade against a
+   * narrower band and the top edge was visible as an arc in midclimb; the
+   * fix is angular width, because a gradient spread over a third of the visible
+   * dome is not an edge no matter what is on either side of it.
+   */
+  vec3 scDomeSky( vec3 d, vec3 base, vec3 haze ) {
+    float u = atan( d.z, d.x ) * 0.15915494 * uDomeGeo.x;
+    float v = ( d.y - uDomeGeo.z ) / max( uDomeGeo.y - uDomeGeo.z, 1e-4 );
+    // The texture is uploaded with NO colour space (see buildWorld), so these
+    // bytes are read as the authored 0..1 factor field they are rather than
+    // decoded as sRGB radiance. A flat channel average, not a luminance
+    // weighting: the painting is violet, so a Rec.709 luma would read almost
+    // entirely off the green channel — the one channel a violet image carries
+    // least of its structure in.
+    vec3 texel = texture2D( uDomeMap, vec2( u, clamp( v, 0.0, 1.0 ) ) ).rgb;
+    float lum = ( texel.r + texel.g + texel.b ) * 0.3333333;
+    // A LEVELS WINDOW, then a gamma — not a bare gamma, and the difference is
+    // the whole legibility of this element. Measured, the painting's channel
+    // average has mean 0.091 and standard deviation 0.042: every bit of its
+    // architecture lives inside about a sixth of the 0..1 range. A bare gamma
+    // spread that sixth across a fifth of the output and the dome came back as
+    // a faintly mottled dark field — present, unreadable, worth nothing. The
+    // window expands the painting's OWN range instead, so a cathedral arrives
+    // as a cathedral rather than as a rounding error.
+    float k = clamp( ( lum - uDomeLevels.x )
+      / max( uDomeLevels.y - uDomeLevels.x, 1e-4 ), 0.0, 1.0 );
+    k = pow( k, uDomeTone.z );
+    vec3 painted = mix( base * uDomeTone.x, haze * uDomeTone.y, k );
+    float mask = smoothstep( 0.0, uDomeTone.w, v ) * smoothstep( 1.0, 1.0 - uDomeTone.w, v );
+    return mix( base, painted, mask * uDomeGeo.w );
+  }
 
   // --- value noise / fbm, for the cloud deck --------------------------------
   float hash(vec2 p) {
@@ -79,7 +161,18 @@ const SKY_FRAG = /* glsl */`
     // lower half of the frame, which is why the void dome is CHEAPER than the
     // skyline one rather than a tax on it.
     if (scSkyVoid > 0.5) {
-      gl_FragColor = vec4(scSkyGradient(d, uZenith, uHorizon, uGround, uSunColor, sunDir), 1.0);
+      // The gradient FIRST, then the painting as a modulation of it. Written
+      // in this order on purpose: whatever the image does, the colour in this
+      // frame came out of the same scSkyGradient the fog and the aerial
+      // perspective are terminating on, so a distant island can never fade
+      // into a violet the background does not reach.
+      vec3 v = scSkyGradient(d, uZenith, uHorizon, uGround, uSunColor, sunDir);
+      // uHorizon is scVoidGradient's own haze anchor — the value the ramp
+      // reaches looking straight down and the value distance terminates on.
+      // Passing it here is what keeps the dome inside the sky's one evaluation
+      // rather than beside it.
+      if (uDomeGeo.w > 0.0) v = scDomeSky(d, v, uHorizon);
+      gl_FragColor = vec4(v, 1.0);
       return;
     }
 
@@ -238,6 +331,71 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
   const SKYC = { ...SKY, ...(theme.sky || {}) }
   const horizon = new THREE.Color(SKYC.horizon)
 
+  // --- the painted dome, if this theme has one ----------------------------
+  //
+  // The ONLY image the game loads (CLAUDE.md rule 1, second exception). It is
+  // a URL under `public/` rather than an import, so vite never bundles it and
+  // the skyline build — which sets no `dome` — never fetches a byte of it.
+  //
+  // The uniforms below are packed and defaulted so that a theme without a dome
+  // compiles the identical program with `uDomeGeo.w = 0`: the branch in
+  // SKY_FRAG is on a uniform, so it is coherent across every wavefront and the
+  // skyline pays nothing for this existing.
+  const dome = (theme.sky && theme.sky.dome) || null
+  const domeGeo = new THREE.Vector4(1, 1, -1, 0)
+  const domeTone = new THREE.Vector4(1, 1, 1, 0)
+  const domeLevels = new THREE.Vector4(0, 1, 0, 0)
+  let domeMap = null
+  if (dome) {
+    let root = './'
+    try {
+      if (import.meta.env && import.meta.env.BASE_URL) root = import.meta.env.BASE_URL
+    } catch (_) { /* non-vite host; relative is fine */ }
+    domeMap = new THREE.TextureLoader().load(root + dome.url)
+    domeMap.name = 'void-sky-dome'
+    // Repeat in X, clamp in Y: the asset is authored to tile horizontally
+    // (measured seam: mean left/right edge delta 3.9 of 255) and emphatically
+    // not vertically. The clamp is invisible because `scDomeFactor` fades the
+    // whole modulation out before it is reached.
+    domeMap.wrapS = THREE.RepeatWrapping
+    domeMap.wrapT = THREE.ClampToEdgeWrapping
+    // A FACTOR FIELD, NOT RADIANCE — the same call the impostor atlas makes and
+    // for the same reason. Decoding this as sRGB would push a deliberately dark
+    // painting into near-black and hand the tone curve in `scDomeFactor`
+    // nothing to work with.
+    domeMap.colorSpace = THREE.NoColorSpace
+    domeMap.anisotropy = renderer && renderer.capabilities
+      ? renderer.capabilities.getMaxAnisotropy()
+      : 1
+    domeMap.minFilter = THREE.LinearMipmapLinearFilter
+    domeMap.magFilter = THREE.LinearFilter
+    domeMap.generateMipmaps = true
+    const rad = Math.PI / 180
+    domeGeo.set(
+      dome.repeat != null ? dome.repeat : 4,
+      Math.sin((dome.elTop != null ? dome.elTop : 44) * rad),
+      Math.sin((dome.elBottom != null ? dome.elBottom : -52) * rad),
+      dome.amount != null ? dome.amount : 1,
+    )
+    // The fade is authored in DEGREES because that is how the band is read off
+    // a frame, and converted here into the v units the shader masks in.
+    const span = Math.max(domeGeo.y - domeGeo.z, 1e-4)
+    const fadeDeg = dome.fade != null ? dome.fade : 22
+    const fadeV = Math.min(
+      0.49, Math.abs(Math.sin((dome.elTop - fadeDeg) * rad) - domeGeo.y) / span)
+    domeTone.set(
+      dome.lo != null ? dome.lo : 0.34,
+      dome.hi != null ? dome.hi : 1.06,
+      dome.gamma != null ? dome.gamma : 0.62,
+      fadeV,
+    )
+    domeLevels.set(
+      dome.black != null ? dome.black : 0.03,
+      dome.white != null ? dome.white : 0.20,
+      0, 0,
+    )
+  }
+
   // --- sky --------------------------------------------------------------
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(theme.skyRadius, 32, 20),
@@ -264,6 +422,10 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
         uGround: { value: new THREE.Color(SKYC.deck) },
         uSunDir: { value: sunDir },
         uSunColor: { value: new THREE.Color(SKYC.sun) },
+        uDomeMap: { value: domeMap },
+        uDomeGeo: { value: domeGeo },
+        uDomeTone: { value: domeTone },
+        uDomeLevels: { value: domeLevels },
         uTime: { value: 0 },
         uDeck: {
           value: new THREE.Vector4(SKYC.deckY, SKYC.billowScale, SKYC.bankScale, 0),
@@ -452,7 +614,8 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
   //
   // art-direction-void.md §5: "depth in three bands... if everything sits in
   // one band the space collapses." Until this, the void had one — the course,
-  // and then flat fog. See `src/fx/voidbackdrop.js`.
+  // and then flat fog. See `src/fx/voidbackdrop.js`. The THIRD band is no
+  // longer here: it is the painted dome wired into the sky above.
   //
   // It is built HERE, beside the sky and the fog, rather than in the level,
   // and that placement is the argument: this layer carries no collider, is
@@ -460,9 +623,10 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
   // sense the dome and the aerial perspective are. Building it in the level
   // would put unreachable geometry in the file whose entire job is reachable
   // geometry. Themes that do not ask for it pay nothing.
-  // The renderer is handed over because the far band is BAKED: it renders its
-  // ruin clusters into an atlas once, here at boot, and draws them as
-  // camera-facing cards afterwards. See `IMPOSTORS` in that file.
+  // TWO bands now, not three. The far one used to be baked impostor cards and
+  // is deleted — `public/sky/void-dome.png`, wired into the sky above, carries
+  // the distance instead and carries it as architecture rather than as prisms.
+  // See the block headed "THE FAR BAND IS GONE" in that file.
   const backdrop = theme.backdrop ? new VoidBackdrop(scene, theme, renderer) : null
 
   renderer.shadowMap.enabled = true
@@ -479,9 +643,7 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
     /** Instances, triangles and measured clearance, for the harness to print. */
     backdrop: backdrop
       ? { instances: backdrop.instances, triangles: backdrop.triangles,
-          clearance: backdrop.clearance, cards: backdrop.cards,
-          cardPieces: backdrop.cardPieces, bakeMs: backdrop.bakeMs,
-          bakeCpuMs: backdrop.bakeCpuMs, bakeTriangles: backdrop.bakeTriangles }
+          clearance: backdrop.clearance }
       : null,
     update(time, playerPos) {
       moteMat.uniforms.uTime.value = time

@@ -1,5 +1,95 @@
 # Changelog
 
+## 2026-07-26 — the far distance is a painting now, and the impostors are gone
+
+Ethan, on the baked-impostor build shipped earlier the same day:
+
+> "honestly the random shapes in the background is very weak hoping the image
+> method will improve it."
+
+He is right, and the reason is structural rather than a matter of tuning. Every
+silhouette in that layer came from one function — `ruinGeometry()`, a tapered
+n-gon prism with a broken point. Bake ten into a tile and the tile is an
+angular blob; draw seven hundred tiles and the frame has seven hundred angular
+blobs in it. Density was the only dial the layer had, and density for its own
+sake is exactly what he called weak.
+
+**`public/sky/void-dome.png` is now the void's sky dome** — one painted
+panorama with real gothic architecture in it (arches, tracery, buttressed
+spires), tiled 4x around the horizon. It is the second exception to CLAUDE.md
+rule 1, approved by Ethan on the same day, and it is the only image file the
+game loads for this theme.
+
+**It composes WITH `render/skygrad.js`, it does not bypass it.** The dome does
+not introduce a colour. `scDomeSky()` in `src/world.js` picks, per direction, a
+point on the line between two values `scVoidGradient` already produces: the
+local gradient value scaled down (`lo`, the silhouettes) and the haze anchor
+scaled down (`hi`, the open void between them). So the background's colour and
+its whole vertical ramp are still the one evaluation the aerial perspective and
+`scene.fog` read, and the painting supplies only the high-frequency half — the
+same division of labour the skyline's cloud deck has with the same gradient.
+
+**The value inversion is unreachable by arithmetic, not by care.** `hi` is
+0.95, strictly under 1, so the brightest pixel the dome can produce is dimmer
+than the brightest pixel the background could already produce before the image
+existed. The failure a previous session shipped — background brighter than the
+mass, every rock a black cutout — cannot be reintroduced from this file
+whatever is painted into the PNG. Lit rock in these frames sits at p99 194-218;
+the dome's ceiling renders under 90.
+
+**No horizon line.** The band runs pole to pole with a 9 degree taper at each
+end, so there is no elevation at which the modulation's derivative spikes. Two
+earlier attempts got this wrong and both were caught by looking: a 22 degree
+fade against a 120 degree band printed a visible arc across the upper right of
+`midclimb`.
+
+**And the far impostor band is deleted** — the whole atlas bake, the card
+shader, the elevation slices, ~650 lines. Measured side by side at `summit` and
+`plunge` with the dome wired in, the cards did not add to the painting, they
+drew a bed of pale faceted gravel ACROSS it and hid it. What goes with them,
+stated honestly: one draw call, ~1 440 triangles, ~42 ms of boot-time bake, a
+16 MB render target — and real parallax at 780-1010 m, which is the genuine
+loss. The near band (470-600 m) and the mid band (690-850 m) are still real
+geometry and still parallax correctly; the judgement is that two bands of
+moving silhouette plus a painting that is actually architecture beats three
+bands where the third is moving gravel.
+
+### Measured, void shot set, 1600x900, 90 pumped frames
+
+| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | ms/f |
+| --- | --- | --- | --- | --- | --- | --- |
+| ascent | 37.2 -> **38.7** | 1.7/19.3/194 -> **1.4/22.0/194** | 0.31/0.01% -> **0.30/2.18%** | 95 -> **94** | 2 936 311 -> **2 934 335** | 10.6 -> **11.9-12.2** |
+| midclimb | 31.0 -> **33.3** | 1.9/20.9/194 -> **2.3/17.7/200** | 0.27/0% -> **0.30/0.41%** | 85 -> **84** | 2 934 311 -> **2 932 335** | 6.7 -> **7.5** |
+| plunge | 32.9 -> **29.1** | 5.3/27.4/152 -> **5.0/19.7/158** | 0.26/0% -> **0.28/0%** | 119 -> **118** | 2 941 151 -> **2 939 175** | 6.5 -> **7.7-8.4** |
+| summit | 60.6 -> **61.3** | 5.9/34.3/218 -> **3.9/35.4/218** | 3.17/0% -> **3.17/0.01%** | 93 -> **92** | 2 935 911 -> **2 933 935** | 9.1 -> **9.5-9.6** |
+
+**The dome itself is free.** A/B with `dome.amount` at 0 against 1, same build,
+same session: `ascent` 12.03 ms against 11.86-12.15, `summit` 9.49 against
+9.48-9.62. One texture fetch on a sphere that was already being drawn does not
+show up. The ms/f column above is therefore run-to-run variance rather than a
+cost — one draw call and ~2 000 triangles came OUT of every void frame.
+
+`clip lo` moved from 0.00-0.01% to 0.01-2.18%, which is the first real crushed
+black the void has had; §2 asks for 2-8% but the reference file itself measures
+0.21%, so the file wins and the row is now annotated to say so.
+
+`plunge` is the one shot whose numbers moved the wrong way (p50 27.4 -> 19.7,
+spread 20.1 -> 15.2), and that is the far cards' pale wash leaving. Beside the
+reference the frame is better for it: ruin towers with window openings and dark
+gaps between them, where before there was a violet field with chips in it.
+
+`summit` is unchanged and remains the weakest frame in the set — lum 61.3
+against §2's 28-55 and 3.17% clipped high. Nothing in this change could help
+it: the blow-out is the 26 m finish plaza filling the bottom 60% of the frame
+at 5 m with an emissive rune inlay in it, and the sky is the part of that shot
+that is now right. It stays on the roadmap against `tools/shots.mjs` and
+`src/levels/void.js`.
+
+Skyline is untouched and measured so: `closeup` lum 111.1, sat 0.807, and its
+sky is still entirely procedural — the dome branch is gated on
+`theme.sky.dome`, which only the void sets, so the skyline build never fetches
+a byte of the image.
+
 ## 2026-07-26 — the far band is baked, so it can afford to be crowded
 
 Ethan's standing note on the void is that the build has "less depth and detail
