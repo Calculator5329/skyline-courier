@@ -371,11 +371,20 @@ const BANDS = [
     clusters: 17, per: [7, 13],
     spreadAng: 0.30, spreadRad: 80, spreadY: 120,
     width: [30, 78], spireOdds: 0.16, tilt: 0.05, drift: 0,
-    // THE DARK RUNG. Ratio to the dome behind it, on a side face: 0.74. This
-    // is the band that has to be a SILHOUETTE, and a silhouette is darker than
-    // its background — the first three attempts all made the whole layer
-    // lighter at every range, which is a fog bank with notches cut in it.
-    haze: [0.0030, 0.05, 0.95, 0.10],
+    // THE BRIGHT RUNG, and the direction of the whole ladder REVERSED
+    // 2026-07-26. It used to run 0.74 / 1.05 / 1.26 — near band darker than
+    // the dome, far band lighter — which is correct only when the dome is the
+    // brightest thing in the frame. It no longer is (see `sky` in theme.js):
+    // the background is now near-black, so a band DARKER than it is invisible
+    // and a band lighter than it by 26% is the flat pale wash the review
+    // caught, "55-65% of the frame is uniform bright violet fog".
+    //
+    // Now the layer is MASS, lit from the same hemisphere as the course, and
+    // the ladder runs the way aerial perspective actually runs: near band
+    // brightest and most resolved, each further band both dimmer and closer to
+    // the (dark) fog it fades into. The inscatter gain never exceeds 1.0 any
+    // more, so no band can render brighter than the void behind it.
+    haze: [0.0030, 0.05, 0.85, 0.52],
   },
   {
     name: 'mid',
@@ -384,11 +393,11 @@ const BANDS = [
     clusters: 19, per: [8, 15],
     spreadAng: 0.36, spreadRad: 120, spreadY: 170,
     width: [34, 92], spireOdds: 0.28, tilt: 0.04, drift: 0,
-    // THE NEUTRAL RUNG, 1.05. Almost exactly the dome's own value, so this
-    // band reads as SHAPE without value — you see its edges against the near
-    // band in front of it and against the far band behind it, and barely at
-    // all against empty sky. That is what a middle distance looks like.
-    haze: [0.0016, 0.05, 1.50, 0.07],
+    // THE MIDDLE RUNG. Half the near band's brightness and rather more haze:
+    // its edges read against the near band in front of it, and it separates
+    // from the void behind it by a step small enough that the eye reads it as
+    // distance rather than as a second object.
+    haze: [0.0020, 0.05, 0.95, 0.30],
   },
   {
     name: 'far',
@@ -409,10 +418,12 @@ const BANDS = [
     // that stops at the kill plane makes a bottomless void look like a pit
     // with a lid on the bottom of the frame.
     width: [60, 180], spireOdds: 0.30, tilt: 0.03, drift: 0,
-    // THE PALE RUNG, 1.26. Lighter than the dome: §5's "washed almost to the
-    // fog colour", and the direction matters — a far mass is seen through so
-    // much lit haze that the haze, not the mass, is what reaches the eye.
-    haze: [0.0012, 0.04, 1.85, 0.05],
+    // THE FAINT RUNG. §5's "washed almost to the fog colour" — but the fog is
+    // near-black now, so "washed to it" means this band is barely there, a
+    // suggestion of structure at the edge of visibility. That is the correct
+    // reading of the reference: past the mid ruins there is depth you can feel
+    // and not quite resolve, not a lit backdrop.
+    haze: [0.0016, 0.04, 1.00, 0.16],
   },
 ]
 
