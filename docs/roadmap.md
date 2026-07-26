@@ -349,6 +349,34 @@ minor, and left on purpose rather than missed.
       on a SOLID surface and it should be either narrowed or written into
       `docs/geometry-unlock.md` as a sanctioned exception.
 
+## Next — performance
+
+Measured 2026-07-26 with `tools/perfprobe.mjs`, `tools/perfinv.mjs` and
+`tools/hitch.mjs` on an RTX 5070 Ti. Read `docs/perf.md` before opening any of
+these — it records what the numbers were, and, more usefully, which two
+plausible fixes were built, measured, and thrown away.
+
+- [ ] **Make the contact-shadow march cost less than 40% of the frame.**
+      `src/render/contact.js` is a 14-step screen-space ray march plus an
+      8-sample AO spiral at FULL resolution, and turning it off is worth
+      2.2–2.4 ms of a 4.4–5.5 ms frame at 1440p — the largest single item in
+      the renderer by a wide margin, on both themes. It is also the item that
+      scales worst with resolution, which is what makes it the thing a player
+      on a 4K panel feels. Half-resolution march with a bilateral upsample, or
+      fewer steps at distance, are the obvious moves; both are visual changes
+      and need a shot-set diff.
+- [ ] **Decide the pixel-ratio cap deliberately.** `src/main.js` uses
+      `Math.min(window.devicePixelRatio, 2)`, so a HiDPI display quietly asks
+      for up to 4x the fragments of the window it is drawn in. The frame is
+      fill-bound, so that multiplier lands directly on frame time.
+      `RenderPipeline` already carries a `renderScale` option that nothing
+      sets. This is a TASTE call, not a technical one — it trades sharpness
+      for frame rate — so it needs Ethan, not an agent.
+- [ ] Re-measure on hardware that is not a 5070 Ti before concluding anything
+      about geometry. Every "the world is too many triangles" hypothesis died
+      against this GPU (see `docs/perf.md`); none of them has been tested on an
+      integrated part, where vertex throughput is a real constraint.
+
 ## Next — feel and content
 
 - [ ] **Wire `audio: VOID_AUDIO` into `src/theme.js`.** The void's soundscape
