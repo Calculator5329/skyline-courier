@@ -194,22 +194,52 @@ const VERT = /* glsl */`
   varying float vSeed;
 
   void main() {
+    // §4.5: "the void has a current". The fragments do not only DRIFT, they
+    // TUMBLE — a broken shard hanging in a void has nothing to hold it level, so
+    // it turns, slowly, forever. The spin rate and its sense come from the
+    // instance seed so no two fragments turn together, and it is gated to the
+    // fragments alone (aDrift > 0): a 300 m ruin mass that rotated would read
+    // as the whole cathedral coming loose. The angle is uTime * rate, so it is
+    // exactly zero at t=0 and a frozen acceptance shot is untouched — the tumble
+    // lives only in motion, which is the point of it. All vertex work, so on a
+    // fill-bound renderer (docs/perf.md) it is very nearly free.
+    float isFrag = step(0.001, aDrift);
+    float spinY = (0.055 + fract(aSeed * 17.3) * 0.10)
+                * (fract(aSeed * 5.1) < 0.5 ? -1.0 : 1.0) * isFrag;
+    float spinX = (0.028 + fract(aSeed * 11.7) * 0.055) * isFrag;
+    float ay = uTime * spinY;
+    float ax = uTime * spinX;
+    float cy = cos(ay), sy = sin(ay);
+    float cx = cos(ax), sx = sin(ax);
+
+    // Rotate about the body centre (the prism is authored base-at-0, top-at-1)
+    // rather than the base, so a fragment tumbles in place instead of swinging
+    // from its foot.
+    vec3 lp = position - vec3(0.0, 0.5, 0.0);
+    lp = vec3(cy * lp.x + sy * lp.z, lp.y, -sy * lp.x + cy * lp.z);
+    lp = vec3(lp.x, cx * lp.y - sx * lp.z, sx * lp.y + cx * lp.z);
+    lp += vec3(0.0, 0.5, 0.0);
+
     // instanceMatrix / USE_INSTANCING is declared by three's own vertex prefix
     // for ShaderMaterial (not for RawShaderMaterial) — this is the supported
     // path, not a trick.
-    vec4 world = instanceMatrix * vec4(position, 1.0);
+    vec4 world = instanceMatrix * vec4(lp, 1.0);
 
-    // §4.5: "small debris drifting upward sells 'the void has a current'".
     // Only the fragments carry a non-zero aDrift; a 300 m ruin mass that
     // bobbed would read as an earthquake.
     world.y += sin(uTime * 0.07 + aSeed * 6.2831) * aDrift;
     world.x += cos(uTime * 0.05 + aSeed * 4.1) * aDrift * 0.4;
 
-    // The normal only needs the instance's rotation and scale. Non-uniform
-    // scale would strictly want the inverse transpose; the scales here are
-    // gentle enough (never more than ~4:1) that the error is a few degrees of
-    // shading on an object that is 90% haze by the time it is seen.
-    vNormalW = normalize(mat3(instanceMatrix) * normal);
+    // The normal is turned by the same tumble before the instance transform, so
+    // a rotating fragment shades correctly rather than keeping a fixed lit face.
+    // The instance's own rotation and scale then finish it; non-uniform scale
+    // would strictly want the inverse transpose, but the scales here are gentle
+    // enough (never more than ~4:1) that the error is a few degrees of shading
+    // on an object that is 90% haze by the time it is seen.
+    vec3 nrm = normal;
+    nrm = vec3(cy * nrm.x + sy * nrm.z, nrm.y, -sy * nrm.x + cy * nrm.z);
+    nrm = vec3(nrm.x, cx * nrm.y - sx * nrm.z, sx * nrm.y + cx * nrm.z);
+    vNormalW = normalize(mat3(instanceMatrix) * nrm);
 
     vec3 toCam = cameraPosition - world.xyz;
     vDist = length(toCam);
