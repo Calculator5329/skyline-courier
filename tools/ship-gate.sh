@@ -28,7 +28,22 @@ fi
 if ! git diff --cached --quiet 2>/dev/null; then
   STAGE=$(mktemp -d "${TMPDIR:-$HOME/.cache}/skyline-stage-XXXX")
   git archive "$(git write-tree)" | tar -x -C "$STAGE"
-  ln -sfn "$REPO/node_modules" "$STAGE/node_modules"
+  # RESOLVE node_modules ACROSS WORKTREES. `$REPO` is this checkout, and a
+  # linked git worktree has no node_modules of its own — so in every agent lane
+  # this symlink dangled and the staged build failed, which the message below
+  # then reported as "a file changed after the disk build". Two separate agents
+  # lost time to that diagnosis before it was traced. Fall back to the main
+  # worktree's copy, which `git rev-parse` can always name.
+  NM="$REPO/node_modules"
+  if [ ! -d "$NM" ]; then
+    MAIN=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+    MAIN=${MAIN%/.git}
+    [ -d "$MAIN/node_modules" ] && NM="$MAIN/node_modules"
+  fi
+  if [ ! -d "$NM" ]; then
+    fail "cannot find node_modules (looked in $REPO and the main worktree) — run npm install"
+  fi
+  ln -sfn "$NM" "$STAGE/node_modules"
   if ! ( cd "$STAGE" && npx vite build >/tmp/skyline-gate-staged.log 2>&1 ); then
     fail "the STAGED tree does not build (a file changed after the disk build) — see /tmp/skyline-gate-staged.log"
   fi
