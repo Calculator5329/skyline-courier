@@ -657,13 +657,45 @@ export function buildVoidCourse(collision) {
   // Ambient orbs lose the violet entirely — sharing a hue with the anchors was
   // the whole problem — and drop in size and brightness so they read as points
   // the fog recedes past (§4.5) rather than as lamps.
-  const ORB_R = [0.18, 0.26]
+  const ORB_R = [0.22, 0.30]
+
+  /**
+   * IF IT GLOWS, YOU CAN HOOK IT. Every orb within reach of the route is a
+   * real grapple anchor.
+   *
+   * Ethan asked for "remove, or allow the user to use the grapple on those, or
+   * any mix". I first tried the mix — big bright violet orbs hookable, small
+   * dim blue ones scenery — on the theory that one signal with one meaning is
+   * the rule the skyline already lives by. Playing it, he came straight back:
+   * "blue orbs still exist and don't let me grapple".
+   *
+   * So the mix was the wrong call. A distinction that is legible in a still
+   * frame is not legible at 12 m/s while you are aiming at something, and a
+   * light you cannot use is a light that lies to you. The simplest rule is the
+   * one that survives motion, and it costs nothing: EVERY orb is an anchor.
+   * That also matches his standing direction (docs/intent.md) that the answer
+   * to ambiguity is more ability, never less.
+   *
+   * The reach test is why this is not simply "all 600 of them": orbs out in the
+   * far ruin districts are hundreds of metres past the play volume, so an
+   * anchor there would be a hook the cuff can never reach — the same lie in the
+   * opposite direction. Only orbs near the route are registered.
+   */
+  const ORB_ANCHOR_REACH = 55
   const orb = (x, y, z, k = 0) => {
+    let near = false
+    for (const n of nodes.values()) {
+      if (Math.abs(n.y - y) > ORB_ANCHOR_REACH) continue
+      if (Math.hypot(n.x - x, n.z - z) <= ORB_ANCHOR_REACH) { near = true; break }
+    }
     voidOrb(L, x, y, z, {
-      radius: ORB_R[k % ORB_R.length],
+      radius: near ? ORB_R[k % ORB_R.length] + 0.16 : ORB_R[k % ORB_R.length],
       color: colors.cool,
-      intensity: 0.55,
+      // Reachable ones read a little brighter and a little bigger — not as a
+      // rule the player has to learn, just so a usable hook is easy to SEE.
+      intensity: near ? 1.15 : 0.5,
     })
+    if (near) L.anchors.push(new THREE.Vector3(x, y, z))
   }
 
   /**
