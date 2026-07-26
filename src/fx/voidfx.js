@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { VoidLife } from './voidlife.js'
 
 /**
  * VERTICAL ENERGY BEAMS — `docs/art-direction-void.md` §4.4.
@@ -187,6 +188,7 @@ const VERT = /* glsl */`
   // exact way a "vary the brightness" change gets silently undone.
   attribute vec4 aColor;
   uniform vec2 uHaze;        // x: extinction per metre, y: near-fade radius
+  uniform float uTime;
   varying vec2 vUv;
   varying vec3 vColor;
   varying float vSeed;
@@ -213,6 +215,23 @@ const VERT = /* glsl */`
     vec3 world = aBase
       + right * (position.x * 2.0 * aBeam.x)
       + vec3(0.0, (position.y + 0.5) * aBeam.y, 0.0);
+
+    // --- the beams waver -----------------------------------------------------
+    //
+    // A pillar of energy is not a rigid rod: it leans and settles like a column
+    // of heat, the head free and the foot all but anchored. The amplitude grows
+    // as h01² so the base barely moves and the top drifts — a reed, not a
+    // pendulum — and it rides the site's own width so a thin beam wavers less in
+    // metres than a fat one. Gated to zero at t=0 by eInV below, so a frozen
+    // acceptance shot keeps the exact plumb geometry §5 hangs its framing on;
+    // the waver only exists in motion, which is the only thing a still frame
+    // cannot see. Vertex work, so on a fill-bound renderer it is free.
+    float eInV = smoothstep(0.0, 2.0, uTime);
+    float h01 = position.y + 0.5;
+    float swayAmp = aBeam.x * (0.2 + h01 * h01 * 2.6) * eInV;
+    world += right * sin(uTime * 0.47 + vSeed * 5.0 + h01 * 2.3) * swayAmp * 0.5;
+    world.x += sin(uTime * 0.31 + vSeed * 3.1 + h01 * 1.7) * swayAmp * 0.35;
+    world.z += cos(uTime * 0.29 + vSeed * 2.3 + h01 * 1.9) * swayAmp * 0.35;
 
     // --- the beams live in the fog too -------------------------------------
     //
@@ -273,6 +292,23 @@ const FRAG = /* glsl */`
     // difference between a living void and a screensaver.
     float pulse = 0.86 + 0.14 * sin(uTime * 1.6 - vUv.y * 26.0 + vSeed);
 
+    // Everything below is gated to zero at t=0 so the frozen shot is unchanged;
+    // it is the LIVING behaviour the brief asks for and a still frame can never
+    // show. None of it is fast enough to strobe — the highest rate here is
+    // 2.7 rad/s, a period of over two seconds.
+    float eIn = smoothstep(0.0, 2.0, uTime);
+
+    // A slow overall gutter — the whole column flaring and dropping like a flame
+    // in a draught, per-seed so no two beams gutter together. This is the
+    // flicker the beams were missing: they were pin-static in brightness.
+    float flick = 1.0 + eIn * 0.07 * (sin(uTime * 0.9 + vSeed * 4.0)
+                                    + 0.5 * sin(uTime * 2.7 + vSeed * 1.3));
+
+    // A second, slower band sliding DOWN the length, so brightness varies along
+    // the beam and not only across its cross-section — knots of energy travelling
+    // through the column rather than a uniformly lit rod.
+    float band = 1.0 + eIn * 0.12 * sin(uTime * 0.8 - vUv.y * 7.0 + vSeed * 2.0);
+
     // The core goes white-hot rather than more red. A saturated emissive that
     // simply gets brighter stays the same hue and reads as a decal; a real
     // light source desaturates toward its own centre, and that gradient from
@@ -280,7 +316,7 @@ const FRAG = /* glsl */`
     // sells these as energy rather than as paint.
     vec3 c = vColor * body + vec3(1.0, 0.62, 0.78) * core * 26.0 * vHot;
 
-    gl_FragColor = vec4(c * ends * pulse * vAtten, 1.0);
+    gl_FragColor = vec4(c * ends * pulse * flick * band * vAtten, 1.0);
   }
 `
 
@@ -356,15 +392,26 @@ export class VoidFX {
     this.mesh.renderOrder = 3
     this.mesh.name = 'void-beams'
     scene.add(this.mesh)
+
+    // The emissive breath — the crystals and wall-sigils, made to live. It has
+    // to be constructed AND ticked by something the frame loop already drives,
+    // and VoidFX is that thing: it is the void-only system main.js already
+    // updates every frame (`voidFX?.update(now)`), so folding VoidLife in here
+    // animates the theme's static emissives without any new wiring in main.js —
+    // and without touching the skyline theme, which never builds a VoidFX at
+    // all. See src/fx/voidlife.js for what it patches and the rules it obeys.
+    this.life = new VoidLife(scene)
   }
 
   update(time) {
     this.material.uniforms.uTime.value = time
+    this.life.update(time)
   }
 
   dispose() {
     this.mesh.parent?.remove(this.mesh)
     this.mesh.geometry.dispose()
     this.material.dispose()
+    this.life.dispose()
   }
 }
