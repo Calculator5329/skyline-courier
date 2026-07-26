@@ -510,13 +510,31 @@ const voidTheme = {
     // Violet-white, well over 1.0 so they catch the bloom the way dust near a
     // bright emissive actually does.
     color: [1.35, 1.05, 2.10],
-    spread: [220, 140, 220],
-    // The void has a current. Slow upward drift reinforces the climb.
-    rise: 0.35,
-    // Just over half the budget bound to the energy beams. See the block
-    // comment in world.js: dust with no light on it is invisible, so an even
-    // spread in a near-black scene is mostly wasted particles.
-    cluster: 0.55,
+    // TALLER, 2026-07-26. The drift box was a flat slab (140 m of vertical
+    // against 220 m each way horizontally), so dust hung in a low band and the
+    // upper shaft — the part §5 says the camera is always looking INTO — read as
+    // empty air. Ethan's standing critique is "not making you feel you are in a
+    // vast space"; a vast vertical space is sold by particles receding UP the
+    // column, catching the beams and crystals as they go. Squared to 220 so the
+    // same 1400 motes span the whole climb the player is looking up through.
+    // This redistributes existing points, it does not add light — the frame's
+    // value structure (§2) is unchanged; only WHERE the dust sits moves.
+    spread: [220, 220, 220],
+    // The void has a current, and a stronger one. §4.5: "small debris drifting
+    // upward sells 'the void has a current' and reinforces the upward pull."
+    // 0.35 was a barely-perceptible seep; at 0.46 the drift reads as motion in a
+    // still frame, which is the atmospheric life the reference has and a static
+    // dust field does not.
+    rise: 0.46,
+    // Bound harder to the beams and crystals. See the block comment in
+    // world.js: dust with no light on it is invisible, so an even spread in a
+    // near-black scene is mostly wasted particles. §4.5 asks for motes "denser
+    // near crystals and beams" specifically; 0.70 (from 0.55) pulls more of the
+    // budget into the lit lanes, so the dust that IS visible clusters where the
+    // reference's does — around the emissive verticals — instead of speckling
+    // the dark uniformly. Concentrating the same points cannot lift the frame's
+    // mean; it only makes the visible fraction land on the light.
+    cluster: 0.70,
   },
 
   /** §4.4. Off for any theme that does not ask for it. */
