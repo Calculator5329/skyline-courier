@@ -576,7 +576,7 @@ function unionRadiusAt(rects, theta) {
  *
  * @returns {Array<[number,number]>} points, with `.len` (radius per point) set.
  */
-function discOutline(rects, squash, pull, chamfer) {
+function discOutline(rects, pull, chamfer) {
   const n = rects.length
   // One quadrant, from the +X axis round to the +Z axis.
   const quad = [[rects[0].hx, 0]]
@@ -620,7 +620,21 @@ function discOutline(rects, squash, pull, chamfer) {
       out.push([p[0], p[1]])
     }
   }
-  for (const p of out) { p[0] *= pull; p[1] *= pull * squash }
+  // `pull` ONLY. This used to read `p[1] *= pull * squash`, which applied the
+  // squash a SECOND time: every caller builds `rects` with `discRects()`, and
+  // `discRects` already bakes squash into `hz` (`hz: R * squash * sin(a)`).
+  //
+  // The terrace is `deck(14, 0, 0, 30, 10.4)`, so squash = 10.4/30 = 0.347 and
+  // the drawn cap came out at |z| = 5.2 * 0.347 = 1.80 m under a collider that
+  // is 5.2 m — a 10.4 m deck drawn 3.6 m wide. Measured in the running game by
+  // point-in-triangle over the collider's top face: 51.9% of the terrace had no
+  // upward-facing geometry above it at all.
+  //
+  // This is the bug behind every "I can see through the floor" report, and it
+  // hid for so long because it is INVISIBLE on a square island: squash = 1 is
+  // the identity, so only the long route decks were wrong, and they were wrong
+  // by a factor of three.
+  for (const p of out) { p[0] *= pull; p[1] *= pull }
   return out
 }
 
@@ -648,7 +662,7 @@ function mossCapGeometry(rects, squash, thickness, overhang, bevel, rand) {
   // a single rectangle, so this had nothing to round off and instead cut a
   // 1.05 m notch out of each corner of the terrace — the same invisible-floor
   // bug as the inset above, just concentrated in four places.
-  const outline = discOutline(rects, squash, pull,
+  const outline = discOutline(rects, pull,
     rects.length > 1 ? Math.max(bevel * 2.6, rects[0].hx * 0.07) : bevel * 2.6)
   const M = outline.length
   const relief = Math.min(0.10, thickness * 0.42)
@@ -1087,7 +1101,7 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     // by at least d.
     const minDist = Math.max(0.3, Math.min(rects[0].hx, rects[rects.length - 1].hz))
     const pullBack = Math.max(0.5, 1 - (project + 0.02) / minDist)
-    const outline = discOutline(rects, squash, pullBack, project * 2.2)
+    const outline = discOutline(rects, pullBack, project * 2.2)
     const path = outline.map((p) => [p[0], 0, p[1]])
     L.mesh(rimKind, extrudeAlong(corniceShape(project, rimH, 3), path, {
       closed: true, detail: detail >= 2 ? 2 : 1, pathSegments: path.length,
@@ -1115,7 +1129,7 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     // `radius * 0.9`, `discOutline` never leaves it, and every profile scale
     // below is <= 1.
     const rects = discRects(radius * 0.9, facets, squash, shape)
-    const outline = discOutline(rects, squash, 0.995,
+    const outline = discOutline(rects, 0.995,
       Math.max(bevel * 2.6, rects[0].hx * 0.07))
     L.mesh(kind, loftOutline(outline, [
       [0.88, -bodyDepth],
@@ -1259,7 +1273,7 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     // read that matters most. Broken cover with gaps in it is also just what
     // ivy on a wall looks like.
     drapeOutline(L, x, y - capThickness, z,
-      discOutline(discRects(radius, facets, squash, shape), squash, 0.995, 0), {
+      discOutline(discRects(radius, facets, squash, shape), 0.995, 0), {
         drop: [0.7, 1.5 + radius * 0.1],
         pitch: opts.ghost ? 1.9 : 1.15,
         minRun: Math.max(0.9, radius * 0.12),
