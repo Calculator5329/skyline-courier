@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-07-25 — the wall verbs, made legible
+
+The other half of the wall report. `9c8eb77` fixed the mechanic — a head-on
+wall is jumpable, a climb runs 5.6 m, there is a coyote window. This makes the
+rule **look at the wall and you climb it, look along it and you run it, Space
+always leaves it** readable from the screen, without a line of instruction and
+without touching a single input or tuning constant. `tools/wallprobe.mjs`
+reports the same numbers to two decimal places before and after (6.96 / 7.00 /
+0.00 m/s outward), which is the receipt that movement is untouched.
+
+Four channels, each of which now says *which* wall verb is live:
+
+- **The wall gauge (`src/hud.js`, `index.html`).** A climb (0.9 s) and a
+  lateral run (1.6 s) both simply ended, with no warning. They now drain a
+  gauge — and the gauge is ONE instrument in the two orientations the moves
+  have: a 55 px rail up the side of the drive cluster for a climb, a 55 px bar
+  across the top for a lateral run, meeting at the corner. Which one is lit is
+  therefore a wordless second reading of the verb, which is the exact confusion
+  that was reported. The last third warms to the redline's terracotta —
+  including the empty part of the channel, because recolouring only the fill
+  meant the message arrived with four pixels left to carry it. Both are
+  hairlines, both are absolutely positioned so nothing in the cluster moves
+  when a wall arrives, and neither exists off a wall.
+- **The coyote window, which had no representation at all.** 0.28 s in which
+  Space still kicks off a wall you are no longer touching. The gauge holds,
+  spent and warm, and the verb stays at half light rather than blanking — a
+  word that vanishes reads as the move breaking. It is drawn *dimmer* than a
+  live gauge: the first pass lit the empty channel from inside and a full-length
+  warm column read as a full budget, the opposite of what it means.
+- **The camera (`src/camera.js`).** Falling next to a wall and running on one
+  produced identical frames unless the wall happened to be to one side. Contact
+  now gets its own channel — 0.10° of rotational rumble, a sixth of the existing
+  shake — at 74 Hz for a climb (boots scrabbling) and 39 Hz at a third the
+  amplitude for a lateral run (a surface sliding past). It is derived from
+  player state inside `update` rather than written to `rig.shake`, which main.js
+  overwrites from the speed FX every frame.
+- **The impact layer (`src/fx/motes.js`, driven from `src/fx/speed.js`).** A
+  climb already threw sparks DOWN; a lateral run threw nothing, so running on a
+  wall and falling past it left the same air. `motes.wallrun()` trails them
+  BACK along the surface at a rate that rides on speed. Measured: 14 particles
+  at mean vy -1.21 for a climb, 12 at mean |v_horiz| 7.2 for a run, 0 in open
+  air.
+- **The scrape (`src/audio.js`).** It ran only on a lateral run, so a climb was
+  continuously silent between its one-shot and whatever ended it — and silence
+  is what falling next to a wall sounds like. It now runs on both, takes its
+  band and Q from the same surface profile every other contact cue uses, rises
+  through a climb as the grip runs out, and thins toward the end of either
+  budget. Measured on brass: climb 2758 → 3941 Hz as it empties, gain 0.067 →
+  0.041; a lateral run holds a broader 1877 Hz; open air 0.0003.
+
+New: `tools/wallfeel.mjs` — the legibility counterpart of `wallprobe.mjs`.
+Drives the shipped controller into a real climb and a real lateral wall-run in
+both themes, reads the gauge off the DOM, counts particles out of the shared
+mote field, and reads the live scrape filter (which has no picture, and whose
+own exceptions `Audio.update` swallows by design). `--shots` writes the frames
+in `docs/captures/wallfeel/`. `src/main.js` exposes `audio` on `window.__game`
+for the same reason `pipeline` is exposed: a continuous audio layer cannot be
+verified by looking.
+
 ## 2026-07-25 — crystal shards: the void theme's light, as geometry
 
 `docs/art-direction-void.md` §4.3 asks for two families of jagged faceted

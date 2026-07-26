@@ -187,6 +187,7 @@ export class MoteField {
     this._slideAcc = 0
     this._dashAcc = 0
     this._climbAcc = 0
+    this._wallAcc = 0
     this._height = 900
 
     // Scratch. Nothing in here allocates once construction is done.
@@ -469,6 +470,52 @@ export class MoteField {
         -14.0,
         1.2,
         3.0, 1.5, 0.4,
+      )
+    }
+  }
+
+  /**
+   * Scrape along a LATERAL wall-run — a trail struck off behind the boots.
+   *
+   * The counterpart of `climb` above, and deliberately not the same picture.
+   * A climb throws its sparks *down*, because you are going up; a run throws
+   * them *back along the wall*, because you are going sideways. That is the
+   * difference between the two moves rendered as a direction, which is the
+   * one thing a player can read at a glance while their eyes are on the route.
+   *
+   * `ax, az` is the unit direction of travel along the surface. Rate rides on
+   * speed rather than being fixed: a wall-run barely holding on should not
+   * throw the same shower as one taken at a sprint.
+   */
+  wallrun(dt, x, y, z, nx, ny, nz, ax, az, speed) {
+    // 22/s at walking pace up to 52/s flat out. Capped per frame so a hitch
+    // cannot dump a hundred particles into one draw.
+    this._wallAcc += dt * (22 + Math.min(1, speed / 14) * 30)
+    let n = Math.floor(this._wallAcc)
+    if (n <= 0) return
+    if (n > 4) n = 4
+    this._wallAcc -= n
+    for (let i = 0; i < n; i++) {
+      // Trailing speed is a fraction of the player's, not the full amount: a
+      // spark that keeps pace with the boot never separates from it, and the
+      // whole read here is separation.
+      const back = 0.35 + this._rand() * 0.55
+      this._emit(
+        x + this._rand2() * 0.16, y + this._rand2() * 0.30, z + this._rand2() * 0.16,
+        -ax * speed * back + nx * (0.6 + this._rand() * 1.4) + this._rand2() * 0.5,
+        // Barely any vertical: on a lateral run gravity is most of what makes
+        // the trail hang behind and fall away, and launching them upward reads
+        // as an explosion rather than as a scrape.
+        0.2 + this._rand() * 0.7,
+        -az * speed * back + nz * (0.6 + this._rand() * 1.4) + this._rand2() * 0.5,
+        0.26 + this._rand() * 0.24,
+        0.020 + this._rand() * 0.026,
+        0.45,
+        -11.0,
+        2.0,
+        // A shade cooler than the climb's sparks (3.0, 1.5, 0.4): a glancing
+        // scrape does not strike as hot as boots digging in.
+        2.4, 1.35, 0.45,
       )
     }
   }

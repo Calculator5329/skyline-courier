@@ -73,6 +73,30 @@ const STEP_OMEGA_GAIN = 1.1
 const STEP_TELEPORT = 3.0
 const STEP_MAX = 0.9         // never let the eye trail the body by more than this
 
+// --- wall contact ------------------------------------------------------
+// Falling *next to* a wall and running *on* one produced identical frames
+// unless the wall happened to be to one side (the roll below only fires on a
+// lateral run, and a climb actively damps it — a head-on climb has no side to
+// lean toward). So contact gets its own channel: a texture the surface writes
+// onto the lens for exactly as long as a boot is on it.
+//
+// It rides the shake maths but is NOT `this.shake` — main.js assigns that from
+// the speed FX every frame, so anything written there is overwritten before it
+// is used. This is derived from player state inside `update` instead, which
+// also means it needs no reset path: off a wall it decays to nothing on its
+// own within about a third of a second.
+//
+// 0.0017 rad is 0.10°, roughly a sixth of the peak of the existing shake.
+// Deliberately at the bottom of what registers — this has to read as the wall
+// being there, never as the camera being hit.
+const CONTACT_SHAKE = 0.0017
+// Two rates off one channel, which is the point: a climb is boots scrabbling
+// for purchase and a lateral run is a surface sliding past. They must not feel
+// the same, because telling them apart is the whole problem.
+const CONTACT_HZ_CLIMB = 74
+const CONTACT_HZ_RUN = 39
+const CONTACT_RUN_AMP = 0.34
+
 export class CameraRig {
   constructor(camera) {
     this.camera = camera
@@ -87,6 +111,8 @@ export class CameraRig {
     this.fov = BASE_FOV
     this.shake = 0
     this.shakeTime = 0
+    this.contact = 0
+    this.contactTime = 0
     this.slideEase = 0
     this.stepOffset = 0
     this.stepVel = 0
@@ -223,6 +249,16 @@ export class CameraRig {
     this.rollVel += ((rollTarget - this.roll) * 120 - this.rollVel * 16) * h
     this.roll += this.rollVel * h
 
+    // --- wall contact: how a surface feels through a boot -----------------
+    // Attack is fast because contact is an impact; release is slow so the last
+    // frame of a wall does not click off, and so the coyote window still feels
+    // like a wall for as long as it still behaves like one.
+    const climbing = player.climbTimer > 0
+    const contactTarget = climbing ? 1 : player.wallRunning ? CONTACT_RUN_AMP : 0
+    const contactRate = contactTarget > this.contact ? 26 : 8
+    this.contact += (contactTarget - this.contact) * (1 - Math.exp(-contactRate * h))
+    this.contactTime += h * (climbing ? CONTACT_HZ_CLIMB : CONTACT_HZ_RUN)
+
     // --- field of view: the primary speed cue ----------------------------
     const boost = clamp01((player.speed - TUNING.sprintSpeed) / (BOOST_SPEED - TUNING.sprintSpeed))
     let fovTarget = BASE_FOV + speedT * SPEED_FOV + boost * BOOST_FOV
@@ -273,6 +309,13 @@ export class CameraRig {
     const shakeY = Math.cos(this.shakeTime * 1.13) * sh
     const shakeZ = Math.sin(this.shakeTime * 0.71) * sh * 1.4
 
+    // Same channel, same rule: rotation only, never position. Weighted toward
+    // roll rather than pitch, because a judder in the horizon reads as a
+    // surface being dragged along and a judder in the pitch reads as a hit.
+    const con = this.contact * CONTACT_SHAKE
+    const conX = Math.sin(this.contactTime * 1.7) * con * 0.7
+    const conZ = Math.sin(this.contactTime) * Math.sin(this.contactTime * 0.31) * con * 1.6
+
     // --- commit ----------------------------------------------------------
     const cam = this.camera
     const bobWorldX = Math.cos(this.yaw) * this.bob.x
@@ -282,7 +325,7 @@ export class CameraRig {
       player.position.y + eyeHeight + this.stepOffset + this.dip + this.bob.y,
       player.position.z + bobWorldZ,
     )
-    cam.rotation.set(this.pitch + shakeX, this.yaw + shakeY, this.roll + shakeZ)
+    cam.rotation.set(this.pitch + shakeX + conX, this.yaw + shakeY, this.roll + shakeZ + conZ)
 
     if (Math.abs(cam.fov - this.fov) > 0.01) {
       cam.fov = this.fov

@@ -52,6 +52,11 @@
  * sample, so |output| <= tanh(1) = 0.762 no matter what arrives.
  */
 
+// The wall cues need the same budgets the controller spends, so the sound of a
+// climb running out cannot drift away from a climb actually running out.
+// Read-only; nothing in this file touches the player.
+import { TUNING } from './player.js'
+
 // ---------------------------------------------------------------- constants
 
 /** Speed of sound, m/s. Used to turn image-source distances into delays. */
@@ -283,6 +288,8 @@ export class Audio {
     this._windSizzle = null
     this._scrape = null
     this._scrapeGain = null
+    this._wallSurf = null
+    this._wallSurfAt = -1
     this._gearGain = null
     this._gearLfo = null
     this._gearDepth = null
@@ -601,9 +608,7 @@ export class Audio {
       // that spectral change is most of what the ear reads as "faster".
       this._wind.frequency.setTargetAtTime(380 + s * 1900, t, 0.2)
 
-      const scrapeTarget = player.wallRunning ? 0.04 + s * 0.07 : 0
-      this._scrapeGain.gain.setTargetAtTime(scrapeTarget, t, 0.05)
-      this._scrape.frequency.setTargetAtTime(1800 + s * 2200, t, 0.1)
+      this._updateScrape(player, s, t)
 
       // Gear train: only while the legs are doing work. Airborne it idles,
       // because a wind-up mechanism free-wheels when it is not driving
@@ -628,6 +633,69 @@ export class Audio {
     } catch (err) {
       /* never throw at a caller that does not check */
     }
+  }
+
+  /**
+   * The continuous half of wall contact — one band of noise, three jobs.
+   *
+   * 1. It says a wall is UNDER YOU. The scrape used to run only on a lateral
+   *    wall-run, so a climb — the other half of the pair players confuse — was
+   *    continuously silent between its one-shot at the start and whatever
+   *    ended it. Silence is what "falling next to a wall" sounds like.
+   * 2. It says WHICH wall. The band centre and Q come from the same surface
+   *    profile every other contact cue uses, so brass (texHz 3200) scrapes
+   *    bright and metallic where moss (620) barely rasps — the material you
+   *    can see is the material you hear.
+   * 3. It says HOW MUCH IS LEFT. The band thins toward the end of the budget
+   *    and, on a climb, rises in pitch as it goes — a climb runs out of grip,
+   *    and the ear gets that before the eye leaves the route to check.
+   *
+   * The two moves are set apart here as well as in the eye: a climb sits most
+   * of an octave above a lateral run on the same wall and rises through its
+   * 0.9 s, where a run holds a flat, wider band. Eyes closed, they are
+   * different moves.
+   */
+  _updateScrape(player, s, t) {
+    const climbing = player.climbTimer > 0
+    const running = !!player.wallRunning
+    if (!climbing && !running) {
+      this._scrapeGain.gain.setTargetAtTime(0, t, 0.06)
+      return
+    }
+
+    // `_surfaceBeside` walks every collider, so it is sampled at the same
+    // ~7 Hz the floor surface is rather than every frame. A wall does not
+    // change material inside 140 ms, and if it does, hearing the old one for
+    // one frame of a 0.9 s move is not a bug worth a full sweep per frame for.
+    if (t - this._wallSurfAt > 0.14) {
+      this._wallSurfAt = t
+      this._wallSurf = this._surfaceBeside(player)
+    }
+    const surf = this._wallSurf || SURFACES.brass
+
+    // How much wall is left, 1 at contact to 0 at the end.
+    const left = climbing
+      ? clamp01(player.climbTimer / TUNING.climbTime)
+      : clamp01(player.wallTimer / TUNING.wallRunTime)
+
+    // A climb is boots biting in — narrow, high, and rising as the grip runs
+    // out. A run is a broad flat wash of surface going past.
+    const band = climbing
+      ? surf.texHz * (0.80 + (1 - left) * 0.55)
+      : surf.texHz * 0.48 + s * 900
+    const q = climbing ? surf.texQ * 2.6 + 1.4 : surf.texQ * 1.5
+    // Thins rather than cuts: 45% at the last moment, which is audible as
+    // running out without ever becoming a warning beep.
+    const fade = 0.45 + 0.55 * left
+    const level = climbing
+      ? 0.085 * surf.texGain * fade
+      : (0.040 + s * 0.070) * surf.texGain * fade
+
+    this._scrapeGain.gain.setTargetAtTime(level, t, 0.05)
+    // Faster on a climb: 0.9 s is not long enough for a 0.1 s smoothing
+    // constant to finish a slide across most of an octave.
+    this._scrape.frequency.setTargetAtTime(band, t, climbing ? 0.05 : 0.1)
+    this._scrape.Q.setTargetAtTime(q, t, 0.08)
   }
 
   /**
@@ -1627,4 +1695,8 @@ function makeImpulseResponse(ctx, rand) {
     for (let i = 0; i < len; i++) { L[i] *= k; R[i] *= k }
   }
   return buf
+}
+
+function clamp01(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v
 }

@@ -11,6 +11,15 @@ import { TUNING } from './player.js'
  * instead of a corridor, "which way" stopped being answerable from the
  * geometry alone.
  *
+ * The wall gauge (`_updateWall`) is the same kind of exception and is held to
+ * the same standard. It reports a budget the player is already spending; it
+ * does not say which key to press. Ethan, playing: "it's not super intuitive
+ * how you're running up the wall versus jumping off of it." The move was fixed
+ * separately; what was left was that a climb and a lateral wall-run looked
+ * identical on the panel and both ran out with no warning. So the two verbs
+ * now differ by the ORIENTATION of the gauge — vertical for a climb, lateral
+ * for a run — which is a fact about the move, not a caption on it.
+ *
  * Frame discipline, which is a design constraint here and not an optimisation
  * pass (docs/taste.md): every element reference is cached at construction,
  * every value is quantised to the precision it is displayed at, and nothing is
@@ -49,6 +58,10 @@ export class Hud {
     this.speedfill = $('speedfill')
     this.redline = $('redline')
     this.verb = $('verb')
+    this.wallBar = $('wallbar')
+    this.wallRail = $('wallrail')
+    this.wallBarFill = this.wallBar.firstElementChild
+    this.wallRailFill = this.wallRail.firstElementChild
     this.reticle = $('reticle')
     this.toast = $('toast')
     this.toastBig = this.toast.querySelector('.big')
@@ -83,6 +96,14 @@ export class Hud {
     this._hookReady = null
     this._pipCount = -1
     this._pipsLit = 0
+
+    // wall gauge state
+    this._wallMode = 0         // 0 off, 1 climb (rail), 2 lateral run (bar)
+    this._wallShown = 0        // which gauge is currently lit
+    this._wallFrac = -1
+    this._wallLow = null
+    this._wallCoyote = null
+    this._verbHeld = null
 
     // nav state
     this._camera = null
@@ -229,11 +250,25 @@ export class Hud {
       this.chipHook.classList.toggle('ready', hookReady)
     }
 
+    this._updateWall(player)
+
     const verb = currentVerb(player)
     if (verb !== this._lastVerb) {
       this._lastVerb = verb
-      this.verb.textContent = verb
-      this.verb.classList.toggle('on', verb !== '')
+      // Blanking the word the instant a climb expires reads as the move
+      // breaking. During the coyote window the wall is still there and Space
+      // still kicks off it, so the word stays and only dims.
+      if (verb !== '') this.verb.textContent = verb
+      else if (this._wallMode === 0) this.verb.textContent = ''
+      this.verb.classList.toggle('on', verb !== '' || this._wallMode !== 0)
+    }
+    const held = verb === '' && this._wallMode !== 0
+    if (held !== this._verbHeld) {
+      this._verbHeld = held
+      this.verb.classList.toggle('hold', held)
+      // Recovered here rather than above, because the coyote window can expire
+      // on a frame where `verb` did not change (it was '' throughout).
+      if (!held && verb === '') { this.verb.textContent = ''; this.verb.classList.remove('on') }
     }
 
     this._updateAltimeter(player.position.y)
@@ -288,6 +323,84 @@ export class Hud {
     const kids = this.pips.children
     for (let i = 0; i < kids.length; i++) kids[i].classList.toggle('hit', i < hit)
     this._pipsLit = hit
+  }
+
+  /**
+   * The wall budget.
+   *
+   * A climb runs `climbTime` and a lateral run runs `wallRunTime`, and both
+   * used to end with no warning at all — which is most of why "running up the
+   * wall versus jumping off it" read as unreliable rather than as timed. The
+   * move was fine; it was invisible.
+   *
+   * Two gauges, one instrument. Which one lights is the *orientation of the
+   * move you are in* — a rail up the side for a climb, a bar across for a
+   * lateral run — so the two verbs the report confuses are told apart by
+   * shape, before the word is read. Nothing is shown off a wall.
+   *
+   * Read-only over the player: `climbTimer`, `wallTimer`, `wallRunning` and
+   * `wallCoyote` are all reported state. Nothing here can change a frame of
+   * movement.
+   */
+  _updateWall(p) {
+    const climbing = p.climbTimer > 0
+    const running = !!p.wallRunning
+    // The coyote window is otherwise completely invisible — 0.28 s in which
+    // Space still kicks off a wall you are no longer touching. Showing the
+    // gauge spent-but-lit is the only way a player learns it exists without
+    // being told, so it holds whichever gauge was just live.
+    const coyote = !climbing && !running && (p.wallCoyote > 0)
+    const mode = climbing ? 1 : running ? 2 : coyote ? this._wallMode : 0
+    this._wallMode = mode
+
+    if (mode !== this._wallShown) {
+      this._wallShown = mode
+      this._wallFrac = -1        // force a fill write on the first frame of a mode
+      this.wallRail.classList.toggle('on', mode === 1)
+      this.wallBar.classList.toggle('on', mode === 2)
+    }
+    if (mode === 0) {
+      // Cleared while invisible, so the *next* contact can never open on the
+      // spent styling of the last one.
+      if (this._wallCoyote !== false) {
+        this._wallCoyote = false
+        this.wallRail.classList.remove('coyote')
+        this.wallBar.classList.remove('coyote')
+      }
+      if (this._wallLow !== false) {
+        this._wallLow = false
+        this.wallRail.classList.remove('low')
+        this.wallBar.classList.remove('low')
+      }
+      return
+    }
+
+    if (coyote !== this._wallCoyote) {
+      this._wallCoyote = coyote
+      this.wallRail.classList.toggle('coyote', coyote)
+      this.wallBar.classList.toggle('coyote', coyote)
+    }
+
+    // Quantised to 200 steps — a shade under a pixel on either gauge, so every
+    // write that survives is a write the player can actually see.
+    const raw = coyote ? 0
+      : climbing ? p.climbTimer / TUNING.climbTime
+      : p.wallTimer / TUNING.wallRunTime
+    const frac = Math.round(Math.min(1, Math.max(0, raw)) * 200)
+    if (frac !== this._wallFrac) {
+      this._wallFrac = frac
+      const s = frac * 0.005
+      // scale, not width/height: composited, no layout, on a value that moves
+      // every frame for the whole of a wall contact.
+      if (mode === 1) this.wallRailFill.style.transform = `scaleY(${s})`
+      else this.wallBarFill.style.transform = `scaleX(${s})`
+    }
+    const low = !coyote && frac <= 66
+    if (low !== this._wallLow) {
+      this._wallLow = low
+      this.wallRail.classList.toggle('low', low)
+      this.wallBar.classList.toggle('low', low)
+    }
   }
 
   /** Ticks and numbers, built once; only the tape's transform moves. */

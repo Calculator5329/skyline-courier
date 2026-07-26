@@ -198,6 +198,15 @@ Ordered by how much each one costs the frame, worst first.
 
 ### HUD and FX
 
+- [ ] **The wall gauge only covers the two wall verbs.** The dash (`dashTimer`)
+      and the grapple (`grappleTimer`) have exactly the property it was built
+      for — a budget that runs out and then simply stops — and both currently
+      end without warning. Deliberately not done in the same pass: three more
+      gauges arriving at once is how an instrument panel becomes chrome, and
+      the wall pair earned its place by being the thing that was actually
+      reported. Decide whether the DASH and HOOK chips should drain rather than
+      merely light, which would cost no new elements at all.
+
 - [ ] The reticle is a 5 px translucent dot (`index.html:35-45`) and is
       invisible against gold and against the specular blowout. Build it from a
       2 px dark outline plus a light core; grow the `.hot` state into a 3-arc
