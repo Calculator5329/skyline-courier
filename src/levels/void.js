@@ -108,8 +108,49 @@ export function buildVoidCourse(collision) {
    * validator catches the reverse edge as unachievable. A dive in and a
    * different route out is also just better design — it commits the player.
    */
+  /**
+   * A grapple crossing: ONE anchor, hung in the void BETWEEN the two islands.
+   *
+   * Ethan, playing: "there's two to three anchors per platform, when really
+   * there should be one, and sometimes, rarely, there's none. And the anchors
+   * don't necessarily need to always be on the platform."
+   *
+   * The previous version placed one anchor per DIRECTION, each sitting over an
+   * island, on my reasoning that a single anchor could not satisfy both of
+   * `Archipelago.link`'s legs. That was wrong, and the arithmetic is worth
+   * writing down because it is also what unlocked the long crossings:
+   *
+   *   the shot     take-off RIM to anchor, 5 .. 34*0.94 = 31.9 m
+   *   the arrival  anchor to landing, no worse than `committed` (19 m)
+   *
+   * At the MIDPOINT both legs are about half the crossing, so one anchor serves
+   * both directions for any gap up to roughly 2 x 19 = 38 m — nearly double
+   * what an anchor over the landing allowed. One anchor, in mid-air, and a much
+   * bigger course all fall out of the same correction.
+   */
+  const fly = (a, b, note) => {
+    const LIFT = 5
+    const p = nodes.get(a), q = nodes.get(b)
+    const ax = (p.x + q.x) / 2
+    const az = (p.z + q.z) / 2
+    const ay = Math.max(p.y, q.y) + LIFT
+    L.lantern(ax, ay, az)
+    A.both(a, b, 'grapple', { anchor: [ax, ay, az], note })
+  }
+
   const drop = (a, b, note) => {
-    const g = dist(nodes.get(a), nodes.get(b))
+    const p = nodes.get(a), q = nodes.get(b)
+    const g = dist(p, q)
+    // Falling does not make a gap shorter. A dive of 26 m is still past
+    // `committed` however far down the landing is, so a long dive is a grapple
+    // like any other long crossing — it just happens to end lower.
+    if (g > REACH_COMMITTED) {
+      const ax = (p.x + q.x) / 2, az = (p.z + q.z) / 2
+      const ay = Math.max(p.y, q.y) + 5
+      L.lantern(ax, ay, az)
+      A.link(a, b, 'grapple', { anchor: [ax, ay, az], note })
+      return
+    }
     A.link(a, b, g <= 7 ? 'free' : g <= 13 ? 'standard' : 'committed', note ? { note } : undefined)
   }
 
@@ -119,42 +160,6 @@ export function buildVoidCourse(collision) {
     const dy = q.y - p.y
     if (dy > 2.2 || g > REACH_COMMITTED) return fly(a, b, note)
     return hop(a, b, note)
-  }
-
-  /**
-   * A grapple crossing, with the anchor placed as part of the composition
-   * rather than dropped at the midpoint. §5 wants every hero vantage framed by
-   * a vertical, and a grapple line is a vertical the player draws themselves.
-   *
-   * The anchor sits high and roughly two thirds along, so the swing carries
-   * UPWARD into the landing — that is what makes a long crossing feel like
-   * flight instead of like a tightrope.
-   */
-  const fly = (a, b, note) => {
-    // TWO ANCHORS, ONE PER DIRECTION. `A.both()` mirrors a link and would
-    // reuse a single anchor for both ways — but an anchor is only useful above
-    // the island you are ARRIVING at, so the reverse trip would be asked to
-    // dismount onto an island a full crossing away and the validator rightly
-    // refuses it. A lantern at each end is also the honest reading: a crossing
-    // you can make in both directions has a hook at both ends.
-    //
-    // ANCHOR GEOMETRY, solved rather than eyeballed. `Archipelago.link` checks
-    // two legs that pull in opposite directions:
-    //   the shot     take-off RIM to anchor, 5 .. 34*0.94 = 31.9 m
-    //   the arrival  anchor to landing, no worse than `committed`
-    // Directly ABOVE THE LANDING satisfies both by construction: the arrival
-    // becomes a pure vertical drop of `LIFT` (always `free`), and the shot is
-    // just the hypotenuse of the crossing and the height change, which the
-    // layout keeps in range by capping the crossing. It reads better too — the
-    // player swings up and drops onto the deck instead of skimming its edge.
-    const LIFT = 6
-    const p = nodes.get(a), q = nodes.get(b)
-    const up = { x: q.x, y: Math.max(p.y, q.y) + LIFT, z: q.z }
-    const back = { x: p.x, y: Math.max(p.y, q.y) + LIFT, z: p.z }
-    L.lantern(up.x, up.y, up.z)
-    L.lantern(back.x, back.y, back.z)
-    A.link(a, b, 'grapple', { anchor: [up.x, up.y, up.z], note })
-    A.link(b, a, 'grapple', { anchor: [back.x, back.y, back.z], note })
   }
 
 
@@ -173,34 +178,40 @@ export function buildVoidCourse(collision) {
   // with one characteristic distance has one characteristic feeling. The
   // radius grows as it climbs so the space opens OUT: the reference image is
   // vast, and a shaft of constant width reads as a corridor however tall.
-  const HEROES = 12
+  const HEROES = 22
   const heroIds = []
   let prev = 'plaza'
   let ang = 0.7
   for (let i = 0; i < HEROES; i++) {
     const t = i / (HEROES - 1)
-    const r = 26 + t * 34 + 7 * Math.sin(i * 1.7)
+    // The radius JITTER has to be counted against the crossing budget too: the
+    // angular cap bounds the arc, but a swing of +/-12 m in radius on top of it
+    // is another 24 m of chord the cap never saw. Kept modest for that reason —
+    // the course gets its size from the growing radius and the count, not from
+    // the wobble.
+    const r = 30 + t * 62 + 5 * Math.sin(i * 1.7)
     // THE ANGULAR STEP IS CAPPED BY GRAPPLE RANGE, not chosen for looks. A
     // fixed step that reads well at r=18 throws the next island 43 m away at
     // r=56, which is past the cuff and therefore unbuildable. Chord = 2r
     // sin(step/2), so this is the largest step that keeps the next island
     // inside a 29 m reach with slack under the 34 m limit.
     if (i > 0) {
-      // 24 m of crossing against a 7 m lift is a 25 m shot, comfortably inside
-      // the 31.9 m the validator actually allows once the 0.94 margin is
-      // applied. Chord = 2r sin(step/2).
-      const maxStep = 2 * Math.asin(Math.min(0.999, 21 / (2 * r)))
+      // 32 m of crossing: the midpoint anchor puts each leg at ~16 m, inside
+      // both the 31.9 m shot limit and the 19 m committed arrival. Chord =
+      // 2r sin(step/2). This is more than half again the old cap and it is the
+      // single number that decides how big the course feels.
+      const maxStep = 2 * Math.asin(Math.min(0.999, 30 / (2 * r)))
       // Alternate the direction of travel around the shaft every few islands,
       // so the route doubles back over itself and the player keeps seeing the
       // space they just crossed from a new side.
       ang += Math.min(2.1, maxStep) * (i % 5 === 0 ? -1 : 1)
     }
-    const y = 5 + i * 8.0 + 3.5 * Math.sin(i * 2.3)
+    const y = 5 + i * 10.5 + 6 * Math.sin(i * 2.3)
     const id = `hero-${i}`
     // Landing size falls as the course goes on: the difficulty curve lives in
     // the TARGET, not in the distance, so late jumps ask for precision while
     // still feeling like flight.
-    pad(id, Math.cos(ang) * r, y, Math.sin(ang) * r, 13 - t * 5)
+    pad(id, Math.cos(ang) * r, y, Math.sin(ang) * r, 14 - t * 6)
     heroIds.push(id)
 
     const g = dist(nodes.get(prev), nodes.get(id))
@@ -228,7 +239,7 @@ export function buildVoidCourse(collision) {
   // is a trap and `verify()` says so. These are where a player who is good
   // with the cuff gets rewarded for looking around, which is the whole point
   // of giving them 34 m of grapple.
-  const BRANCH_AT = [1, 4, 7, 10]
+  const BRANCH_AT = [2, 6, 10, 14, 18]
   BRANCH_AT.forEach((h, k) => {
     const base = nodes.get(heroIds[h])
     const nxt = nodes.get(heroIds[Math.min(h + 1, HEROES - 1)])
@@ -238,7 +249,10 @@ export function buildVoidCourse(collision) {
     // is worth solving by construction rather than by nudging constants.
     const mx = (base.x + nxt.x) / 2, mz = (base.z + nxt.z) / 2
     const ang = Math.atan2(mz, mx) + 0.22
-    const rr = Math.min(Math.hypot(mx, mz) + 5, 48)
+    // Bounded by the crossing budget, not by a fixed cap: the spur has to be
+    // rejoinable from where it sits, and out at r=90 a flat +5 m offset is a
+    // very different fraction of the arc than it is at r=30.
+    const rr = Math.hypot(mx, mz) + 5
     const id = `spur-${k}`
     // Hung BELOW its parent: a dive off the main line, then a climb back. The
     // void reads as bottomless, so dropping deliberately is the boldest thing
@@ -256,9 +270,9 @@ export function buildVoidCourse(collision) {
 
   // Checkpoints along the flight. Sparse on purpose: a checkpoint every third
   // island keeps the stakes real without making a missed flight expensive.
-  for (let i = 2; i < HEROES; i += 3) {
+  for (let i = 3; i < HEROES; i += 4) {
     const n = nodes.get(heroIds[i])
-    L.checkpoint(n.x, n.y + 1.0, n.z, `ascent ${((i - 2) / 3 | 0) + 1}`)
+    L.checkpoint(n.x, n.y + 1.0, n.z, `ascent ${((i - 3) / 4 | 0) + 1}`)
   }
 
   // ============================================================== the spire
@@ -278,7 +292,7 @@ export function buildVoidCourse(collision) {
   L.beaconAt = { x: spire.x, y: spire.y + 8, z: spire.z, height: 210, radius: 4.0 }
 
   const spineIds = ['plaza']
-  for (let i = 2; i < HEROES; i += 3) spineIds.push(heroIds[i])
+  for (let i = 3; i < HEROES; i += 4) spineIds.push(heroIds[i])
   spineIds.push('spire')
 
   // requireSafeLine: false — Ethan, 2026-07-25: "the rule should just be it's
