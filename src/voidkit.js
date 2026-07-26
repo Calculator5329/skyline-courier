@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { lathe, blob, sweepTube, boundsOf, mergeGeometries, triangleCount } from './props.js'
 import { glowMaterial } from './materials.js'
+import { slabDecalTextures } from './materials/slabdecal.js'
 import { getTheme } from './theme.js'
 
 /**
@@ -216,9 +217,107 @@ function glowMat(color, intensity) {
 function glowState(L) {
   if (!L || typeof L !== 'object') return null
   if (L.__voidGlow !== undefined) return L.__voidGlow
-  const state = L.group ? { buckets: new Map(), runes: [], built: false, tris: 0 } : null
+  const state = L.group
+    ? { buckets: new Map(), runes: [], decals: [], built: false, tris: 0 }
+    : null
   L.__voidGlow = state
   return state
+}
+
+// ============================================================ decal channel
+//
+// Ethan's painted slab top (`src/materials/slabdecal.js`) on the landing
+// surfaces. It is a second flat layer over the same faces the glow channel
+// uses, and it is kept separate from that channel for one reason: the glow
+// materials are unlit emissive, and this one has to be LIT — it is carved
+// stone with a glowing inlay in it, not an inlay on its own. Sharing a bucket
+// would mean sharing a material, and no single material is both.
+//
+// Everything here is one unit quad, so the whole layer instances into ONE draw
+// call however many platforms the course has.
+
+let _decalMat = null
+
+function decalMaterial(shade) {
+  if (_decalMat) return _decalMat
+  const t = slabDecalTextures()
+  if (!t) return null
+  _decalMat = new THREE.MeshStandardMaterial({
+    map: t.map,
+    emissiveMap: t.emissiveMap,
+    // WHITE, and the hue comes from the mask's own albedo? No — an emissiveMap
+    // is a multiplier on `emissive`, so the colour has to live here. This is
+    // the same violet `voidColors().rune` hands the procedural inlay, so the
+    // two paths cannot drift apart into two different violets.
+    emissive: new THREE.Color(0x9b6bff),
+    emissiveIntensity: DECAL_EMISSIVE,
+    roughness: 0.86,
+    metalness: 0.0,
+    // The theme's rock multiplier, so the decal sits in the same value range
+    // as the stone around it instead of floating a stop above it.
+    color: new THREE.Color(shade, shade, shade),
+  })
+  _decalMat.name = 'void:slab-decal'
+  return _decalMat
+}
+
+/**
+ * Intensity of the violet inlay.
+ *
+ * The bloom threshold is 1.05 on the max channel after exposure, and §6 wants
+ * the glyph LEGIBLE rather than incandescent — `levels/void.js` already had to
+ * pull the procedural rune back from 2.3 because at that value it "clipped to
+ * white and stopped being violet at all". The mask peaks near 1.0 only at the
+ * sigil's core lines, so this is the value at the core and well under it
+ * across the rest of the glyph.
+ */
+const DECAL_EMISSIVE = 0.9
+
+/** Unit quad in local XY, facing +Z; `planeMatrix('xz', ...)` lays it flat. */
+let _decalGeo = null
+function decalGeometry() {
+  if (!_decalGeo) _decalGeo = new THREE.PlaneGeometry(1, 1)
+  return _decalGeo
+}
+
+/**
+ * Largest a decal may be drawn, in metres — past this it becomes a MEDALLION
+ * centred on the deck rather than a facing for the whole of it.
+ *
+ * MEASURED ON THE FINISH PLAZA, which is 26 m across. Stretched over that the
+ * image is 39 texels per metre against 170 on a normal 6 m pad, and from the
+ * 5 m `summit` camera it came back as a blurred smear with its border courses
+ * out of frame at the deck edges — a texture, not a carving. 9 m holds 114
+ * texels per metre, which is the resolution the rest of the course reads at,
+ * and a carved medallion in the middle of a large deck is what a large deck
+ * has in the reference anyway.
+ *
+ * Clamped UNIFORMLY (one scale factor, both axes) so the slab's own aspect
+ * survives the clamp — clamping the long axis alone would reintroduce exactly
+ * the sigil distortion the aspect gate exists to prevent.
+ */
+const DECAL_MAX = 9.0
+
+/**
+ * Queue one slab-top decal.
+ *
+ * `spin` is a quarter turn count. A square crop is what makes that free, and on
+ * an ODD quarter turn the quad's local x and y have swapped which world axis
+ * they measure — so the scale swaps with them, or a non-square slab gets a
+ * decal rotated off its own footprint.
+ *
+ * @returns {number} the half-extents actually drawn, for the §6 promise.
+ */
+function addDecal(L, x, y, z, sizeX, sizeZ, spin) {
+  const st = glowState(L)
+  if (!st || st.built) return null
+  const k = Math.min(1, DECAL_MAX / Math.max(sizeX, sizeZ))
+  const dx = sizeX * k, dz = sizeZ * k
+  const swap = (spin & 1) === 1
+  const m = planeMatrix('xz', x, y, z, 1, spin * (Math.PI / 2))
+  m.scale(new THREE.Vector3(swap ? dz : dx, swap ? dx : dz, 1))
+  st.decals.push(m)
+  return { hx: dx / 2, hz: dz / 2 }
 }
 
 /**
@@ -302,8 +401,34 @@ export function finishVoidKit(L) {
     drawCalls++
   }
 
+  // --- the slab-top decals ------------------------------------------------
+  // One InstancedMesh for every platform in the course. `frustumCulled` stays
+  // on: three culls an InstancedMesh against the union of its instances, which
+  // spans the whole shaft here, so it will effectively never cull — but leaving
+  // it on costs one box test and keeps the door open if the layer is ever split
+  // per region.
+  let decals = 0
+  if (st.decals.length) {
+    const mat = decalMaterial(st.decalShade ?? 1)
+    if (mat) {
+      const inst = new THREE.InstancedMesh(decalGeometry(), mat, st.decals.length)
+      st.decals.forEach((m, i) => inst.setMatrixAt(i, m))
+      inst.instanceMatrix.needsUpdate = true
+      inst.name = `void:slab-decal:${st.decals.length}`
+      // A flat quad 1.5 cm over a flat face is the classic z-fight, and the
+      // offset alone is not enough at 300 m where depth precision is coarse.
+      // A negative polygon offset pulls it toward the camera in depth units
+      // rather than in metres, which is the units the fight is actually in.
+      L.group.add(inst)
+      drawCalls++
+      decals = st.decals.length
+      st.tris += triangleCount(decalGeometry()) * st.decals.length
+    }
+  }
+
   st.stats = {
-    drawCalls, instanced, triangles: st.tris, runes: st.runes.length, checked: true,
+    drawCalls, instanced, triangles: st.tris, runes: st.runes.length, decals,
+    checked: true,
   }
   if (L.group) L.group.userData.voidGlow = st.stats
   return st.stats
@@ -757,7 +882,7 @@ export function runeSlab(L, x, y, z, opts = {}) {
     size = 6.0, kind = 'stone', detail = 2,
     thickness = 0.85, border = true, borderHeight = 0.22, borderWidth = 0.62,
     rune = true, runeIntensity = 2.4, tiers = detail === 0 ? 1 : 2 + ((detail >= 2) ? 1 : 0),
-    spikes = detail >= 1, motif = 'knot', posts = true,
+    spikes = detail >= 1, motif = 'knot', posts = true, decal = true,
   } = opts
   const sizeX = opts.sizeX ?? size
   const sizeZ = opts.sizeZ ?? size
@@ -765,6 +890,33 @@ export function runeSlab(L, x, y, z, opts = {}) {
   const { S, ghost, shade } = emit(L, opts)
   const colors = voidColors(opts, opts.theme || safeTheme())
   let n = 0
+
+  // --- decal or procedural? -----------------------------------------------
+  //
+  // THE ASPECT GATE, and it is the whole of the "non-square decal on a
+  // variably-sized slab" answer. `src/materials/slabdecal.js` states the
+  // mapping rule; this is the line where a slab is judged against it.
+  //
+  // The image is a square carved face: a border FRAME, four corner ticks, and
+  // a sigil at centre. Stretching a frame is honest — it is a frame at any
+  // aspect. Stretching the sigil is not; past about 1.3:1 it reads as an oval
+  // and stops being a glyph, and §6 makes the glyph a PROMISE rather than
+  // decoration, so a glyph that has stopped reading is worse than no image at
+  // all. Slabs past the gate keep the procedural rune, which is radial and has
+  // no aspect to lose.
+  //
+  // `detail: 0` also stays procedural: at that level the border courses are
+  // already gone and a decal would be the only detail on the slab, which is
+  // backwards for the level's cheapest tier.
+  const aspect = Math.max(sizeX, sizeZ) / Math.max(1e-6, Math.min(sizeX, sizeZ))
+  const useDecal = decal && rune && !ghost && detail >= 1 && aspect <= 1.30
+    && glowState(L) !== null
+  // Whether the decal reaches the slab's own rim, or is a medallion inside it
+  // (see `DECAL_MAX`). The raised border survives on a deck too big for the
+  // image to face: without it a 26 m plaza would be a bare rectangle with a
+  // carving in the middle and no edge at all, which is the read the two
+  // courses were added to fix in the first place.
+  const decalFacesWholeTop = useDecal && Math.max(sizeX, sizeZ) <= DECAL_MAX
 
   // --- the slab -----------------------------------------------------------
   // ONE box for the landing surface. Deliberately not faceted: §4.2 asks for
@@ -783,9 +935,26 @@ export function runeSlab(L, x, y, z, opts = {}) {
   // Four bars, inset from the edge so the slab's own rim stays visible from
   // below and the border reads as carved INTO the top rather than stuck onto
   // its perimeter.
+  //
+  // THE DECAL SUPERSEDES THESE BARS, and that is a swap rather than a loss.
+  // The reference platform (docs/reference/theme2-void.png, foreground) and
+  // Ethan's file both show the frame as INSCRIBED — cut into a flat face, gold
+  // in the groove — not as a proud kerb standing on it. Two courses of 22 cm
+  // near-black rock were the best a box kit could do at stating "carved"; a
+  // lit gold frame states it outright, and states it at 40 m where the arrises
+  // were only ever a hairline.
+  //
+  // It is also the only correct choice geometrically: the decal covers the
+  // WHOLE top face, and a 22 cm kerb standing on top of it would leave the
+  // painted frame sitting at the bottom of a well.
+  //
+  // Rule 2 is satisfied by symmetry — these bars are `S()`, so dropping them
+  // drops the collider and the surface in the same statement. `bw` is still
+  // computed either way because the rune radius and the corner posts are both
+  // measured off it.
   const inset = Math.min(0.34, size * 0.06)
   const bw = Math.min(borderWidth, Math.min(sizeX, sizeZ) * 0.12)
-  if (border && detail >= 1 && bw > 0.08) {
+  if (border && !decalFacesWholeTop && detail >= 1 && bw > 0.08) {
     // TWO COURSES, not one. Measured: a single 14 cm bar in near-black rock
     // read as a hairline seam from the standing pose — the border was there and
     // did nothing, so the platform edge had no shape at all against the void.
@@ -807,17 +976,39 @@ export function runeSlab(L, x, y, z, opts = {}) {
     if (detail >= 2) n += ring(bw * 0.58, borderHeight * 0.55, y + borderHeight * 0.45)
   }
 
-  // --- the rune -----------------------------------------------------------
+  // --- the rune, or the decal that carries it -----------------------------
+  //
+  // THE QUARTER TURN IS DRAWN UNCONDITIONALLY, before either branch. Both
+  // paths want it, and `rand` is one shared sequence that the undersides, the
+  // spikes and the tiers all draw from afterwards — so a draw that happens on
+  // one path and not the other re-rolls every underside in the level the
+  // moment a slab changes path. That is not hypothetical: it is exactly what
+  // the corner posts did (see the `prand` note below), and it failed
+  // `assertTriggersClear` with an island buried in stone.
+  const spin = rand() * 4 | 0
   const clear = Math.min(sizeX, sizeZ) / 2 - inset - bw - 0.25
   const runeR = Math.max(0.3, clear)
-  if (rune && !ghost && clear > 0.35) {
+  if (useDecal) {
+    // 1.5 cm proud of the walkable plane — the same clearance the procedural
+    // inlay used, for the same reason: too small to read as a ledge, large
+    // enough to clear the slab's own top face.
+    const d = addDecal(L, x, y + 0.015, z, sizeX, sizeZ, spin)
+    n += d ? 1 : 0
+    const st = glowState(L)
+    // The theme's rock multiplier, captured once for the shared material.
+    if (st && st.decalShade === undefined) st.decalShade = shade
+    // THE SAME PROMISE, over the footprint the decal ACTUALLY covers — which on
+    // a deck past `DECAL_MAX` is the medallion, not the deck. §6's gate
+    // (`assertRunesStandable`) probes the corners of what is registered here,
+    // and registering more than the glyph covers would put those probes out on
+    // the slab's rim where a chamfer can drop them outside the collider.
+    if (d) promiseStandable(L, x, y, z, d.hx * 0.92, d.hz * 0.92)
+  } else if (rune && !ghost && clear > 0.35) {
     const segs = detail >= 2 ? 40 : detail === 1 ? 24 : 12
     const key = `rune:${motif}:${runeR.toFixed(2)}:${segs}`
     addGlow(L, key, colors.rune, runeIntensity,
       () => runeGlyph(runeR, motif, segs),
-      // 1.5 cm proud of the walkable plane. Small enough that it cannot read as
-      // a ledge, large enough to clear z-fighting with the slab's top face.
-      planeMatrix('xz', x, y + 0.015, z, 1, (rand() * 4 | 0) * (Math.PI / 2)))
+      planeMatrix('xz', x, y + 0.015, z, 1, spin * (Math.PI / 2)))
     promiseStandable(L, x, y, z, runeR, runeR)
   }
 
