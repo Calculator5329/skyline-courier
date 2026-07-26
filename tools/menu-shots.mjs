@@ -8,9 +8,10 @@
  * LIVE 3D frame, and the two frames it can be drawn over could not be further
  * apart: a blown-out golden sky and a near-black void. `tools/shotset.mjs`
  * cannot see any of it, because the first thing the capture harness does is
- * `hideChrome()`. So the menu gets its own shot set, over both themes and at
- * both a desktop and a 1280x720 laptop, plus the three behaviours that are
- * easy to break and invisible in a screenshot:
+ * `hideChrome()`. So the menu gets its own shot set, over both themes, at a
+ * desktop, a 1280x720 laptop and a window narrow enough to stack the picker,
+ * plus the three behaviours that are easy to break and invisible in a
+ * screenshot:
  *
  *   - picking a difficulty must NOT start the run,
  *   - opening the controls disclosure must NOT start the run,
@@ -30,8 +31,35 @@ const OUT = resolve(parseArgs(process.argv.slice(2)).out
   || join(process.env.TMPDIR || tmpdir(), 'skyline-menu-shots'))
 const port = 5187
 
+/**
+ * Land every in-flight CSS transition on its end state.
+ *
+ * This is not a nicety, it is the difference between a true and a false
+ * screenshot. `openGame` stubs `requestAnimationFrame` so the game renders
+ * exactly the frames the harness asks for — but with rAF gone the page also
+ * stops producing compositor frames, and a CSS transition that never gets a
+ * frame never advances. The picked card's state is applied by `hud.setMap()`
+ * AFTER first style resolution, so every menu capture ever taken by this file
+ * was frozen at the moment BEFORE the selection landed: the shots showed the
+ * chosen world's thumbnail still wearing the unpicked scrim, which is exactly
+ * the thing these shots exist to verify. Finishing the transitions gives the
+ * settled menu a human sees a fraction of a second after load.
+ *
+ * Only transitions are finished. The infinite `pulse` on the start button is a
+ * CSSAnimation and cannot finish; leaving it is also what we want, since its
+ * frozen phase is deterministic across every shot in the set.
+ */
+async function settle(page) {
+  return page.evaluate(() => {
+    const t = document.getAnimations().filter((a) => a.constructor.name === 'CSSTransition')
+    for (const a of t) a.finish()
+    return t.length
+  })
+}
+
 async function shot(browser, base, name, query, size) {
   const { page, errors } = await openGame(browser, base + query, size)
+  await settle(page)
   await page.screenshot({ path: `${OUT}/${name}.png`, type: 'png' })
   const state = await page.evaluate(() => ({
     theme: document.documentElement.dataset.theme,
@@ -52,14 +80,23 @@ async function main() {
   const browser = await launchBrowser()
   const big = { width: 1600, height: 900 }
   const small = { width: 1280, height: 720 }
+  // The one that finds the real breakages: below 620px the picker stacks, and
+  // a 620x700 window is short enough that the panel has to scroll inside the
+  // overlay. Both paths are one media query away from being unusable.
+  const narrow = { width: 600, height: 700 }
   try {
     await shot(browser, server.url, 'menu-skyline', '', big)
     await shot(browser, server.url, 'menu-void', '?theme=void', big)
     await shot(browser, server.url, 'menu-skyline-720', '', small)
     await shot(browser, server.url, 'menu-void-720', '?theme=void', small)
+    await shot(browser, server.url, 'menu-void-narrow', '?theme=void', narrow)
+    // prefers-reduced-motion: the start button must stop pulsing and stay
+    // fully lit, and the departure bar must stay readable without sweeping.
+    await shot(browser, server.url, 'menu-skyline-reduced', '', { ...big, reducedMotion: 'reduce' })
 
     // ---- interaction: picking a mode must NOT start the run --------------
     const { page, errors } = await openGame(browser, server.url, big)
+    await settle(page)
     await page.click('#mode-fun')
     const afterMode = await page.evaluate(() => ({
       overlayVisible: !document.getElementById('overlay').classList.contains('hidden'),
@@ -78,12 +115,14 @@ async function main() {
       locked: !!document.pointerLockElement,
     }))
     console.log('click controls ->', JSON.stringify(afterKeys))
+    await settle(page)
     await page.screenshot({ path: `${OUT}/menu-skyline-open.png`, type: 'png' })
 
     // ---- interaction: picking the other map -> loading state, then reload -
     await page.click('.mapbtn[data-map="void"]')
     await page.waitForFunction('document.getElementById("overlay").classList.contains("loading")')
     await page.evaluate(() => new Promise((r) => setTimeout(r, 260)))
+    await settle(page)
     await page.screenshot({ path: `${OUT}/menu-loading.png`, type: 'png' })
     await page.waitForFunction('window.__READY__ === true && document.documentElement.dataset.theme === "void"',
       null, { timeout: 30000 })
@@ -97,6 +136,7 @@ async function main() {
       notes: [...document.querySelectorAll('[data-note]')].map((n) => n.textContent),
     }))
     console.log('click map void ->', JSON.stringify(afterMap))
+    await settle(page)
     await page.screenshot({ path: `${OUT}/menu-after-switch.png`, type: 'png' })
 
     // ---- persistence across a plain reload (no ?theme=) ------------------
@@ -108,6 +148,7 @@ async function main() {
       modeOn: [...document.querySelectorAll('.modebtn.on')].map((b) => b.dataset.mode),
     }))
     console.log('bare reload ->', JSON.stringify(afterReload), errors.length ? `ERRORS ${JSON.stringify(errors)}` : 'clean')
+    await settle(page)
     await page.screenshot({ path: `${OUT}/menu-void-persisted.png`, type: 'png' })
 
     // ---- harness hideChrome must still work ------------------------------
