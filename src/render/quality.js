@@ -51,7 +51,28 @@ export const QUALITY_LEVELS = {
     pixelRatioCap: 2,
     renderScale: 1,
     contactShadows: true,
-    contactScale: 1,
+    // HALF RESOLUTION, EVEN AT HIGH — promoted to default deliberately.
+    //
+    // Ethan: "do whatever you can with minimal cost to graphics and then add a
+    // Lite Mode ... for the things that will impact graphics." This is the
+    // clearest case of the former there is. Measured at 2560x1440 across all
+    // 15 shots on both themes it returns 1.4-3.8 ms, 16-37% OF THE FRAME, with
+    // the same sign every time; and the image cost sits at or below the shot
+    // harness's own non-determinism (whole-frame luminance moves under 0.06%,
+    // against a same-build noise floor of 0.2 on some shots).
+    //
+    // It is not free everywhere and that is worth stating plainly: the
+    // deviation is not uniform. It concentrates on DISTANT THIN GEOMETRY —
+    // far balustrades, cornice lips, foliage silhouettes — where the worst
+    // 0.1% of pixels move ~42/255 while the mean moves 1.46. Frozen at 3x zoom
+    // an art director can find it. In motion at normal viewing distance a
+    // reasonable person cannot, and the pass is bound by pixel count and ~22
+    // dependent texture fetches, so resolution is the ONLY lever that moves it
+    // — fewer steps and taps measured free, i.e. pure image loss for nothing.
+    //
+    // TO REVERT: set this back to 1. That is the whole change, and the
+    // skyline's `closeup` baseline returns from 111.0 to 111.1 with it.
+    contactScale: 0.5,
     contactSteps: 14,
     aoTaps: 8,
     aoNearTaps: 5,
