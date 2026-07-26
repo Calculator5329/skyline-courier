@@ -85,7 +85,9 @@ export function buildVoidCourse(collision) {
     for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) }
     return h >>> 0
   }
-  const colors = voidColors({}, (() => { try { return getTheme() } catch { return null } })())
+  const theme = (() => { try { return getTheme() } catch { return null } })()
+  const colors = voidColors({}, theme)
+  const accents = (theme && theme.accents) || {}
   // One field for the whole course: crystals are instanced per (shape, LOD),
   // so putting every cluster through one field is what keeps 300 of them at a
   // dozen draw calls instead of 300.
@@ -636,13 +638,53 @@ export function buildVoidCourse(collision) {
   // most obviously wrong thing in the capture. §4.5 asks for "fine dust motes
   // drifting slowly, catching light" and "glowing orbs", not for lamps: these
   // are points of light that give the fog something to recede past.
-  const ORB_R = [0.2, 0.3, 0.45]
-  const orb = (x, y, z, k = 0, red = false) => {
+  // ONE SIGNAL, ONE MEANING — the rule the skyline already lives by, where
+  // brass means "you can use this" and every lantern is a grapple anchor.
+  //
+  // Ethan, playing the void: "the fake lanterns (blue and purple) in the void
+  // suck because they are hard to distinguish. Can we remove or allow the user
+  // to use the grapple on those, or any mix of that?"
+  //
+  // He was right and the numbers were damning: ~600 decorative orbs in violet
+  // AND blue, against 57 real anchors in violet. Aiming at a glowing point,
+  // the odds were about ten to one that it was scenery. That is not a hard
+  // read, it is an unfair one.
+  //
+  // The mix, and it is now a rule a player can learn in one crossing:
+  //   BIG, BRIGHT, VIOLET-WHITE  = an anchor. Hook it.
+  //   SMALL, DIM, BLUE           = distance. Scenery, and never violet.
+  //
+  // Ambient orbs lose the violet entirely — sharing a hue with the anchors was
+  // the whole problem — and drop in size and brightness so they read as points
+  // the fog recedes past (§4.5) rather than as lamps.
+  const ORB_R = [0.18, 0.26]
+  const orb = (x, y, z, k = 0) => {
     voidOrb(L, x, y, z, {
       radius: ORB_R[k % ORB_R.length],
-      color: red ? colors.sigil : (k % 3 === 1 ? colors.rune : colors.cool),
-      intensity: 1.0,
+      color: colors.cool,
+      intensity: 0.55,
     })
+  }
+
+  /**
+   * A HOOK — a real grapple anchor wearing the void's own light.
+   *
+   * `L.lantern()` would register the anchor and then draw a brass lantern with
+   * it, which is the sunset level's object. This registers the anchor and lets
+   * the orb be its body, so the thing you see IS the thing you can hook.
+   *
+   * Deliberately generous. Ethan's standing direction is that movement is
+   * overpowered on purpose and that the answer to "this trivialises it" is a
+   * bigger course, not a smaller ability — so where there was ambiguity, the
+   * resolution is MORE places to hook, not fewer lights.
+   */
+  const hook = (x, y, z) => {
+    voidOrb(L, x, y, z, {
+      radius: 0.55,
+      color: accents.lantern ?? colors.rune,
+      intensity: 2.1,
+    })
+    L.anchors.push(new THREE.Vector3(x, y, z))
   }
 
   // ------------------------------------------------------- band 1: the near
@@ -716,6 +758,20 @@ export function buildVoidCourse(collision) {
     // designed into the level layout." A dark slab rim against violet fog has
     // no read at all; the same rim against an orb has one.
     orb(n.x - Math.cos(a0) * (n.w * 0.5 + 6), n.y - 4.5, n.z - Math.sin(a0) * (n.w * 0.5 + 6), i)
+
+    // TWO HOOKS PER ISLAND, over the rim and out at the height a player is
+    // actually flying at when they arrive. These are new anchors on top of the
+    // 57 the crossings already place — the ambiguity is resolved by making the
+    // bright lights genuinely hookable, not by deleting lights.
+    //
+    // Offset a third of a turn apart so at least one is usually on the side
+    // you are approaching from, and lifted clear of the deck so hooking one
+    // does not fight the landing you are about to make.
+    for (let q = 0; q < 2; q++) {
+      const ha = a0 + 2.1 + q * 2.4
+      hook(n.x + Math.cos(ha) * (n.w * 0.5 + 5.5), n.y + 6.5 + q * 3,
+        n.z + Math.sin(ha) * (n.w * 0.5 + 5.5))
+    }
     orb(sx - 3, sy + 5, sz + 2.5, i + 1, i % 9 === 4)
   })
 
