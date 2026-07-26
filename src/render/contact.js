@@ -56,14 +56,24 @@ varying vec2 vUv;
 // clockwork ornaments) and the shadow flickers as the camera moves; above ~16
 // the extra samples land inside the same texel and buy nothing. 14 is where the
 // curve flattens for a ray this short.
+//
+// This and the two tap counts below are DEFINES rather than uniforms because
+// two of them are loop bounds and GLSL wants a constant expression there. The
+// quality levels (src/render/quality.js) turn them via Pass.setDefine, which
+// recompiles the pass. The values written here are the defaults, so the
+// pass is correct — and identical to what shipped — if nobody sets a level.
+#ifndef SC_CS_STEPS
 #define SC_CS_STEPS 14
+#endif
 
 // 8 AO taps. The bilateral below averages a 5x5 neighbourhood, so each pixel
 // effectively sees far more than 8 samples; going to 16 here doubles the cost of
 // the most expensive pass in the chain for a difference that disappears into the
 // blur. The golden-angle spiral is what makes 8 enough — it has no preferred
 // direction, so the residual error is isotropic noise rather than a pattern.
+#ifndef SC_AO_TAPS
 #define SC_AO_TAPS 8
+#endif
 // ...and 5 for the short-radius set below. It is the more expensive of the two
 // per tap (a tight screen footprint means its neighbours are the pixels every
 // other thread also wants, but it runs on top of a full 8-tap set that has
@@ -72,7 +82,14 @@ varying vec2 vUv;
 // nothing at all in the open, which is exactly the shape the bilateral below
 // resolves best. 8 and 5 measured indistinguishable in the frame and 5 gives
 // most of the cost back.
+//
+// A float, and it must never exceed SC_AO_TAPS: it is the taps argument to the
+// shared estimator, whose loop is bounded by SC_AO_TAPS. Asking for more near
+// taps than broad ones would silently get SC_AO_TAPS of them and a wrong
+// normalisation. ContactShadows.setTaps clamps rather than trusting a level.
+#ifndef SC_AO_NEAR_TAPS
 #define SC_AO_NEAR_TAPS 5.0
+#endif
 #define SC_GOLDEN_ANGLE 2.39996323
 
 /**
@@ -395,6 +412,47 @@ export class ContactShadows {
     this.texture = null
     this._texel = new THREE.Vector2(1 / 1920, 1 / 1080)
     this._frame = 0
+
+    /**
+     * Resolution of this pass relative to the beauty pass. 1 = full.
+     *
+     * Safe to change ONLY because the material samples the result by uv
+     * (`gl_FragCoord.xy * scScreenTexel` in patch.js, which is the beauty
+     * pass's texel and so lands in 0..1 whatever size this target is) and the
+     * target filters linearly. The march itself is resolution-independent: it
+     * steps in uv and reads the FULL-resolution depth/normal prepass, so a
+     * half-scale buffer takes fewer samples of the same function rather than a
+     * coarser function.
+     *
+     * `_sized` is the full-resolution size we were last handed, kept so the
+     * scale can be changed without a window resize to trigger it.
+     */
+    this._scale = 1
+    this._sized = [0, 0]
+  }
+
+  /** @returns {number} resolution scale, 1 = full. */
+  get scale() { return this._scale }
+  set scale(s) {
+    const v = Math.min(1, Math.max(0.25, s || 1))
+    if (v === this._scale) return
+    this._scale = v
+    if (this._sized[0] > 0) this.setSize(this._sized[0], this._sized[1])
+  }
+
+  /**
+   * Ray-march steps and AO tap counts. Recompiles only when something moved.
+   *
+   * `near` is clamped to `ao` because the near set runs through the same loop,
+   * which is bounded by SC_AO_TAPS — see the define block at the top.
+   */
+  setTaps({ steps, ao, aoNear }) {
+    const a = Math.max(1, Math.round(ao))
+    const n = Math.min(a, Math.max(1, Math.round(aoNear)))
+    this.pass.setDefine('SC_CS_STEPS', Math.max(1, Math.round(steps)))
+    this.pass.setDefine('SC_AO_TAPS', a)
+    // Must carry a decimal point: it is used as a float argument and a divisor.
+    this.pass.setDefine('SC_AO_NEAR_TAPS', n.toFixed(1))
   }
 
   get length() { return this.pass.uniforms.uParams.value.x }
@@ -422,7 +480,13 @@ export class ContactShadows {
   get aoNearRadius() { return this.pass.uniforms.uAONear.value.y }
   set aoNearRadius(v) { this.pass.uniforms.uAONear.value.y = v }
 
+  /** @param {number} w @param {number} h FULL beauty-pass size; `scale` is applied here. */
   setSize(w, h) {
+    this._sized[0] = w
+    this._sized[1] = h
+    const sw = Math.max(1, Math.round(w * this._scale))
+    const sh = Math.max(1, Math.round(h * this._scale))
+    if (this.rtA && this.rtA.width === sw && this.rtA.height === sh) return
     if (this.rtA) this.rtA.dispose()
     if (this.rtB) this.rtB.dispose()
     // RGBA16F: visibility, depth for the bilateral, AO. It was RG16F before the
@@ -430,9 +494,12 @@ export class ContactShadows {
     // the alternative is a second full-resolution pass that re-reads the same
     // two prepass textures to produce it.
     const o = { name: 'sc-contact' }
-    this.rtA = renderTarget(w, h, THREE.HalfFloatType, o)
-    this.rtB = renderTarget(w, h, THREE.HalfFloatType, o)
-    this._texel.set(1 / Math.max(1, w), 1 / Math.max(1, h))
+    this.rtA = renderTarget(sw, sh, THREE.HalfFloatType, o)
+    this.rtB = renderTarget(sw, sh, THREE.HalfFloatType, o)
+    // The blur's step is THIS target's texel, not the screen's — so at half
+    // scale it stays a two-tap-either-side blur of its own buffer rather than
+    // silently becoming a half-width one.
+    this._texel.set(1 / sw, 1 / sh)
   }
 
   /** @param {THREE.Vector3} sunDirView unit direction TOWARD the sun, view space. */

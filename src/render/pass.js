@@ -154,6 +154,10 @@ export class Pass {
     this.material = new THREE.ShaderMaterial({
       name,
       uniforms,
+      // Compile-time constants, for the knobs a uniform cannot express. A GLSL
+      // loop bound must be a constant expression, so "how many taps" has to be
+      // a define — see `setDefine`, which is what the quality levels turn.
+      defines: { ...(opts.defines || {}) },
       vertexShader: FS_VERT,
       fragmentShader,
       // Depth is meaningless for a full-screen triangle and leaving these on
@@ -165,6 +169,23 @@ export class Pass {
       transparent: opts.transparent ?? false,
       premultipliedAlpha: false,
     })
+  }
+
+  /**
+   * Change a compile-time constant and force a recompile.
+   *
+   * No-ops when the value is unchanged, which matters more than it looks: a
+   * quality level is re-applied on every resize and on every level load, and an
+   * unguarded `needsUpdate` there would throw the program away and re-link it
+   * mid-run — a multi-hundred-millisecond stall on exactly the frame the player
+   * is least able to absorb one.
+   */
+  setDefine(name, value) {
+    const v = String(value)
+    if (this.material.defines[name] === v) return false
+    this.material.defines[name] = v
+    this.material.needsUpdate = true
+    return true
   }
 
   render(renderer, target) {

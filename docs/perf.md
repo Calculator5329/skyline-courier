@@ -146,6 +146,40 @@ is inside the noise on all four void shots at both resolutions, and the ruin
 bands are already `castShadow = false` with `scNoPrepass` set. The overdraw is
 not there.
 
+## What the contact pass is actually bound by (2026-07-26, follow-up)
+
+The table above says the contact pass is 40%+ of the frame. It does not say
+WHICH part of it, and the three candidate answers have completely different
+fixes. Measured, with `perfprobe --modes`:
+
+- **Fewer steps and taps buys nothing.** 10 march steps and 6/4 AO taps instead
+  of 14 and 8/5 (`clite`) read indistinguishable from half-resolution alone on
+  every shot on both themes, and slower on some.
+- **The two bilateral blur passes cost nothing.** `noblur` is inside the noise
+  (closeup 6.53 base vs 6.57; tower 5.32 vs 5.06).
+- **Only resolution moves it.** Half-resolution (`chalf`) recovers roughly two
+  thirds of the whole pass, on every shot, on both themes.
+
+So the pass is not ALU-bound and it is not blur-bound. It is bound by the
+number of pixels it runs at and the ~22 dependent texture fetches each of those
+pixels makes. **There is no free win in the largest item in the renderer** —
+the only lever is resolution, and resolution is a (small, measured) image
+change. That is why it went behind Lite Mode rather than into the default; see
+`docs/lite-mode.md` for the frame times and the visual assessment.
+
+### The shot harness is not deterministic — subtract the noise floor
+
+This cost real time to discover and it invalidates any naive before/after diff.
+Re-rendering the UNCHANGED build and diffing the two shot sets gives a
+per-pixel mean deviation of **4.13/255 on `deckstrip`** and 0.79 on
+`underside` — foliage sway and grain, nothing to do with any edit. A candidate
+that measured 4.93 on that shot had therefore changed almost nothing.
+
+Some shots ARE frame-stable: `crossing`, `chain`, `closeup`, `tower` and
+`terrace` all reproduce their whole-frame mean luminance exactly across runs.
+Those are the ones to quote. Always capture a same-build control run and report
+the signal against it, not against zero.
+
 ## Measurement hygiene — read this before quoting a number
 
 This box runs other agents' harnesses and Ethan's desktop Chrome (5 GB of

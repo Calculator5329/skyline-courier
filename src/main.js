@@ -11,6 +11,7 @@ import { SpeedFX } from './fx/speed.js'
 import { GrappleFX } from './fx/grapple.js'
 import { VoidFX } from './fx/voidfx.js'
 import { RenderPipeline } from './render/index.js'
+import { DEFAULT_QUALITY, QUALITY_LEVELS, QUALITY_NAMES, resolveQuality } from './render/quality.js'
 import { Music } from './music.js'
 import { selectTheme, getTheme, THEMES } from './theme.js'
 
@@ -42,13 +43,49 @@ function loadMode() {
 }
 setMode(loadMode())
 
+// ----------------------------------------------------------------- quality
+
+/**
+ * Graphics quality level. See `src/render/quality.js` and `docs/lite-mode.md`.
+ *
+ * There is NO UI for this yet, by design — the settings menu is being reworked
+ * and this lane is the plumbing. It is settable from the console
+ * (`__game.setQuality('lite')`) and it persists, so the level can be evaluated
+ * and a menu item can be wired to `setQuality` later without touching the
+ * renderer again. `docs/roadmap.md` carries the UI item.
+ */
+const QUALITY_KEY = 'skyline-courier:quality'
+
+function loadQuality() {
+  try {
+    // `?quality=lite` first, and it does NOT persist — the harness has to be
+    // able to render a level without leaving that level set for the next run,
+    // and an evaluator wants to A/B by reloading rather than by remembering to
+    // put it back. Same precedence rule the theme uses (src/theme.js).
+    const q = new URLSearchParams(location.search).get('quality')
+    if (q && QUALITY_LEVELS[q]) return q
+    return resolveQuality(localStorage.getItem(QUALITY_KEY))
+  } catch { return DEFAULT_QUALITY }       // private mode
+}
+
+let quality = loadQuality()
+
 // ---------------------------------------------------------------- renderer
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
   powerPreference: 'high-performance',
 })
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+/**
+ * The cap, not the ratio: `devicePixelRatio` is what the display asks for and
+ * we only ever ask for less. At the default cap of 2 a HiDPI panel is drawing
+ * four times the pixels of its CSS size, and on a fill-bound renderer that IS
+ * the frame — which is why this is the first knob a quality level turns.
+ */
+function applyPixelRatio() {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_LEVELS[quality].pixelRatioCap))
+}
+applyPixelRatio()
 renderer.setSize(window.innerWidth, window.innerHeight)
 document.body.appendChild(renderer.domElement)
 
@@ -94,6 +131,7 @@ let music = null
 // HDR pipeline: physical auto-exposure → Karis bloom → AgX + procedural
 // grade LUT. The scene never touches the default framebuffer directly.
 const pipeline = new RenderPipeline(renderer, scene, camera, {
+  quality,
   // Both are partial overlays over the shipped defaults — see src/theme.js.
   // `grade` retints the LUT; `exposure` widens the metering window, without
   // which a near-black theme pins against the daylight floor and cannot get
@@ -538,6 +576,9 @@ function tick(dt) {
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight
   camera.updateProjectionMatrix()
+  // Re-read the cap: dragging the window between a HiDPI laptop panel and an
+  // external 1x monitor changes devicePixelRatio without changing the level.
+  applyPixelRatio()
   renderer.setSize(window.innerWidth, window.innerHeight)
   speedFX.setSize(window.innerWidth, window.innerHeight)
   pipeline.setSize(window.innerWidth, window.innerHeight)
@@ -572,6 +613,28 @@ window.__game = {
   // design, so "no console error" is not evidence there either.
   audio,
   tick, TUNING, MODES, getMode, setMode: applyMode,
+  /**
+   * Graphics quality. `__game.setQuality('lite' | 'balanced' | 'high')`.
+   *
+   * Exposed rather than menu-driven on purpose (see the note by QUALITY_KEY):
+   * this is the evaluation handle and the seam a settings UI will call. It
+   * takes effect on the next frame — the pixel-ratio change resizes the canvas
+   * and the tap counts recompile one shader, both synchronously.
+   */
+  QUALITY_LEVELS, QUALITY_NAMES,
+  getQuality: () => quality,
+  setQuality(name) {
+    quality = resolveQuality(name)
+    try { localStorage.setItem(QUALITY_KEY, quality) } catch { /* private mode */ }
+    applyPixelRatio()
+    // setSize with the same CSS size but a new pixel ratio: three recomputes
+    // the backing store, and the pipeline re-derives every target from it.
+    renderer.setSize(window.innerWidth, window.innerHeight)
+    speedFX.setSize(window.innerWidth, window.innerHeight)
+    pipeline.setQuality(quality)
+    pipeline.setSize(window.innerWidth, window.innerHeight)
+    return quality
+  },
   // Exposed so render passes can be toggled from the console when bisecting a
   // visual bug. Finding which pass owns an artifact by turning them off one at
   // a time is far faster than reading four shaders.
