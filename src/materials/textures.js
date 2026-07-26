@@ -399,6 +399,270 @@ function paintField(ctx, fill) {
   ctx.putImageData(img, 0, 0)
 }
 
+/**
+ * THE GLOWING FISSURE NETWORK — the void's missing channel, and the biggest
+ * single difference between the build and Ethan's reference image.
+ *
+ * The reference's dark masses are threaded with thin magenta and violet cracks
+ * that read as light coming from INSIDE the stone: brightest deep in the
+ * fissure, falling off fast at the lips, and dark rock immediately either side.
+ * §4's element list never names them because they are not an element — they are
+ * a surface property of every rock in the frame, which is why they belong here
+ * and not in a prefab.
+ *
+ * FOUR DECISIONS, EACH OF WHICH HAD A CHEAPER WRONG ANSWER.
+ *
+ * 1. ITS OWN FAULT SYSTEM, NOT THE FACETS. `voidrock` already runs two
+ *    `fracture()` octaves and the obvious move is to light the creases it
+ *    already has. That is wrong for the reason the reference is legible: a vein
+ *    that traces the facet boundaries outlines every facet, and an outlined
+ *    facet field reads as crazing on a teacup — the exact note the mineral-vein
+ *    pass below already carries. In the reference the fissures CUT ACROSS the
+ *    rock's own break structure, which is what says "this happened to the rock"
+ *    rather than "this is how the rock is made". So this is a separate lattice
+ *    at a much COARSER scale (the primary cells are ~0.8 m against the rock's
+ *    0.60 m and 0.22 m), with its own seed, plus one fine branching octave for
+ *    hairline offshoots.
+ *
+ * 2. AN EMISSIVE MASK IN A TEXTURE CHANNEL, NOT GEOMETRY AND NOT A VERTEX
+ *    ATTRIBUTE. `crystals.js` drives `totalEmissiveRadiance` off an attribute,
+ *    which is right for a shard — a shard is a mesh, and the gradient it wants
+ *    runs along the mesh. A vein is sub-tile detail on a surface that is already
+ *    sampling three maps, and it must be able to land anywhere on that surface.
+ *    Geometry would mean thousands of extra slivers with their own draw calls in
+ *    a theme whose §7.3 budget is already the binding constraint. The ORM
+ *    canvas's RED channel has been spare since this file was written (`mg()`
+ *    writes r = 0 and the header says so), so the mask costs ZERO extra texture
+ *    memory, zero extra samplers and — because `shader.js` already samples that
+ *    map for roughness — zero extra fetches.
+ *
+ * 3. BRIGHTEST DEEP, FADING AT THE LIPS, is not a shading trick; it is three
+ *    different widths written into three different channels from one distance
+ *    field. The core is a 1.2 cm incandescent line. The halo around it is three
+ *    times wider and an eighth as bright, and it exists mostly so the signal
+ *    survives the mip chain — a 3-texel line alone mips to nothing by the second
+ *    level and the veins would vanish at platform distance. The lip is four
+ *    times wider again and carries NO light at all: it is a real cut in the
+ *    height field, so `normalFromHeight` gives it relief, the cavity signal
+ *    finds it, and `SC_CAVITY` darkens and violet-tints it. Dark rock hard
+ *    against a bright core is the whole effect; a glow on an undamaged face is
+ *    a decal.
+ *
+ * 4. PATCHY AND UNEVEN ALONG ITS LENGTH. A fault system is local, so a
+ *    low-frequency gate decides which stretches are lit at all; and a much finer
+ *    field varies brightness ALONG the vein, so it reads as something burning
+ *    unevenly inside the rock rather than as a neon tube let into it.
+ *
+ * The hue is deliberately NOT decided here. §3 is explicit that red must stay
+ * rare — "if red is everywhere, the image loses its focal points" — and rarity
+ * is a property of the WORLD, not of a 2.4 m tile. A per-cell red flag inside
+ * the tile would put the same red vein on every copy of it, several times per
+ * wall. So this writes intensity only, and `shader.js` picks violet or red off
+ * the macro field at 12 m, which makes red a handful of regions in a level
+ * rather than a fixed fraction of every square metre.
+ */
+/**
+ * A tiling Worley field that names BOTH cells at a boundary, not just the
+ * nearest one — which is the whole reason this exists next to `fracture()`
+ * rather than inside it.
+ *
+ * `fracture()` answers "which facet am I on", so the nearest seed is all it
+ * needs. A vein is not a facet, it is an EDGE: it belongs to the pair of cells
+ * it separates, and every question worth asking about it ("is this crack lit?")
+ * has to be answered the same way all along its length or the crack breaks up.
+ * Returning the pair is what makes a per-edge decision possible at all.
+ */
+function faultEdges(rand, cells) {
+  const n = cells * cells
+  const sx = new Float32Array(n), sy = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    sx[i] = 0.10 + rand() * 0.80
+    sy[i] = 0.10 + rand() * 0.80
+  }
+  const step = SIZE / cells
+  return (x, y) => {
+    const gx = Math.floor(x / step), gy = Math.floor(y / step)
+    let d1 = 1e9, d2 = 1e9, i1 = 0, i2 = 0
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const cx = (((gx + ox) % cells) + cells) % cells
+        const cy = (((gy + oy) % cells) + cells) % cells
+        const i = cy * cells + cx
+        const px = (gx + ox + sx[i]) * step
+        const py = (gy + oy + sy[i]) * step
+        const dx = x - px, dy = y - py
+        const d = Math.sqrt(dx * dx + dy * dy)
+        if (d < d1) { d2 = d1; i2 = i1; d1 = d; i1 = i }
+        else if (d < d2) { d2 = d; i2 = i }
+      }
+    }
+    return { edge: d2 - d1, a: i1, b: i2 }
+  }
+}
+
+/**
+ * Is the crack between these two cells one of the lit ones?
+ *
+ * Deterministic, symmetric in its arguments, and — the property everything
+ * depends on — CONSTANT along the whole edge, because the pair is constant
+ * along the whole edge. That is what turns a Worley web into a set of veins:
+ * a kept edge is lit from end to end, its neighbours in the web are mostly
+ * not, and the ones that are chain onto it, so what survives is long wandering
+ * paths through the rock instead of outlines around it.
+ *
+ * This replaces two earlier attempts that both failed for the same reason —
+ * they gated the web with a NOISE FIELD, which is a decision made per texel.
+ * A coarse field lit whole cell rings (crazing, dragon scale); a fine one
+ * perforated every line into dashes and then into specks (glitter). Neither
+ * can produce a long crack, because neither is asking a question about the
+ * crack. Selection has to happen at the topology, and this is the topology.
+ */
+function edgeKept(a, b, keep) {
+  const lo = Math.min(a, b), hi = Math.max(a, b)
+  let k = Math.imul(lo + 1, 0x27d4eb2d) ^ Math.imul(hi + 1, 0x165667b1)
+  k ^= k >>> 15
+  k = Math.imul(k, 0x2545f491)
+  k ^= k >>> 16
+  return ((k >>> 0) / 4294967296) < keep
+}
+
+function paintGlowVeins(a, h, m, rand, opts = {}) {
+  const {
+    /** Primary fault lattice. 3 cells over the 2.38 m tile = ~0.8 m cells. */
+    cells = 3,
+    /** Hairline offshoots, on their own lattice so they are not sub-cells. */
+    branchCells = 9,
+    /**
+     * FRACTION OF THE WEB'S EDGES THAT ARE LIT, and the number that decides
+     * whether this material reads as fissured rock or as a pattern.
+     *
+     * A Worley cell has about six neighbours, so at 1.0 every cell is outlined
+     * and the surface is crazing — the first pass shipped that and the captures
+     * came back looking like dragon scale, and like glitter once the web mipped
+     * down. Both are named failure modes (section 8 wants nothing generic;
+     * section 2 allows under 5% of the frame to be bright).
+     *
+     * But it cannot go too low either, and 0.32 proved that the hard way: bond
+     * percolation on this lattice turns over around 0.5, and BELOW it the kept
+     * edges stop reaching each other. The capture came back as evenly scattered
+     * straight dashes — tally marks — because an edge of a Worley web is one
+     * cell long, and thirty per cent of them, chosen independently, is a field
+     * of isolated segments.
+     *
+     * 0.46 sits just under the transition, which is the only place the two
+     * things wanted here are both true: kept edges chain into long wandering
+     * paths, and enough are missing that the paths do not close into rings. A
+     * long path that does not close is a crack. A closed ring is a cell, and at
+     * 0.55 enough rings survived that the near-field walls came back reading as
+     * crazy paving.
+     *
+     * COVERAGE IS NOT SET HERE. At 0.55 the tile is fissured everywhere, and
+     * the answer to "which rock has cracks at all" is deliberately in
+     * shader.js instead, keyed to the world-scale macro field — see SC_VEIN
+     * there. A tiling texture cannot express "this stretch of wall, not that
+     * one" without repeating the answer every 2.4 m.
+     */
+    keep = 0.46,
+    /** The same, for the offshoot lattice. Lower: an offshoot is rarer. */
+    branchKeep = 0.20,
+    /** Texels (4.6 mm each). 3.0 -> a 1.4 cm incandescent core. */
+    coreWidth = 3.0,
+    /** The shadowed cut the core sits in, in texels. */
+    lipWidth = 10,
+    /** Height units the fissure is cut below the face it crosses. */
+    depth = 58,
+    /** Scale on the whole emissive mask, so a carved face can run quieter. */
+    glow = 1.0,
+  } = opts
+
+  const fault = faultEdges(rand, cells)
+  const branch = faultEdges(rand, branchCells)
+  /**
+   * Brightness variation ALONG the vein — the thing that makes it read as
+   * something burning unevenly inside the rock rather than as a lit tube.
+   *
+   * ~22 cm and GENTLE (0.58..1.30). It is deliberately not allowed anywhere
+   * near zero: this field's job is to vary a crack, and a modulator that can
+   * reach zero stops being a variation and becomes the gate that the paragraph
+   * above spent two attempts proving does not work.
+   */
+  const burn = coherent(rand, 11)
+
+  const N = SIZE * SIZE
+  const mask = new Float32Array(N)   // what glows
+  const cut = new Float32Array(N)    // what is cut away
+  const line = new Float32Array(N)   // the thin line itself, for polish
+
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = y * SIZE + x
+
+      const f = fault(x, y)
+      const br = branch(x, y)
+      const fOn = f.edge < lipWidth && edgeKept(f.a, f.b, keep)
+      const bOn = br.edge < lipWidth * 0.55 && edgeKept(br.a, br.b, branchKeep)
+      if (!fOn && !bOn) continue
+
+      // Three widths off one distance field. See decision 3 in the header.
+      // 0.55 on every branch term: an offshoot is a hairline feeding off a
+      // fault, not a second fault.
+      const fCore = fOn ? 1 - smoothstep(0, coreWidth, f.edge) : 0
+      const bCore = bOn ? (1 - smoothstep(0, coreWidth * 0.55, br.edge)) * 0.55 : 0
+      const fHalo = fOn ? 1 - smoothstep(0, coreWidth * 3.0, f.edge) : 0
+      const bHalo = bOn ? (1 - smoothstep(0, coreWidth * 1.7, br.edge)) * 0.55 : 0
+      const fLip = fOn ? 1 - smoothstep(0, lipWidth, f.edge) : 0
+      const bLip = bOn ? (1 - smoothstep(0, lipWidth * 0.55, br.edge)) * 0.55 : 0
+
+      const c = Math.max(fCore, bCore)
+      const halo = Math.max(fHalo, bHalo)
+      line[i] = c
+      cut[i] = Math.max(fLip, bLip)
+      // 2.0 on the core: the falloff has to be faster than linear or the vein
+      // reads as a soft painted stroke instead of as a slot with a fire in it.
+      // 0.09 on the squared halo is the mip-survival term and nothing else —
+      // it was 0.16, which at platform distance averaged into a lit film over
+      // the whole face and took the frame's black point with it.
+      const b = 0.58 + 0.72 * burn(x, y)
+      mask[i] = Math.min(1, ((c ** 2.0) * 0.94 + halo * halo * 0.09) * b * glow)
+    }
+  }
+
+  // --- height: a real cut, deepest in the middle ---------------------------
+  // A V rather than a slot: the lip term opens the fissure over ~4.6 cm and the
+  // core term takes the last of it out, so the normal map turns the walls
+  // toward the eye and the bottom stays in shadow.
+  modulateField(h, (px, i) => {
+    const d = cut[i] * 0.42 + line[i] * 0.58
+    if (d <= 0.004) return
+    const v = px[0] - d * depth
+    px[0] = px[1] = px[2] = v
+  })
+
+  // --- albedo: the rock beside a fissure is DARKER, never brighter ---------
+  // This is the half that makes the glow read as internal. If the mask were
+  // also painted into albedo the vein would be a bright stripe on the rock,
+  // which is a decal; light from inside means the visible rock goes toward
+  // black and only the emissive channel carries the brightness.
+  modulateField(a, (px, i) => {
+    const d = cut[i]
+    if (d <= 0.01) return
+    const k = 1 - 0.55 * d
+    px[0] *= k
+    px[1] *= k * (1 - 0.14 * d)
+    px[2] *= k * (1 + 0.10 * d)
+  })
+
+  // --- ORM: the mask into the spare RED channel, polish into GREEN ---------
+  // A healed fissure is glassier than the fractured rock around it, so the
+  // core also takes a specular the mass does not. That costs nothing here and
+  // it is what stops the vein reading as a flat emissive strip when the
+  // emissive amount is turned down.
+  modulateField(m, (px, i) => {
+    if (mask[i] > 0.002) px[0] = Math.max(px[0], mask[i] * 255)
+    if (line[i] > 0.01) px[1] = px[1] * (1 - 0.55 * line[i]) + 0.22 * 255 * (0.55 * line[i])
+  })
+}
+
 // ---------------------------------------------------------------- painters
 
 /**
@@ -1626,6 +1890,18 @@ const PAINTERS = {
       h.closePath()
       h.fill()
     }
+
+    /**
+     * --- the glowing fissures, LAST -----------------------------------------
+     *
+     * Ordering is load-bearing, not tidiness. The mineral-vein and
+     * micro-crystal passes above both write the ORM canvas through paths that
+     * zero its red channel (`overlayField` composites source-over toward a
+     * colour whose red is 0; `mg()` writes r = 0 by construction), so a mask
+     * painted before either of them would be partly erased. See
+     * `paintGlowVeins` for everything else.
+     */
+    paintGlowVeins(a, h, m, rand, { cells: 3, branchCells: 7, keep: 0.46, branchKeep: 0.20, depth: 58 })
   },
 
   /**
@@ -1835,6 +2111,25 @@ const PAINTERS = {
       poly(a, `rgba(${VOID_ROCK[0]},${VOID_ROCK[1]},${VOID_ROCK[2]},.78)`)
       poly(m, mg(0.93, 0, 0.8))
     }
+
+    /**
+     * --- the glowing fissures, LAST, and QUIETER than the raw rock ----------
+     *
+     * Same pass, three parameters apart, and the differences all say the same
+     * thing: this face was CUT, so it has not fractured as freely. The network
+     * is coarser (2 cells = one ~1.2 m fault per tile rather than a web), the
+     * gate is tighter so most panels carry none at all, and the cut is
+     * shallower because a machined face has less depth to lose.
+     *
+     * §4.1 puts the deliberate light on these walls — the glowing sigil rings —
+     * and that is geometry's job. A carved face that veined as hard as raw rock
+     * would compete with its own sigils, which is §2's 5% budget spent on the
+     * wrong 5%.
+     */
+    paintGlowVeins(a, h, m, rand, {
+      cells: 2, branchCells: 5, keep: 0.40, branchKeep: 0.14,
+      depth: 40, lipWidth: 8, glow: 0.85,
+    })
   },
 }
 

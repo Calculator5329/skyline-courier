@@ -472,6 +472,63 @@ const voidTheme = {
     },
 
     /**
+     * GLOWING VEINS AND CRACKS — the thing the reference has that the build did
+     * not, and the reason its dark masses read as magical instead of merely
+     * dark. Thin magenta and violet fissures threading the rock, brightest deep
+     * in the crack and fading at the lips, as though the stone is lit from
+     * inside.
+     *
+     * The mechanism is split three ways and each file owns the part it is
+     * qualified to own: `materials/textures.js` `paintGlowVeins` decides WHERE
+     * (its own fault network, cutting across the rock's facets), `materials/
+     * shader.js` decides HOW IT LIGHTS (an emissive term, unshaded, before the
+     * aerial perspective), and this block decides WHETHER AND HOW HARD — which
+     * is a statement about a world and therefore belongs in a theme.
+     *
+     * The skyline names none of this and so compiles none of it.
+     *
+     * TWO NUMBERS DID THE TUNING, and both are read against §2 rather than
+     * against taste:
+     *
+     *   `vein` is a linear-light multiplier, so it is measured against the
+     *   bloom threshold (0.78 on the max channel after exposure) and not
+     *   against an albedo scale. Violet #8b5cf6 is blue-dominant, so the blue
+     *   channel clips first and the vein blooms violet before it ever goes
+     *   white — which is the correct order for §2's "crystal cores blow,
+     *   nothing else". The raw rock runs hotter than the carved face because
+     *   §4.1 reserves the carved face's light budget for its sigil rings.
+     *
+     *   `veinRed` is where red starts in the macro field, and it is the number
+     *   §3 constrains directly: "red must stay rare — if red is everywhere, the
+     *   image loses its focal points". 0.74 leaves red as a handful of
+     *   stretches of fault across a whole level rather than a fixed share of
+     *   every surface. It should go UP if red ever starts reading as a colour
+     *   the rock simply has.
+     */
+    veins: {
+      voidrock: {
+        vein: 1.2,
+        // §3's violet crystal body. The fissures and the shards are the same
+        // light in two states — one still inside the rock, one erupted out of
+        // it — and giving them two different violets would say they are not.
+        veinColor: 0x8b5cf6,
+        veinRedColor: 0xff2d55,
+        veinRed: 0.57,
+        veinRedWidth: 0.09,
+      },
+      voidcarved: {
+        // Two-thirds of the rock's. A cut face has not fractured as freely, and
+        // the deliberate light on a great wall is its sigil ring, not its
+        // cracks.
+        vein: 0.82,
+        veinColor: 0x8b5cf6,
+        veinRedColor: 0xff2d55,
+        veinRed: 0.63,
+        veinRedWidth: 0.09,
+      },
+    },
+
+    /**
      * The flat vertex-tint multiplier `voidkit.js` applies to every box and
      * mesh it emits. 1.0 — and that is the point.
      *

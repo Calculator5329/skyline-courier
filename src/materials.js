@@ -596,6 +596,8 @@ const _cache = new Map()
  *           violet rock, with no change in any kit, level or prefab.
  *   macro — the five environment-derived colours in materials/shader.js. See
  *           `setMacroColors` there.
+ *   veins — per-kind overrides on the SURFACE block below, and today the only
+ *           thing that turns the glowing-fissure channel on. See `themeVein`.
  *
  * WHY AN ALIAS RATHER THAN A SECOND KIND NAME EVERYWHERE. `level.js` batches
  * geometry by kind and `voidkit.js` defaults every emitter to `'stone'`, so the
@@ -637,13 +639,34 @@ export function applyThemeSurfaces() {
   setMacroColors(themeSurfaces().macro || {})
 }
 
+/**
+ * The theme's glowing-fissure settings for one kind, or nothing.
+ *
+ * OFF UNLESS A THEME ASKS, and the default lives here rather than in SURFACE
+ * for a reason worth stating: the skyline is the shipped look and the baseline
+ * every regression is measured against, so the safe state for a new emissive
+ * channel is not "a small number on the materials that probably want it" — it
+ * is a term that does not compile at all until a theme names it. With `vein`
+ * absent, `extendSurfaceMaterial` sets no define, allocates no uniform and
+ * emits no GLSL, so the skyline's programs are byte-identical to before.
+ *
+ * It is also the honest place for the decision. How brightly the rock burns
+ * from inside is a statement about a WORLD, exactly like the fog colour and the
+ * key intensity two blocks up in theme.js — not a property of a rock.
+ */
+function themeVein(kind) {
+  const v = themeSurfaces().veins
+  return (v && v[kind]) || null
+}
+
 export function surfaceMaterial(kind) {
   applyThemeSurfaces()
   kind = resolveKind(kind)
   if (_cache.has(kind)) return _cache.get(kind)
 
-  const s = SURFACE[kind]
-  if (!s) throw new Error(`unknown surface kind: ${kind}`)
+  const base = SURFACE[kind]
+  if (!base) throw new Error(`unknown surface kind: ${kind}`)
+  const s = { ...base, ...themeVein(kind) }
 
   const { map, normalMap, ormMap } = surfaceTextures(kind, {
     depth: s.depth,

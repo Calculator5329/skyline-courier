@@ -253,6 +253,10 @@ uniform vec3 scSkyWarmCol;// what an UP face sees: the warm horizon ring
 uniform vec3 scHorizonCol;// the bright band where the cloud sea meets the sky
 uniform vec3 scPatinaCol; // verdigris, on downward faces and in crevices
 uniform vec4 scPatinaP;   // x downward-face amount, y crevice amount, z metalness kill, w unused
+uniform vec4 scVeinP;     // x emissive amount, y red-region width, z red-region threshold, w unused
+uniform vec2 scVeinC;     // x cracked-rock threshold, y transition width
+uniform vec3 scVeinCol;   // the fissure's own light: violet, the common case
+uniform vec3 scVeinRedCol;// the rare one. §3: red is punctuation, never a field
 
 // Written by the map_fragment block, consumed by the chunk overrides further
 // down main(). GLSL globals, so no varyings and no recomputation. scCavity is
@@ -266,6 +270,29 @@ float scCavity = 1.0;
  *  a dielectric salt, and leaving metalness at 1 under it is what made the last
  *  attempt read as green paint on gold. 0 on every material that opts out. */
 float scPatina = 0.0;
+/**
+ * THE GLOWING FISSURES, split across two globals for two different reasons.
+ *
+ * scVeinMask is how much light this texel emits. It is the RED channel of the
+ * ORM map, which textures.js's paintGlowVeins writes and which has been spare
+ * since this material was designed — so it is picked up for free inside the
+ * roughness chunk override below, which was already fetching that texture. The
+ * emissive term therefore costs no additional sampler and no additional fetch.
+ *
+ * scVeinHue is WHICH light, and it is read off the macro field at ~12 m rather
+ * than out of the tile. docs/art-direction-void.md section 3 makes red the
+ * rarest colour in the world and says why — "if red is everywhere, the image
+ * loses its focal points" — and rarity at world scale is something a 2.4 m
+ * tiling texture structurally cannot express: any red it contains repeats
+ * several times across a single wall, which is a pattern, not an accent. Keyed
+ * to the macro noise instead, red is a few STRETCHES of fault in a level.
+ *
+ * Both default to zero so every permutation that never runs the map block —
+ * depth, shadow, any material without SC_VEIN — is unaffected.
+ */
+float scVeinMask = 0.0;
+float scVeinHue = 0.0;
+float scVeinCover = 0.0;
 /**
  * The uv every tile-scale map is sampled at. Normally just vMapUv; under
  * SC_WORLDUV it is the world-planar projection instead, and then the roughness,
@@ -347,6 +374,34 @@ const MAIN_FRAGMENT = /* glsl */ `
 
   vec2 scMuv = scWuv * scMacroP.x;
   vec4 mac = texture2D( scMacroTex, scMuv );
+
+  // -------------------------------------------------- fissure regions ------
+  /**
+   * WHICH ROCK IS CRACKED, and WHICH CRACKS BURN RED. Both are read off the
+   * macro band that is already fetched, so both are free, and both are here
+   * rather than in the tile for the same reason: they are statements about a
+   * PLACE, and a 2.4 m tiling texture answers a question about a place by
+   * repeating the answer several times per wall, which reads as a pattern.
+   *
+   * The coverage gate is the one that matters most to the look. textures.js
+   * fissures its tile everywhere — see the keep parameter there, which is pinned just above
+   * the lattice's percolation threshold so the cracks chain into long paths —
+   * and this is what then leaves large stretches of rock clean. Broken rock
+   * next to sound rock at 12 m scale is what makes the fissures read as
+   * something that HAPPENED to this mass, rather than as how the material is
+   * finished. It is also, incidentally, the only anti-tiling defence the
+   * emissive channel has: the ORM map is not de-tiled.
+   *
+   * scVeinCover.x is where cracked rock starts and .y is the width of the
+   * transition. The hue gate has the same shape and its threshold is much
+   * higher, because §3 rations red and nothing else.
+   */
+  #ifdef SC_VEIN
+    scVeinCover = smoothstep( scVeinC.x, scVeinC.x + scVeinC.y,
+                              mac.a * 0.58 + mac.g * 0.42 );
+    scVeinHue = smoothstep( scVeinP.z, scVeinP.z + scVeinP.y,
+                            mac.r * 0.55 + mac.b * 0.45 );
+  #endif
 
   // ------------------------------------------------------- tile frame ----
   // WORLD-PLANAR UV. A moss cap assembled from four boxes has four independent
@@ -798,9 +853,47 @@ const OVERRIDES = [
     '#include <roughnessmap_fragment>',
     `float roughnessFactor = roughness;
 #ifdef USE_ROUGHNESSMAP
-  roughnessFactor *= texture2D( roughnessMap, scUv0 ).g;
+  // One fetch, two channels. G is the polish; R is the fissure mask, which has
+  // been a spare channel since this material was written — so the whole
+  // emissive vein layer arrives on the back of a fetch that already happens.
+  vec4 scOrm = texture2D( roughnessMap, scUv0 );
+  roughnessFactor *= scOrm.g;
+  #ifdef SC_VEIN
+    scVeinMask = scOrm.r;
+  #endif
 #endif
 roughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );`,
+  ],
+  /**
+   * ======================= LIGHT FROM INSIDE THE STONE =======================
+   *
+   * The reference image's dark masses are threaded with glowing cracks, and
+   * that channel is most of why it reads as magical rather than merely dark.
+   * See textures.js `paintGlowVeins` for where the mask comes from and why it
+   * is a mask rather than geometry.
+   *
+   * ADDED, NOT MIXED, and into `totalEmissiveRadiance` specifically. Emissive is
+   * the one term that does not pass through the light loop, which is exactly
+   * right here: a fissure with a fire in it does not get darker on the shaded
+   * side of a rock, and it is not occluded by the cavity signal that darkens
+   * the lips around it. That contrast — cavity-darkened lip hard against an
+   * unshaded core — is the whole read, and mixing into diffuseColor would have
+   * lost it, because diffuse is precisely what the void's near-zero key does
+   * not deliver.
+   *
+   * It lands BEFORE render/patch.js's aerial perspective, which replaces
+   * three's fog after tonemapping. That is deliberate and it is the behaviour
+   * §5 asks for: a vein twenty metres back washes toward the violet fog with
+   * everything else, so the fissures participate in the three depth bands
+   * instead of punching through them as a flat overlay.
+   */
+  [
+    '#include <emissivemap_fragment>',
+    `#include <emissivemap_fragment>
+#ifdef SC_VEIN
+  totalEmissiveRadiance += mix( scVeinCol, scVeinRedCol, scVeinHue )
+                         * scVeinMask * scVeinCover * scVeinP.x;
+#endif`,
   ],
   [
     '#include <metalnessmap_fragment>',
@@ -859,7 +952,7 @@ roughnessFactor = clamp( roughnessFactor + scRoughAdd, 0.04, 1.0 );`,
  * invalidate a warm program cache — three keys programs on the chunk set plus
  * this string, and will happily reuse a stale compiled program otherwise.
  */
-const SHADER_VERSION = 'sc4'
+const SHADER_VERSION = 'sc5'
 
 export const DEFAULT_PARAMS = {
   /** macro tiles per metre. 0.085 -> ~11.8 m period, so features land at 1-4 m. */
@@ -934,6 +1027,40 @@ export const DEFAULT_PARAMS = {
    * thing that produces a dark end at all.
    */
   specAo: 0.55,
+  /**
+   * GLOWING FISSURES. 0 disables the term, its three uniforms and its branch,
+   * and it is 0 here on purpose: the skyline is the shipped look and it has no
+   * light inside its stone. Only a theme that asks for this gets it — see
+   * `theme.surfaces.veins` and `surfaceMaterial` in materials.js.
+   *
+   * The number is a multiplier on the vein colour in LINEAR light, so it is
+   * read against the bloom threshold (0.78 on the max channel, post-exposure)
+   * rather than against anything on a 0-1 albedo scale. A saturated violet
+   * blooms as soon as its blue channel clips, which is the intended behaviour
+   * and is also why the mask under it is kept thin.
+   */
+  vein: 0,
+  /** The common fissure colour. §3's violet crystal body. */
+  veinColor: 0x8b5cf6,
+  /** The rare one. §3's red/magenta energy, and it must STAY rare. */
+  veinRedColor: 0xff2d55,
+  /**
+   * Where in the macro field the red regions start, 0..1. High is rare: the
+   * field is an fbm living inside roughly 0.5 +/- 0.18, so 0.68 selects a few
+   * per cent of the world's fault length and 0.5 would make red the default.
+   */
+  veinRed: 0.68,
+  /** Width of the violet -> red crossover in the same units. */
+  veinRedWidth: 0.10,
+  /**
+   * Where cracked rock starts in the macro field, 0..1. LOWER IS MORE CRACKED.
+   * The field is an fbm living inside roughly 0.5 +/- 0.18, so 0.44 leaves
+   * rather more than half the rock in a level fissured and the rest sound,
+   * which is the ratio the reference reads at.
+   */
+  veinCover: 0.46,
+  /** Width of the sound -> cracked transition in the same units. */
+  veinCoverWidth: 0.16,
   /** wrapped-diffuse width w in (N.L + w)/(1 + w). See WRAP. */
   wrapWidth: 0.4,
   /** wrapped-diffuse amount; 0 disables the term and its branch */
@@ -975,6 +1102,10 @@ export function extendSurfaceMaterial(material, params = {}) {
       value: new THREE.Vector4(p.patina, p.patinaCavity, p.patinaMetal, 0),
     },
     scWrapP: { value: new THREE.Vector4(p.wrapWidth, p.wrap, p.backlit, 0) },
+    scVeinP: { value: new THREE.Vector4(p.vein, p.veinRedWidth, p.veinRed, 0) },
+    scVeinC: { value: new THREE.Vector2(p.veinCover, p.veinCoverWidth) },
+    scVeinCol: { value: new THREE.Color(p.veinColor) },
+    scVeinRedCol: { value: new THREE.Color(p.veinRedColor) },
     // THREE.Color converts the sRGB hex into the renderer's working space.
     scWedgeCol: { value: new THREE.Color(p.wedgeColor) },
     scTopCol: { value: new THREE.Color(p.topColor) },
@@ -996,6 +1127,9 @@ export function extendSurfaceMaterial(material, params = {}) {
   if (p.glint > 0) defines.SC_GLINT = ''
   if (p.wrap > 0 || p.backlit > 0) defines.SC_WRAP = ''
   if (p.worldUv > 0) defines.SC_WORLDUV = ''
+  // The mask rides in the ORM map's red channel, so like SC_CAVITY it cannot be
+  // enabled without the texture that carries it.
+  if (p.vein > 0 && material.roughnessMap) defines.SC_VEIN = ''
 
   Object.assign(material.defines ?? (material.defines = {}), defines)
   material.userData.scUniforms = own
