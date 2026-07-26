@@ -208,6 +208,37 @@ export function buildVoidCourse(collision) {
   pad('plaza', 0, 0, 0, 26, 26)
   L.checkpoint(0, 1.0, 0, 'the floor')
 
+  // ---- THE TEACHING WALL --------------------------------------------------
+  //
+  // Ethan: "it's not super intuitive how you're running up the wall versus
+  // jumping off of it. Like if you're supposed to hold space bar, if you're
+  // supposed to tap it or whatever."
+  //
+  // The inputs turned out not to be the problem — the wall verbs are automatic
+  // and a head-on wall simply was not jumpable, which is fixed in player.js.
+  // What is left is that nothing ever TEACHES the verb. So: one wall, on the
+  // spawn plaza, with a rune-lit ledge at 5.0 m.
+  //
+  // 5.0 m is chosen against the mechanic, not by eye. A climb now runs for
+  // climbTime 0.9 s at climbSpeed 9.2 with the ramp in player.js, which
+  // integrates to about 5.6 m — so this ledge is reachable by a climb with
+  // margin, and NOT by a double jump (~2.5 m). There is exactly one way up,
+  // it is visible from the spawn point, and the rune says you may stand on it.
+  {
+    const WX = -11, WZ = 0
+    greatWall(L, WX, 0, WZ, {
+      height: 14, length: 16, thickness: 3, axis: 'z', detail: 2, seed: 0x7EAC4,
+    })
+    const ledge = pad('lesson', WX + 3.6, 5.0, WZ, 5, 9)
+    // Structural: the height is carried by the wall, not by an arc, so there is
+    // no distance for the band table to check — which is exactly what the
+    // `wallrun` mode is for, and it must say why.
+    A.link('plaza', 'lesson', 'wallrun',
+      { note: 'the teaching wall — a 5.0 m ledge, only reachable by running up the face' })
+    A.link('lesson', 'plaza', 'free', { note: 'step back off' })
+    void ledge
+  }
+
   // ============================================================ THE FLIGHT
   //
   // Twelve hero islands on a widening, rising spiral, spaced across the WHOLE

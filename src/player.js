@@ -130,6 +130,12 @@ const BASE_TUNING = {
   wallRunStick: 5.0,
   wallJumpOut: 7.0,
   wallJumpUp: 7.8,
+  // COYOTE TIME FOR WALLS, the exact counterpart of `coyoteTime` for floors.
+  // A climb or a wall-run that has just expired leaves the player next to a
+  // wall they can plainly see, and pressing Space there has to mean "kick off
+  // that wall" — not "spend the double jump". Same generosity principle as
+  // vaultMaxHeight: err toward "you made it".
+  wallCoyote: 0.28,
   wallRegrabCooldown: 0.22,
   // Wall-running detects walls by *probing* out to this distance rather than
   // waiting for the capsule to physically graze one. Requiring real contact
@@ -153,9 +159,15 @@ const BASE_TUNING = {
 
   // --- vertical wall-run (Dying Light / Forspoken) ----------------------
   climbSpeed: 9.2,
-  climbTime: 0.5,
+  // 0.9 s, not 0.5. Integrating the ramp below gives climbSpeed * t * 0.675,
+  // so this is 5.6 m of climb against the old 3.1 m. Ethan, playing: "wall
+  // climbing and jumping stuff is a little bit off... it's not super intuitive
+  // how you're running up the wall versus jumping off of it." Part of that was
+  // simply that a 3.1 m climb ends about a second before it feels finished —
+  // it reads as the move breaking rather than as the move ending.
+  climbTime: 0.9,
   climbMinSpeed: 5.5,
-  climbCooldown: 0.5,
+  climbCooldown: 0.35,
   // A wall you could simply step onto is a vault, not a climb. This must stay
   // above `vaultMaxHeight` (1.45) or the two systems fight over the same lip.
   //
@@ -311,6 +323,10 @@ export class Player {
     this.wallEntrySpeed = 0
     this.climbTimer = 0
     this.climbCooldown = 0
+    // The last wall we had contact with, and how long that memory is still
+    // good for. See `wallCoyote`.
+    this.wallCoyote = 0
+    this.lastWallNormal = new THREE.Vector3()
     this.dashTimer = 0
     this.dashCooldown = 0
     this.dashReady = true
@@ -471,6 +487,16 @@ export class Player {
     this.coyote = 0
     this.jumpBuffered = 0
     this.footDistance = 0
+    // The wall cooldowns die with the body too, for the same reason as the
+    // list above. `wallCooldown` is the regrab lockout set by a wall-jump, and
+    // it survived a respawn: die within 0.2 s of kicking off a wall and you
+    // reappeared at the checkpoint unable to touch a wall at all — for a fifth
+    // of a second, on the exact run where you were already having a bad time.
+    // Found by tools/wallprobe.mjs, which was measuring the wrong thing until
+    // it cleared this by hand between trials.
+    this.wallCooldown = 0
+    this.climbCooldown = 0
+    this.wallCoyote = 0
   }
 
   update(dt, input, yaw, pitch = 0) {
@@ -799,6 +825,15 @@ export class Player {
 
     this.dashCooldown = Math.max(0, this.dashCooldown - dt)
     this.climbCooldown = Math.max(0, this.climbCooldown - dt)
+    // Wall memory. Refreshed while any wall verb is live — a vertical climb or
+    // a lateral run — and decayed otherwise, so the jump gate below can still
+    // find a wall for a moment after the verb ends.
+    if (this.climbTimer > 0 || this.wallRunning) {
+      this.wallCoyote = TUNING.wallCoyote
+      this.lastWallNormal.copy(this.wallNormal)
+    } else {
+      this.wallCoyote = Math.max(0, this.wallCoyote - dt)
+    }
     this.dashTimer = Math.max(0, this.dashTimer - dt)
     if (this.climbTimer > 0) {
       this.climbTimer = Math.max(0, this.climbTimer - dt)
@@ -870,11 +905,27 @@ export class Player {
     // is almost always the move the player meant.
     if (this.wallCooldown <= 0) {
       let nx = 0, nz = 0, have = false
-      if (this.wallRunning) {
+      if (this.wallRunning || this.climbTimer > 0) {
+        // A CLIMB COUNTS. This is the bug behind "it's not intuitive how you're
+        // running up the wall versus jumping off of it": the fallback below is
+        // `_probeWall()`, the LATERAL probe, and `_tryClimb` says in as many
+        // words that the side probes "sweep past a head-on wall and never
+        // touch it". So the wall you had just run up was invisible to the jump,
+        // and Space silently spent your air jump instead of kicking off it.
         nx = this.wallNormal.x; nz = this.wallNormal.z; have = true
       } else {
         const hit = this._probeWall()
         if (hit.found) { nx = hit.nx; nz = hit.nz; have = true }
+        // Head-on walls are missed by the lateral probe even when nothing is
+        // climbing, so try the way we are actually steering before giving up.
+        if (!have) {
+          const ahead = this._probeDir(this._forward.x, this._forward.z, 0)
+          if (ahead.found) { nx = ahead.nx; nz = ahead.nz; have = true }
+        }
+        // And failing that, a wall we were on a fraction of a second ago.
+        if (!have && this.wallCoyote > 0) {
+          nx = this.lastWallNormal.x; nz = this.lastWallNormal.z; have = true
+        }
       }
 
       if (have) {
@@ -883,6 +934,11 @@ export class Player {
         this.velocity.z += nz * T.wallJumpOut
         this.velocity.y = Math.max(this.velocity.y, 0) + T.wallJumpUp
         this.wallCooldown = T.wallRegrabCooldown
+        // One wall, one verb. Kicking off ends a climb as well as a run, or
+        // the climb keeps driving the player back into the wall they just
+        // left and the jump reads as having done nothing.
+        this.climbTimer = 0
+        this.wallCoyote = 0
         // Each wall-jump earns back part of the wall budget, so a clean chain
         // across alternating walls can keep going.
         this.wallTimer = Math.min(T.wallRunTime, this.wallTimer + 0.6)
