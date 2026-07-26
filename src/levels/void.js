@@ -432,7 +432,20 @@ export function buildVoidCourse(collision) {
   //
   // They are also the LIGHT in this theme (§1), so placement is a lighting
   // decision, not a dressing one — every landing gets one within a few metres.
-  const CRYSTAL = [colors.rune, colors.sigil, colors.cool]
+  // RED IS PUNCTUATION. art-direction-void.md §3: red "is the rarest and most
+  // intense colour and it must stay rare. If red is everywhere, the image
+  // loses its focal points."
+  //
+  // This was `[rune, sigil, cool]` cycled per island, which made a THIRD of
+  // every hero cluster sigil-red — including the biggest crystal on the
+  // course, at the spawn vantage. The crystal lane flagged it while fixing
+  // their saturation. Violet is the body colour of this world, blue is the
+  // depth cue, and red appears about one island in nine.
+  const CRYSTAL = [
+    colors.rune, colors.rune, colors.cool,
+    colors.rune, colors.cool, colors.rune,
+    colors.cool, colors.rune, colors.sigil,
+  ]
   let ci = 0
   for (const n of nodes.values()) {
     const a0 = hash(n.id) / 0xffffffff * Math.PI * 2
