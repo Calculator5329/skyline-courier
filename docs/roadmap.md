@@ -288,14 +288,31 @@ Verbatim, so nothing gets softened in paraphrase.
 **Praised, do not change:** the compass top-right, the km/h readout bottom-left,
 the new timer treatment. *"the rest looks really great."*
 
-- [ ] **"Invisible glass"** — CONFIRMED and diagnosed. `SAMPLE_ALPHA_TO_COVERAGE`
-      is not enabled in GL state (measured live: `sampleBuffers 1`, `samples 4`,
-      `isEnabled(SAMPLE_ALPHA_TO_COVERAGE) === false`), but `src/foliage.js`
-      swapped its hard cutout for `smoothstep(alphaTest, …)` and relies on A2C
-      to resolve it. Fractional alpha therefore lands in an opaque pass with
-      blending off, so every leaf card draws its full quad as a hazy pane over
-      the geometry behind it. Needs a guaranteed `discard` path that does not
-      depend on pipeline GL state.
+- [ ] **"Invisible glass"** — STILL OPEN. Soft translucent panels overlay the
+      brass wall and haze the paving; clearly visible in `closeup.png`.
+
+      **My first diagnosis was WRONG and is retracted.** I claimed A2C was
+      disabled and that foliage was drawing full quads. Both were false:
+      - `isEnabled(SAMPLE_ALPHA_TO_COVERAGE)` reads false only when sampled
+        *outside* a draw call — `WebGLState.setMaterial` sets it per-draw.
+        Hooked at the actual foliage draws it is `true`, with 4 samples.
+      - Hiding foliage entirely leaves the panels **pixel-identical**. Foliage
+        contributes 0.63% of the frame, all crisp silhouettes, no soft regions.
+
+      **Ruled out by A/B (hide object, diff pixels):** foliage, goal-beacon,
+      motes, grapple line/ring, wind streaks, lanterns. Hiding *every*
+      non-surface effect changes 3.78% of pixels — noise. The artifact is in
+      the **surface rendering itself**, not in any object.
+
+      Also ruled out: the `L.solid(..., {hidden:true})` path double-drawing —
+      `level.js` correctly skips `_emit` for hidden colliders.
+
+      **Remaining suspects, all in `src/render/` or `src/materials*`:** most
+      likely a depth disagreement between the MRT gbuffer prepass and the
+      beauty pass, which would hand aerial perspective a far depth for a near
+      pixel and wash it out in exactly these flat, straight-edged regions.
+      Check that `mesh()`-emitted geometry is present in the prepass with the
+      same transform as the beauty pass.
 - [ ] **Foliage reads badly in places.** *"the foliage is a little weird in some
       places."* Judge from captures once the glass is gone.
 - [ ] **Stone texture is unresolved.** *"I don't even know if it's an
