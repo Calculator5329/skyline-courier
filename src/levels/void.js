@@ -359,22 +359,35 @@ export function buildVoidCourse(collision) {
     const half = n.w / 2
     // Hero cluster just off the rim, never ON the landing: a crystal you can
     // trip over is a movement bug, and §6 keeps the standing surface clean.
-    crystals.add('hero', n.x + Math.cos(a0) * (half + 2.6), n.y - 1.2,
-      n.z + Math.sin(a0) * (half + 2.6), {
-        color: CRYSTAL[ci % CRYSTAL.length], detail: 2, size: 0.34 + (hash(n.id) % 7) * 0.05,
+    // ROOTED IN THE ROCK, not floating beside it. Ethan: "many of the red and
+    // blue fern-like things you added are floating."
+    //
+    // That was mine, and it was an overcorrection: I had pushed them OUTSIDE
+    // the rim to keep the landing surface clean, which put them in open air
+    // with nothing to grow from. `runeSlab`'s underside tiers are boxes of
+    // half-extent 0.45 * size — that is 0.9 * half — so anything past ~0.9
+    // half-widths from the centre has no mass behind it. Everything below is
+    // inside that envelope and reads as erupting from the stone.
+    crystals.add('hero', n.x + Math.cos(a0) * half * 0.84, n.y - 1.15,
+      n.z + Math.sin(a0) * half * 0.84, {
+        color: CRYSTAL[ci % CRYSTAL.length], detail: 2, size: 0.72 + (hash(n.id) % 7) * 0.07,
       })
     // Scatter under the lip, hanging into the void the way §4.2 describes the
     // undersides.
-    for (let k = 0; k < 5; k++) {
-      const a1 = a0 + 1.35 + k * 1.31
-      // OUTSIDE the rim and well under the lip. A shard that pokes through the
-      // landing surface is a trip hazard the collider does not know about, and
-      // §6 keeps the standing surface clean so the rune stays the only thing
-      // saying "stand here".
-      crystals.add('scatter', n.x + Math.cos(a1) * half * 1.02, n.y - 2.6,
-        n.z + Math.sin(a1) * half * 1.02, {
+    for (let k = 0; k < 4; k++) {
+      const a1 = a0 + 1.35 + k * 1.63
+      // Under the lip and inside the tier envelope. Still clear of the landing
+      // surface — §6 keeps that clean so the rune stays the only thing saying
+      // "stand here" — but now with rock behind it.
+      // Into the FASCIA, which is a solid box (0.90 of the slab size, spanning
+      // about y-0.85 to y-1.11) rather than into the tier blobs below it. The
+      // tiers are lumpy and only fill part of their bounding box, so a shard
+      // sized against the box still had its root in open air on the concave
+      // parts — which is what was reading as floating ferns.
+      crystals.add('scatter', n.x + Math.cos(a1) * half * 0.70, n.y - 1.02,
+        n.z + Math.sin(a1) * half * 0.70, {
           color: CRYSTAL[(ci + k) % CRYSTAL.length], detail: k < 2 ? 2 : 1,
-          size: 0.5 + k * 0.09,
+          size: 0.70 + k * 0.10,
         })
     }
     ci++
