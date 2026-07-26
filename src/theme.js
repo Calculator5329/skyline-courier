@@ -208,13 +208,32 @@ const voidTheme = {
      *                         does not spend an hour on a dial that is not
      *                         connected — which is what happened here.
      */
-    hemiSky: 0x7d57ba, hemiGround: 0x241738, hemiIntensity: 1.10,
-    keyColor: 0xc79bff, keyIntensity: 1.85,
+    // FLOOD DOWN, so unlit rock is actually near-black.
+    //
+    // Ethan, on the frame that got everything else right: "still too purple /
+    // not black with blue red and purple highlights". He is describing the
+    // difference between a world LIT violet and a world that is BLACK with
+    // violet lights in it — §1's "lit BY OBJECTS and shaped by darkness".
+    //
+    // At hemi 1.10 / key 1.85 every surface in the level received enough
+    // ambient violet to sit in the mid-tones whether or not anything was near
+    // it, so nothing could read as unlit and therefore nothing could read as
+    // HIGHLIT either. The emitters were bright but they had nothing dark to be
+    // bright against.
+    //
+    // These are cut roughly to a third. The course now carries 211 anchor orbs,
+    // red sigil rings, beams, veins and crystals — there is plenty of light in
+    // the level; it simply needs somewhere dark to land.
+    hemiSky: 0x6b46a8, hemiGround: 0x140c22, hemiIntensity: 0.34,
+    keyColor: 0xb07dff, keyIntensity: 0.62,
     // Cold magenta rim from the opposite side, so silhouettes separate from
     // the fog instead of dissolving into it. art-direction-void.md §5:
     // "dark mass reads only when backed by something brighter".
-    fillColor: 0xff3d6e, fillIntensity: 1.20, fillPos: [-40, 12, 36],
-    bounceColor: 0x6f52d8, bounceIntensity: 0.55,
+    // The magenta rim survives at strength — §5's "silhouette against glow" is
+    // what keeps a dark ruin from dissolving into dark fog, and with the flood
+    // down it is doing more work, not less.
+    fillColor: 0xff3d6e, fillIntensity: 0.72, fillPos: [-40, 12, 36],
+    bounceColor: 0x6f52d8, bounceIntensity: 0.16,
   },
 
   sky: {
