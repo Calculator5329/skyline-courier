@@ -47,9 +47,20 @@ is listed here rather than in a reviewer's head.
       the motes. A real answer is a cheap per-fissure point light or an
       irradiance-volume term, and both are a lighting-budget decision (§7.3)
       rather than a surface one.
+- [x] 2026-07-26 — the far band is BAKED. It was 306 extruded prisms carrying
+      306 apparent ruins; it is now 988 camera-facing cards baked from the same
+      generated geometry into one 2016 px atlas at boot, carrying ~8 400
+      apparent ruins for 1 976 triangles — 27x the objects for 27% of the
+      triangles, in the same single draw call. Parallax survives because every
+      card sits at its real world position; elevation is baked as five slices
+      and cross-faded; the fog is applied once, at runtime, because the atlas
+      stores shading FACTORS rather than pixels. Measured: the layer costs
+      0.11-0.26 ms/f against 0.00-0.08 for the prisms it replaced and 0.26-0.39
+      for the same density built as geometry. See the changelog.
 - [ ] The far bands carry no light of their own. `src/fx/voidbackdrop.js` puts
       three distance bands behind the course, but every mass in them is unlit
-      rock seen through haze. The reference has pinpricks out there — distant
+      rock seen through haze. (Still open for the near and mid bands and for
+      the baked cards, which have a spare atlas channel free for it.) The reference has pinpricks out there — distant
       sigils and crystal glints — and they are most of what sells the scale.
       Wants an emissive speckle channel on the backdrop shader, kept rare
       enough that §3's "red must stay rare" still holds at a kilometre.

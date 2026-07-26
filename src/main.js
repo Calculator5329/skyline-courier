@@ -559,6 +559,12 @@ function saveBest(t) {
 // and for driving the game from a browser console during development.
 window.__game = {
   player, rig, run, level, camera, scene, renderer, input, keys, respawn, resetRun,
+  // The far-band impostor layer's own accounting — instances, cards, the
+  // apparent ruins those cards carry, the measured clearance from the play
+  // volume, and how long the atlas bake took. All of it is invisible in a
+  // screenshot, and the bake time in particular is a first-frame cost that
+  // nothing else in the harness can see.
+  backdrop: world.backdrop,
   // Exposed for the same reason the pipeline is: the continuous audio layer
   // (wind, gearbox, wall scrape) has no visible output at all, so without a
   // handle on it the only way to check it is to listen — which a headless

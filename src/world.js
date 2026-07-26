@@ -460,7 +460,10 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
   // sense the dome and the aerial perspective are. Building it in the level
   // would put unreachable geometry in the file whose entire job is reachable
   // geometry. Themes that do not ask for it pay nothing.
-  const backdrop = theme.backdrop ? new VoidBackdrop(scene, theme) : null
+  // The renderer is handed over because the far band is BAKED: it renders its
+  // ruin clusters into an atlas once, here at boot, and draws them as
+  // camera-facing cards afterwards. See `IMPOSTORS` in that file.
+  const backdrop = theme.backdrop ? new VoidBackdrop(scene, theme, renderer) : null
 
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
@@ -476,7 +479,9 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
     /** Instances, triangles and measured clearance, for the harness to print. */
     backdrop: backdrop
       ? { instances: backdrop.instances, triangles: backdrop.triangles,
-          clearance: backdrop.clearance }
+          clearance: backdrop.clearance, cards: backdrop.cards,
+          cardPieces: backdrop.cardPieces, bakeMs: backdrop.bakeMs,
+          bakeCpuMs: backdrop.bakeCpuMs, bakeTriangles: backdrop.bakeTriangles }
       : null,
     update(time, playerPos) {
       moteMat.uniforms.uTime.value = time
