@@ -840,15 +840,42 @@ export class Player {
   /**
    * Find the best brass anchor the cuff could latch onto right now.
    *
-   * Scored by how close the anchor is to the centre of the view rather than
-   * by raw distance: when two anchors are both valid the player almost always
-   * means the one they are looking straight at, not the nearer one off to the
-   * side. Runs every frame so the reticle can light up before you commit.
+   * Primarily scored by how close the anchor is to the centre of the view
+   * rather than by raw distance: when two anchors are both valid the player
+   * almost always means the one they are looking straight at, not the nearer
+   * one off to the side. Runs every frame so the reticle can light up before
+   * you commit.
+   *
+   * ANGULAR TIE-BREAK TOWARD THE NEARER ANCHOR. Pure "most on-axis wins" is the
+   * right rule until the anchors get dense — and the void course now packs 211
+   * of them, so at speed several sit inside the ~15° aim cone at once. There,
+   * a far anchor that is a fraction of a degree more centred would out-score a
+   * near one the player is effectively staring straight at, and the cuff would
+   * haul them the wrong way across the gap: exactly the "grabs the wrong orb at
+   * speed" failure. So anchors whose off-axis ANGLES are within `AIM_TIE` of
+   * each other count as equally aimed, and among those the closer one wins.
+   *
+   * The comparison is in ANGLE, deliberately, not in the raw `aim` cosine: cos
+   * compresses hard near 1 (0.999 and 0.990 are 2.6° and 8.1° — a 5.5° spread
+   * from a 0.009 gap), so a cosine tie window would either be uselessly narrow
+   * dead ahead or absurdly wide at the cone edge. An angular window is uniform,
+   * which is the whole point. A strictly-more-centred anchor (angle better by
+   * more than the window) still always wins — you can always override the
+   * tie-break by simply looking more squarely at what you want.
+   *
+   * Touches no velocity and runs identically in both modes, so it cannot scrub
+   * speed (rule 3) or change FUN/NORMAL feel; it only decides which anchor the
+   * reticle names.
    */
   _findAnchor() {
     const T = TUNING
+    // Anchors within this angle of each other (radians, ~3°) are "equally
+    // aimed"; the nearer breaks the tie. Comfortably below the aim cone
+    // half-angle (~15°) so it only ever arbitrates genuine near-ties.
+    const AIM_TIE = 0.052
     let best = null
-    let bestScore = T.grappleAim
+    let bestAngle = 0
+    let bestDist = 0
 
     for (let i = 0; i < this.anchors.length; i++) {
       const a = this.anchors[i]
@@ -860,7 +887,19 @@ export class Player {
       const aim = this._toAnchor.x * this._look.x +
                   this._toAnchor.y * this._look.y +
                   this._toAnchor.z * this._look.z
-      if (aim > bestScore) { bestScore = aim; best = a }
+      if (aim <= T.grappleAim) continue
+      // acos guards against a hair over 1 from rounding, which would be NaN.
+      const angle = Math.acos(aim < 1 ? aim : 1)
+
+      // Pairwise against the current pick: clearly more centred wins outright;
+      // within the tie window, the closer anchor wins.
+      if (!best ||
+          angle < bestAngle - AIM_TIE ||
+          (angle <= bestAngle + AIM_TIE && dist < bestDist)) {
+        best = a
+        bestAngle = angle
+        bestDist = dist
+      }
     }
     return best
   }
