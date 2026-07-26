@@ -283,6 +283,125 @@ const voidTheme = {
     horizon: 0x241238,
     deck: 0x0a0718,
     sun: 0x8b5cf6,
+
+    /**
+     * THE PAINTED DOME — the one image file the game loads for this theme.
+     *
+     * CLAUDE.md rule 1's second exception, approved by Ethan 2026-07-26, and
+     * the reason it exists is a structural one rather than a convenience. The
+     * background architecture used to be baked impostors, and impostors are
+     * baked from `voidbackdrop.js`'s GENERATED geometry — extruded n-gon
+     * prisms. However many of them you draw, a prism is a prism: Ethan looking
+     * at that build said *"honestly the random shapes in the background is very
+     * weak hoping the image method will improve it."* He is right. No count of
+     * angular blobs becomes a cathedral; a painting of a cathedral already is
+     * one.
+     *
+     * WHAT IT IS AND IS NOT. It is NOT a second opinion about the sky. The
+     * background's COLOUR and its whole vertical value ramp still come from
+     * `scVoidGradient` in render/skygrad.js — the single evaluation the aerial
+     * perspective and `scene.fog` also read. The image contributes only the
+     * HIGH-FREQUENCY half: a per-direction multiplier that darkens the gradient
+     * where a spire stands and leaves it alone where the void is empty. That is
+     * the same division of labour the skyline's cloud deck has with the same
+     * gradient, and it is what keeps distance from disagreeing with background
+     * (see the header of render/skygrad.js for the bug that rule exists to
+     * kill).
+     *
+     * Because it is a multiplier with a ceiling at `hi` and `hi` is barely
+     * above 1, the dome can never render BRIGHTER than the void behind it, and
+     * therefore can never re-create the inversion a previous session shipped —
+     * background brighter than the mass, every rock a black cutout. Value order
+     * is enforced by the arithmetic, not by taste.
+     */
+    dome: {
+      /** Under `public/`, resolved against `import.meta.env.BASE_URL`. */
+      url: 'sky/void-dome.png',
+      /**
+       * Horizontal repeats around the full 360 degrees.
+       *
+       * 4, judged by eye against the reference. The painting's lead cathedral
+       * is about a third of its width, so at 4 repeats (90 degrees per tile) it
+       * subtends ~30 degrees — which is what a hero mass subtends in
+       * `theme2-void.png`. At 2 the architecture is colossal and reads as a
+       * wall a hundred metres away; at 8 the spires are thumbnail-sized and the
+       * whole dome reads as patterned wallpaper. The asset is authored to tile
+       * horizontally (measured seam: mean left/right edge delta 3.9 of 255).
+       */
+      repeat: 4,
+      /**
+       * Elevation, in degrees, of the image's TOP and BOTTOM edge.
+       *
+       * The tile is square and spans 90 degrees of azimuth, so an undistorted
+       * band would be 90 degrees tall. This is 120, a 1.33x vertical stretch,
+       * and the stretch is bought deliberately: `fade` below needs 30 degrees
+       * at each end to hide the clamp, so a 90 degree band would have almost no
+       * un-faded middle left. What the stretch costs is that gothic spires get
+       * taller and narrower, which is the direction to be wrong in.
+       *
+       * Centred slightly BELOW eye level (+58/-62) because §5's camera looks
+       * up: the painting's own dense band then lands where the player reads it.
+       */
+      elTop: 90,
+      elBottom: -90,
+      /**
+       * Degrees over which the modulation fades to nothing past each edge.
+       *
+       * This is the entire defence against §3's forbidden horizon LINE. Outside
+       * the band the image is clamped, so its edge row would repeat forever and
+       * print a hard ruled edge across the frame; instead the effect ramps to
+       * zero over 30 degrees and the painting dissolves into plain gradient.
+       *
+       * 30 and not the 22 this started at, and the correction was measured
+       * rather than guessed: at 22 the top edge of the band showed as a clean
+       * arc across the upper right of `midclimb`. A third of the visible dome
+       * is not an edge whatever is on either side of it.
+       */
+      fade: 9,
+      /**
+       * The two ends of the painted range, as scalars on the gradient's own
+       * anchors — see `scDomeSky` in src/world.js, which is where they are
+       * spent. `lo` scales the LOCAL gradient value and makes the silhouettes;
+       * `hi` scales the HAZE anchor and makes the open void between them.
+       *
+       * `hi` at 0.86 is the safety bound, not a taste dial. It is strictly
+       * under 1, so the brightest pixel the painting can produce is dimmer than
+       * the brightest pixel the background reached before the image existed —
+       * the value inversion is unreachable by arithmetic rather than by care.
+       *
+       * `lo` at 0.22 is where the read comes from. Architecture at infinity is
+       * made by removing light, and this is also what finally puts §2's `clip
+       * lo` into a frame that measured 0.00-0.01% against a table asking for
+       * 2-8%.
+       */
+      lo: 0.30,
+      hi: 0.95,
+      /**
+       * THE LEVELS WINDOW — the two numbers that decide whether the painting is
+       * legible at all, and both are measured off the file rather than picked.
+       *
+       * `magick void-dome.png -format %[fx:mean],%[fx:standard_deviation]` says
+       * 0.091 and 0.042. So the entire image — void, haze, cathedral, spire —
+       * lives between roughly 0.03 and 0.20 of the 0..1 range, and everything
+       * above that is a handful of magenta glints. A tone curve that treats the
+       * file as though it used its whole range spreads a sixth of the range
+       * across a fifth of the output, which is what the first build did: the
+       * dome rendered as a faintly mottled dark field, technically present and
+       * carrying no architecture. These two expand the painting's own range
+       * instead.
+       *
+       * Raising `white` flattens the dome toward silhouette-only; lowering it
+       * blows the haze out and starts to read as a lit sky, which §3 forbids.
+       */
+      black: 0.03,
+      white: 0.20,
+      /**
+       * Gamma applied AFTER the window above, so it shapes the midtones rather
+       * than rescuing the toe. Above 1 pushes the dome toward its silhouette
+       * end, which is the direction that keeps a background background.
+       */
+      gamma: 0.95,
+    },
   },
   skyRadius: 900,
 

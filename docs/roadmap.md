@@ -27,7 +27,16 @@ is listed here rather than in a reviewer's head.
       as white objects. `plunge` p50 52 -> 28.4, `summit` lum 79 -> 60.9, and
       all four shots now sit inside §2's `lum` and `p50` bands. See the
       changelog.
-- [ ] `summit` still measures lum 60.9 against §2's 28-55 and 3.2% clipped high
+- [x] 2026-07-26 — the void's far distance is a painted dome, not prisms.
+      Ethan on the impostor build: "honestly the random shapes in the
+      background is very weak hoping the image method will improve it."
+      `public/sky/void-dome.png` is now the sky dome (tiled 4x, void theme
+      only), composed as a modulation of `scVoidGradient` so the sky stays one
+      evaluation, with a ceiling strictly under the background's own so the
+      value order cannot invert. The baked impostor far band is deleted — ~650
+      lines, one draw call, ~2 000 triangles and a 16 MB atlas out of every
+      void frame. See the changelog.
+- [ ] `summit` still measures lum 61.3 against §2's 28-55 and 3.2% clipped high
       against 0.3-2.5%. Both come from the shot itself rather than the theme:
       the 26 m finish plaza fills 60% of the frame at 5 m and its rune inlay is
       an emissive at that range. §5 says "look up, not down"; the fix is either
@@ -58,12 +67,13 @@ is listed here rather than in a reviewer's head.
       0.11-0.26 ms/f against 0.00-0.08 for the prisms it replaced and 0.26-0.39
       for the same density built as geometry. See the changelog.
 - [ ] The far bands carry no light of their own. `src/fx/voidbackdrop.js` puts
-      three distance bands behind the course, but every mass in them is unlit
-      rock seen through haze. (Still open for the near and mid bands and for
-      the baked cards, which have a spare atlas channel free for it.) The reference has pinpricks out there — distant
+      two distance bands behind the course, but every mass in them is unlit
+      rock seen through haze. The reference has pinpricks out there — distant
       sigils and crystal glints — and they are most of what sells the scale.
       Wants an emissive speckle channel on the backdrop shader, kept rare
-      enough that §3's "red must stay rare" still holds at a kilometre.
+      enough that §3's "red must stay rare" still holds at a kilometre. (The
+      painted dome already carries a few faint magenta glints of its own; this
+      item is now about the two GEOMETRY bands only.)
 - [ ] Emissives in the emissive-poor shots. `tower`, `deckstrip` and
       `edgefeet` miss §2's `p99 > 215` and `clip hi 0.3-2.5%` for one reason:
       there is nothing bright in frame. This is §4.1-4.3 work — sigil rings on

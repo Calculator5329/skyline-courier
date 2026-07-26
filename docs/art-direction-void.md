@@ -125,6 +125,13 @@ Acceptance numbers for `tools/analyze.mjs`, per shot, on the void course:
 A frame that passes `lum` but fails `spread` is the murk failure. **Both must
 pass.** These belong in the gate, not in a reviewer's opinion.
 
+**WHERE THIS TABLE AND THE REFERENCE FILE DISAGREE, THE FILE WINS.** The `clip
+lo` row asks for 2-8%; `theme2-void.png` itself measures 0.21%. The table is
+commentary and the image is the target (see the heading at the top of this
+document). Read the row as "true black must be PRESENT, not absent" rather than
+as a quota — a frame driven to 5% crushed black to satisfy an arithmetic row
+would be darker than the thing it is imitating.
+
 ---
 
 ## 3. Palette
@@ -239,6 +246,22 @@ Rules that follow:
 - **Depth in three bands.** Near mass nearly black and sharply lit; mid ruins
   in violet fog; far structures washed almost to the fog colour. If everything
   sits in one band the space collapses.
+
+  **How the third band is built changed on 2026-07-26, and the rule did not.**
+  It used to be geometry: 306 extruded prisms, then ~720 impostor cards baked
+  from those same prisms. Ethan, on that build: *"honestly the random shapes in
+  the background is very weak hoping the image method will improve it."* The
+  diagnosis is structural — every silhouette in that layer came from one
+  tapered n-gon prism, so more of them only ever bought more angular blobs. The
+  third band is now `public/sky/void-dome.png`, a painted panorama tiled four
+  times around the dome (CLAUDE.md rule 1's sky-dome exception), and the cards
+  are deleted. Measured side by side, they drew a bed of pale faceted gravel
+  ACROSS the painted architecture rather than adding to it.
+
+  What the painting costs is parallax: it does not shift as the player climbs.
+  The near band (470-600 m) and the mid band (690-850 m) are still real
+  geometry and still move, so the three rungs of VALUE survive intact — what
+  changed is that the furthest rung is a picture instead of a proxy.
 
 ---
 
