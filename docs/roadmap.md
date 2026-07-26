@@ -27,6 +27,16 @@ is listed here rather than in a reviewer's head.
       as white objects. `plunge` p50 52 -> 28.4, `summit` lum 79 -> 60.9, and
       all four shots now sit inside §2's `lum` and `p50` bands. See the
       changelog.
+- [x] 2026-07-26 — the slab tops carry Ethan's painted face
+      (`public/tex/void-slab-top.png`) instead of the procedural rune inlay.
+      `src/materials/slabdecal.js` states the mapping rule (square crop out of
+      the 1536x1024 file, stretched to the top face, gated at 1.3:1 aspect,
+      capped at 9 m so a 26 m deck gets a medallion rather than a smear) and
+      derives the emissive mask for the sigil from the image itself. The
+      procedural path stays live behind the gate. Draws 95 -> 77 on `ascent`,
+      tris 2.936M -> 2.913M, and `summit` came back INTO §2's band as a side
+      effect — see the item below. Third exception to CLAUDE.md rule 1, argued
+      in the module header. See the changelog.
 - [ ] **The far-band impostor cards draw over the level.** Ethan: "some of the
       terrain is like in the wall or making it invisible" — irregular near-black
       masses across the central great wall's face. ROOT CAUSE FOUND AND PROVEN,
@@ -62,7 +72,15 @@ is listed here rather than in a reviewer's head.
       probe's `no-depth-squash` mode and
       `docs/captures/blotch/ascent-no_depth_squash.png`, which is the same frame
       with every card still drawn and the wall clean.
-- [ ] `summit` still measures lum 60.9 against §2's 28-55 and 3.2% clipped high
+- [x] 2026-07-26 — `summit` is back inside §2's bands: lum 60.9 -> 46.5 (band
+      28-55) and clipped high 3.2% -> 0.10%. The cause was what this item
+      already suspected — the 26 m finish plaza filling 60% of the frame with
+      one enormous rune inlay on it. The slab decal fixed it without touching
+      exposure: the plaza's inlay is now a 9 m medallion at the image's own
+      value range rather than a plaza-sized emissive. Clipped high is now
+      slightly UNDER the 0.3% floor, which is the remaining gap and is a
+      question for the shot rather than the theme.
+- [ ] `summit` measured lum 60.9 against §2's 28-55 and 3.2% clipped high
       against 0.3-2.5%. Both come from the shot itself rather than the theme:
       the 26 m finish plaza fills 60% of the frame at 5 m and its rune inlay is
       an emissive at that range. §5 says "look up, not down"; the fix is either

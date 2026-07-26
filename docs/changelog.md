@@ -1,5 +1,125 @@
 # Changelog
 
+## 2026-07-26 — the landing surface is a carving now, and the wall's black holes have a name
+
+### JOB 1 — Ethan's painted slab face, on the platform tops
+
+`public/tex/void-slab-top.png` — carved stone, gold border courses, a glowing
+violet sigil — now faces the void's landing surfaces, in place of the
+procedurally generated rune inlay. `src/materials/slabdecal.js` is new and
+carries the whole argument; `runeSlab` in `src/voidkit.js` chooses between the
+two paths.
+
+**The mapping rule, because the file is 1536 x 1024 and a platform is not.**
+Measured, not assumed: the artwork is a **1024 x 1024 square centred
+horizontally**, with flat generator padding either side (column luminance
+std-dev sits at 4-5 outside x 255..1277 and jumps to 16-17 inside it). So the
+rule is: crop that square and clamp it — never tile; stretch it across the
+slab's whole top face, u along +X and v along +Z; **gate on aspect at 1.3:1**,
+because a border FRAME stretches honestly and a sigil does not; and **cap the
+world size at 9 m**, past which it becomes a centred medallion rather than a
+facing. The cap was measured on the 26 m finish plaza, where a full stretch is
+39 texels per metre against 170 on a normal 6 m pad and came back as a blurred
+smear with its border out of frame.
+
+**The decal supersedes the two raised border courses** on any slab it fully
+faces. Both the reference and Ethan's file show the frame INSCRIBED — cut into
+a flat face, gold in the groove — not as a proud kerb, and a 22 cm kerb
+standing on top of a painted frame would leave the frame at the bottom of a
+well. Rule 2 holds by symmetry: those bars were `S()`, so the collider and the
+surface leave in the same statement. On a deck too big for the image the
+courses stay, because a bare rectangle with a carving in the middle has no edge
+at all.
+
+**The sigil is lit, not printed.** §6 makes the glyph a promise rather than
+decoration, and a painted violet pixel is just a less black pixel at 40 m. The
+emissive mask is derived from the image at load by `b - max(r, g)` — not a hue
+test, because the stone is itself violet-tinted and hue selects the whole slab.
+
+**The white blob, and why the two obvious dials were both wrong.** The first
+render came back with the sigil as a featureless white cloud far larger than
+the glyph. The obvious reads are "emissive too hot" and "mask too broad".
+Neither was it: at `emissiveIntensity: 0` the albedo alone renders the glyph
+cleanly with all its structure, and the mask — dumped out of the running page
+and looked at — traces the line work exactly. It was **bloom**. The sigil's
+albedo is near-white at its core (247, 233, 243) and already sits just under
+the 1.05 threshold once the level's light is on it, so any emissive at all
+pushes the bright region over and bloom spreads it. The fix is the one that is
+also physically true: the inlay **gives its albedo up** where it glows
+(`GLOW.albedoTradeoff`), so emissive replaces reflected light instead of adding
+to it, and it blooms at the LINES instead of across the halo.
+
+**The procedural path is still live**, and that is load-bearing rather than
+polite: it runs for every slab past the aspect gate, for `detail: 0`, for
+`rune: false`, and — via a canvas stand-in painted before the fetch — for a
+failed or slow load, so §6's promise cannot be broken by a network. The level
+still builds synchronously and `assertRunesStandable` still proves every
+promise against the real collision world.
+
+Measured, interleaved against the same build without it (the harness's `ms/f`
+is noisy on a loaded box, so single runs were not trusted):
+
+| | before | after |
+|---|---|---|
+| `ascent` draws | 95 | **77** |
+| `ascent` triangles | 2 936 311 | **2 913 071** |
+| `ascent` lum / clip-hi | 37.5 / 0.31% | 37.5 / 0.31% |
+| `summit` lum | 60.9 | **46.5** (§2 band is 28-55) |
+| `summit` clip-hi | 3.17% | **0.10%** |
+| void floor coverage | 9.00 m2 | 9.00 m2 |
+| skyline `closeup` | 111.0 / 0.807 | 111.0 / 0.807 |
+
+`summit` coming back inside §2's band closes an open roadmap item as a side
+effect, and for the reason that item already suspected: the plaza's inlay was
+a plaza-sized emissive.
+
+**Third exception to CLAUDE.md rule 1**, recorded there. A flat image on a flat
+face has none of the properties that stalled the predecessor — no mesh to clean
+up, no rigging, no silhouette to reconcile against a collider. `runeSlab`
+declares the collider exactly as before; the image faces what was already
+there.
+
+### JOB 2 — the black blotches on the great wall
+
+Ethan: "some of the terrain is like in the wall or making it invisible."
+**Root cause found and proven, and the fix is filed rather than applied** —
+it is one line in `src/fx/voidbackdrop.js`, which another lane holds.
+
+The far-band impostor cards are drawn 900 m away and win the depth test against
+a wall 30 m away. `VERT_CARD` squashes a card's clip depth so cards past the
+1200 m far plane fade instead of being cut, branching on `ndc > 0.99`. That
+threshold assumes 0.99 means "nearly at the far plane"; with the game camera's
+**near of 0.1** it means **19.7 m**. The branch therefore fires for every card
+and compresses the whole 20 m-to-infinity range into [0.99, 0.99998]. Nothing
+else in the scene is remapped, so the two depth scales stop agreeing: a card at
+900 m lands at ndc 0.9937, which un-remapped geometry does not reach until
+~31 m. Everything in the level past ~31 m loses to the far band. The remap is
+monotonic AMONG CARDS, which is what its comment claims, and is not the
+property that was needed.
+
+`tools/blotch-probe.mjs` is new: it reproduces, isolates and FAILS on it,
+measuring 1.75% of the `ascent` frame covered. Its `no-depth-squash` mode is
+the discriminating test — the same frame with every card still visible and only
+the remap neutralised, which is what hiding the layer cannot tell you.
+
+The metric had to be found too. `analyze.mjs`'s `clipped.lowPct` moves 0.00,
+because a blotch is dark against near-black rock rather than crushed to zero;
+mean luminance moves but is confounded by auto-exposure. A per-pixel diff of
+two frames from the same build on the same pose is the artifact measured
+directly.
+
+Five things were ruled out and are recorded in the probe's header so nobody
+re-walks them: geometry intersecting the wall, z-fighting, the contact-shadow
+prepass (very plausible — the cards are `transparent: false` on purpose and so
+are NOT excluded by `_visitObject` — and measured false), `gl.readPixels` on
+the default framebuffer, and ray/AABB picking against merged surface batches.
+
+**Also corrected: the 90.50 m2 coverage figure is not a regression.** It is the
+long-standing SKYLINE course baseline, identical at every commit back to
+`afdf884`, and `ship-gate.sh` already ratchets it at 159. The void course
+measures 9.00 m2 (`coverage.mjs --page '?theme=void'`). The two numbers are
+different scenes, not a before and after.
+
 ## 2026-07-26 — the far band is baked, so it can afford to be crowded
 
 Ethan's standing note on the void is that the build has "less depth and detail

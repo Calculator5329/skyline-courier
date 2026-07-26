@@ -42,6 +42,22 @@ to art is verified by a screenshot from the actual gameplay camera.
    NOT permission to reopen the art-asset pipeline — a dome is a backdrop, and
    anything the player can approach, occlude, or land on is still generated.
 
+   **The third exception is a painted decal on a flat play surface** —
+   currently exactly one, `public/tex/void-slab-top.png`, which Ethan supplied
+   for the top face of the void's platforms. See `src/materials/slabdecal.js`
+   for the mapping rule and the full argument; the short version is that a flat
+   image on a flat face has none of the properties that stalled the
+   predecessor. There is no mesh to clean up, no rigging, and no silhouette to
+   reconcile against a collider — `runeSlab` declares the collider exactly as it
+   did before and the image is painted onto the face that collider already had.
+   Authored once, judged once.
+
+   The limits are the point: it faces geometry that is ALREADY THERE, it never
+   changes what is solid, and the procedural path it replaces stays live as the
+   fallback (aspect gate, `detail: 0`, and a failed load all keep working). This
+   is NOT permission to load meshes, and "a decal would be easier" is not a
+   reason to add a second one.
+
    **The first exception is music** (Ethan, 2026-07-25): `public/audio/*.ogg` are
    generated tracks and are allowed. All *sound effects* remain Web Audio
    synthesis with no files — footsteps, landings, brass, wind, the lot.
