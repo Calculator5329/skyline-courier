@@ -20,10 +20,32 @@ import * as THREE from 'three'
  *
  * 2. THEY ARE LEVEL DESIGN. §4.4 again: "a gift to gameplay: unmissable
  *    vertical landmarks in a course whose whole problem is that the player must
- *    read height". They are therefore placed along the route's own axis at
- *    known lateral offsets rather than scattered for decoration, and
- *    `voidBeamSites()` is exported so other systems (the motes below, anything
- *    later) can agree about where the light in this world is.
+ *    read height". They are therefore placed against the course's own islands
+ *    rather than scattered for decoration, and `voidBeamSites()` is exported so
+ *    other systems (the motes below, anything later) can agree about where the
+ *    light in this world is.
+ *
+ * 2b. THERE ARE SIX OF THEM AND THEY ARE ALL DIFFERENT. Ethan, 2026-07-25,
+ *    with the build beside the reference: "there are roughly a dozen in frame,
+ *    all similar, all pin-sharp, and several rake diagonally so they converge
+ *    like searchlights." Three separate faults, and the table below answers
+ *    each one by name:
+ *
+ *    - COUNT. Twelve became six. §3: red "is the rarest and most intense colour
+ *      and it must stay rare... if red is everywhere, the image loses its focal
+ *      points." Twelve beams is not punctuation, it is a texture.
+ *    - SAMENESS. They were drawn from one distribution with one narrow width
+ *      range, so twelve near-identical columns arrived at near-identical
+ *      brightness. Every site now names its own length, base, radius,
+ *      intensity and haze, and no two are close.
+ *    - THE RAKE. The beams were, and are, geometrically plumb — but they were
+ *      laid out along +X across 250 m for a course that no longer exists (the
+ *      void runs +Y up a shaft around the origin), so most of them stood off in
+ *      empty space and were only ever seen end-on and far away, where
+ *      perspective turns a row of parallel verticals into converging
+ *      searchlights. Standing them AROUND the shaft at route azimuths is what
+ *      actually fixes the read: a beam seen across the shaft is a plumb line,
+ *      and §5 gets its framing vertical from it.
  *
  * 3. ONE DRAW CALL. Instanced, frustum culling disabled (the instances span the
  *    whole world, so a bounding sphere around the base mesh is a lie that pops
@@ -38,104 +60,143 @@ import * as THREE from 'three'
  * "never a hazard".
  */
 
-/** The course runs along +X from the terrace at x=4 to the tower at x=222. */
-const ROUTE_LENGTH = 250
+/**
+ * Red is the rarest and most intense colour in the reference and §3 says it
+ * "must stay rare" — so the beams are red/magenta and almost nothing else in
+ * the theme is. Authored well above 1.0: bloom thresholds at 0.78 on the MAX
+ * channel post-exposure, and a saturated red at 1.0 has a max channel of
+ * exactly 1.0, which after a two-stop-down void exposure would not bloom at
+ * all. These are the numbers that make the beam a light source rather than a
+ * red line.
+ */
+const SIGNATURE = [46.0, 2.2, 8.0]    // #FF2D55, the signature
+const DEEP = [34.0, 1.2, 4.4]         // #E11D48, deeper
+const MAGENTA = [40.0, 2.6, 22.0]     // the rarer, cooler variant
 
 /**
- * Deterministic PRNG. The beams are landmarks, so their positions have to be
- * the same on every boot and in every capture — a shot set whose composition
- * changes run to run cannot be used to tell whether a change altered the
- * picture (see the note on `clock` in main.js's __SHOT__).
+ * WHERE THE BEAMS STAND — a table, not a loop.
+ *
+ * A loop over a PRNG is what produced twelve interchangeable columns. Six
+ * hand-placed sites is fewer lines than the generator was, every one of them
+ * marks something, and no two share a silhouette. That is the whole change.
+ *
+ * THE COORDINATES ARE READ OFF `src/levels/void.js`, not invented — that file
+ * belongs to another lane and must not be edited, so its spiral was evaluated
+ * and the results are quoted here. `tools/shots.mjs` already uses this
+ * convention for the shot cameras. The four route beams stand on the RADIAL
+ * LINE through a branch island, pushed out past the great wall that stands
+ * beyond it (`r + 15`, 26 m deep, so its outer face is at `r + 28`):
+ *
+ *   hero-2   r 34.6  ang 2.410  y  20.0   wall to r 62.6   beam at r 75.6
+ *   hero-6   r 44.2  ang 4.075  y  73.7   wall to r 72.2   beam at r 85.2
+ *   hero-10  r 54.7  ang 5.203  y 104.9   wall to r 82.7   beam at r 95.7
+ *   hero-18  r 79.5  ang 7.767  y 190.8   wall to r 107.5  beam at r 120.5
+ *
+ * Those four are the islands the side paths branch from (`BRANCH_AT` in
+ * void.js), so a beam is a "there is a decision here" marker as well as a
+ * height marker. And the 13 m of clearance past the wall's outer face is the
+ * composition, not just safety: §5's "silhouette against glow" wants dark mass
+ * backed by something brighter, and a great wall with a red column standing
+ * just behind it is that rule built into the level rather than lit into it.
+ *
+ * The last two are far — out in the backdrop's near band (`fx/voidbackdrop.js`)
+ * — and exist so the middle distance has a vertical in it. They are the
+ * "washed by fog at distance" end of the variation Ethan asked for, and they
+ * are why `haze` is per-site: distance alone dims them, and these are dimmed
+ * further so they read as veiled rather than merely small.
+ *
+ * @returns {{x:number,y:number,z:number,height:number,radius:number,
+ *            color:[number,number,number],intensity:number,haze:number,
+ *            seed:number,note:string}[]}
  */
-function rng(seed) {
-  let s = seed >>> 0
-  return () => {
-    s = (s * 1664525 + 1013904223) >>> 0
-    return s / 4294967296
-  }
-}
+const SITES = [
+  {
+    // The establishing vertical. Visible from the plaza (VOID_SHOTS.ascent
+    // looks straight up from there), the brightest and the thickest, and it
+    // runs from well below the kill plane to well above the spire so it never
+    // shows an end.
+    x: -56.3, y: -150, z: 50.5, height: 470,
+    radius: 0.62, color: SIGNATURE, intensity: 1.0, haze: 1.0, seed: 0.0,
+    note: 'hero-2 / the first branch — the establishing vertical from the floor',
+  },
+  {
+    // Deeper red, thinner, and it STOPS below the top of the course: its fade
+    // finishes around y 250, so from the spire it is a column you have climbed
+    // past. That is a height cue no uniform beam can give.
+    x: -50.7, y: -110, z: -68.5, height: 360,
+    radius: 0.38, color: DEEP, intensity: 0.72, haze: 1.0, seed: 1.9,
+    note: 'hero-6 / the second branch — mid-climb, deeper and thinner',
+  },
+  {
+    // The magenta one. One of six, which is what keeps it rare enough to be
+    // the odd one out rather than a second colour scheme.
+    x: 45.1, y: -60, z: -84.4, height: 430,
+    radius: 0.52, color: MAGENTA, intensity: 0.88, haze: 1.0, seed: 3.6,
+    note: 'hero-10 / the third branch — the magenta variant',
+  },
+  {
+    // The tallest and the highest-based: it starts above the plaza entirely,
+    // so from the floor it is a column hanging in the air with nothing under
+    // it, and from the upper course it is the vertical that frames the finish.
+    x: 10.5, y: 40, z: 120.0, height: 420,
+    radius: 0.46, color: SIGNATURE, intensity: 0.94, haze: 1.0, seed: 5.1,
+    note: 'hero-18 / the last branch — hangs above the floor, frames the finish',
+  },
+  {
+    // --- the far pair -----------------------------------------------------
+    // Out among the backdrop's near band. Wide in metres and thin on screen —
+    // 2.2 m at 335 m is about eight pixels at 1600x900, which after the haze
+    // below is a filament. `haze` doubles the extinction they see so they sit
+    // BEHIND the near band's ruins in value as well as in depth.
+    x: 166.7, y: -240, z: 290.6, height: 620,
+    radius: 2.2, color: DEEP, intensity: 2.4, haze: 2.0, seed: 2.4,
+    note: 'far band — a vertical in the middle distance, heavily veiled',
+  },
+  {
+    x: 398.8, y: -300, z: -160.8, height: 780,
+    radius: 3.1, color: SIGNATURE, intensity: 3.2, haze: 2.4, seed: 4.4,
+    note: 'far band — the deepest vertical, almost fog',
+  },
+]
 
 /**
  * Where the beams stand, as plain data.
  *
  * Exported rather than private because the motes in world.js cluster around
  * them — §4.5 asks for dust "denser near crystals and beams", and dust that is
- * dense in a place with no light in it is just noise.
- *
- * The lateral offsets are the load-bearing part. |z| is never under 13 m: the
- * route corridor and everything the player can stand on live inside that, and
- * a column of light passing through a landing platform reads as a bug however
- * pretty it is. Beyond that the offsets are deliberately bimodal — a near band
- * at 13-26 m that frames the route (§5: "always frame a vertical") and a far
- * band at 40-90 m that gives the middle distance something to be measured
- * against.
- *
- * @returns {{x:number,y:number,z:number,height:number,radius:number,
- *            color:[number,number,number],seed:number}[]}
+ * dense in a place with no light in it is just noise. The shape of the returned
+ * object is the contract with world.js and has not changed; `intensity`,
+ * `haze` and `note` are additions, and a consumer that ignores them still gets
+ * the same fields it always did.
  */
 export function voidBeamSites() {
-  const rand = rng(0x5c0de1)
-  const sites = []
-
-  // Red is the rarest and most intense colour in the reference and §3 says it
-  // "must stay rare" — so the beams are red/magenta and almost nothing else in
-  // the theme is. Authored well above 1.0: bloom thresholds at 0.78 on the MAX
-  // channel post-exposure, and a saturated red at 1.0 has a max channel of
-  // exactly 1.0, which after a two-stop-down void exposure would not bloom at
-  // all. These are the numbers that make the beam a light source rather than a
-  // red line.
-  const PALETTE = [
-    [46.0, 2.2, 8.0],    // #FF2D55, the signature
-    [34.0, 1.2, 4.4],    // #E11D48, deeper
-    [40.0, 2.6, 22.0],   // magenta, the rarer variant
-  ]
-
-  // 12, down from the 15 this started at. Measured by looking: at 15 the
-  // terrace shot came back with ten beams across it and the void stopped
-  // reading as dark punctuated by red and started reading as a harp. §3 is
-  // explicit that red "is the rarest and most intense colour and it must stay
-  // rare... If red is everywhere, the image loses its focal points."
-  const COUNT = 12
-  for (let i = 0; i < COUNT; i++) {
-    // Stratified along X so the course never has a long stretch with no
-    // vertical in it — the landmark job fails the moment there is a gap.
-    const x = ((i + 0.15 + rand() * 0.7) / COUNT) * ROUTE_LENGTH - 12
-    const near = i % 3 !== 0
-    const mag = near ? 13 + rand() * 13 : 40 + rand() * 50
-    const z = (rand() < 0.5 ? -1 : 1) * mag
-
-    // Tens of metres, and the near ones taller: a beam that terminates inside
-    // the frame has a top, and a top is a horizon for the eye. The near band
-    // runs from below the kill plane to above the finish (y = 88) so it always
-    // exits the frame at both ends.
-    const height = near ? 190 + rand() * 90 : 130 + rand() * 80
-    const y = near ? -95 - rand() * 30 : -70 - rand() * 40
-
-    sites.push({
-      x, y, z, height,
-      // Thin. The far band thinner still, so distance is carried by width as
-      // well as by haze.
-      radius: near ? 0.42 + rand() * 0.22 : 0.26 + rand() * 0.14,
-      color: PALETTE[i % PALETTE.length],
-      seed: rand() * Math.PI * 2,
-    })
-  }
-  return sites
+  return SITES.map((s) => ({ ...s }))
 }
 
 const VERT = /* glsl */`
   attribute vec3 aBase;      // world position of the beam's foot
-  attribute vec3 aBeam;      // x half-width, y height, z seed
-  attribute vec3 aColor;
+  // x half-width, y height, z seed, w per-site haze multiplier. The multiplier
+  // is what lets two beams at the same distance read as different amounts of
+  // "buried in the fog" — Ethan asked for the occlusion to VARY, and distance
+  // alone gives one answer per position.
+  attribute vec4 aBeam;
+  // xyz: colour premultiplied by the site's own intensity, so brightness
+  // varies per beam without a second palette. w: that intensity on its own,
+  // because the white-hot core in the fragment shader is an ADDITIVE term and
+  // would otherwise blaze at full strength on a beam authored to be dim — the
+  // exact way a "vary the brightness" change gets silently undone.
+  attribute vec4 aColor;
   uniform vec2 uHaze;        // x: extinction per metre, y: near-fade radius
   varying vec2 vUv;
   varying vec3 vColor;
   varying float vSeed;
   varying float vAtten;
+  varying float vHot;
 
   void main() {
     vUv = uv;
-    vColor = aColor;
+    vColor = aColor.rgb;
+    vHot = aColor.a;
     vSeed = aBeam.z;
 
     // Billboard about the WORLD Y AXIS only, never about the view axis. A
@@ -166,7 +227,7 @@ const VERT = /* glsl */`
     // own light to scattering, and what the haze scatters back is already being
     // drawn by the dome behind it.
     float dist = length(cameraPosition - world);
-    vAtten = exp(-dist * uHaze.x);
+    vAtten = exp(-dist * uHaze.x * aBeam.w);
     // ...and faded out at point-blank range. A 200 m column passing within a
     // couple of metres of the eye fills a third of the screen with clipped
     // white, which measures as a blown frame and reads as a bug. Distance is
@@ -185,6 +246,7 @@ const FRAG = /* glsl */`
   varying vec3 vColor;
   varying float vSeed;
   varying float vAtten;
+  varying float vHot;
 
   void main() {
     // Cross-section. Two profiles superimposed, and the gap between their
@@ -197,14 +259,17 @@ const FRAG = /* glsl */`
     float core = pow(max(1.0 - x, 0.0), 14.0);
 
     // Fade both ends into the void over a long ramp. A beam that simply stops
-    // has a cap, and a cap at a consistent height across fifteen instances
-    // would read as a floor or a ceiling — which §3 rules out by name.
+    // has a cap, and a cap at a consistent height across six instances would
+    // read as a floor or a ceiling — which §3 rules out by name. The ramps are
+    // deliberately unequal: the foot fades over 16% of the column and the head
+    // over 20%, so even a beam whose top IS inside the frame (site 2 finishes
+    // below the spire on purpose) ends as a dissolve rather than as an edge.
     float ends = smoothstep(0.0, 0.16, vUv.y) * smoothstep(1.0, 0.80, vUv.y);
 
     // Energy travelling up the column. Slow, low-contrast, and a function of
     // WORLD height (vUv.y * the instance's own height would be better still,
     // but the visible period only has to beat the eye, not a ruler). The
-    // per-instance seed stops fifteen columns pulsing in unison, which is the
+    // per-instance seed stops six columns pulsing in unison, which is the
     // difference between a living void and a screensaver.
     float pulse = 0.86 + 0.14 * sin(uTime * 1.6 - vUv.y * 26.0 + vSeed);
 
@@ -213,7 +278,7 @@ const FRAG = /* glsl */`
     // light source desaturates toward its own centre, and that gradient from
     // white through magenta to red across two metres of screen is most of what
     // sells these as energy rather than as paint.
-    vec3 c = vColor * body + vec3(1.0, 0.62, 0.78) * core * 26.0;
+    vec3 c = vColor * body + vec3(1.0, 0.62, 0.78) * core * 26.0 * vHot;
 
     gl_FragColor = vec4(c * ends * pulse * vAtten, 1.0);
   }
@@ -236,16 +301,21 @@ export class VoidFX {
     geo.instanceCount = sites.length
 
     const aBase = new Float32Array(sites.length * 3)
-    const aBeam = new Float32Array(sites.length * 3)
-    const aColor = new Float32Array(sites.length * 3)
+    const aBeam = new Float32Array(sites.length * 4)
+    const aColor = new Float32Array(sites.length * 4)
     sites.forEach((s, i) => {
+      const k = s.intensity != null ? s.intensity : 1
       aBase[i * 3] = s.x; aBase[i * 3 + 1] = s.y; aBase[i * 3 + 2] = s.z
-      aBeam[i * 3] = s.radius; aBeam[i * 3 + 1] = s.height; aBeam[i * 3 + 2] = s.seed
-      aColor[i * 3] = s.color[0]; aColor[i * 3 + 1] = s.color[1]; aColor[i * 3 + 2] = s.color[2]
+      aBeam[i * 4] = s.radius; aBeam[i * 4 + 1] = s.height
+      aBeam[i * 4 + 2] = s.seed; aBeam[i * 4 + 3] = s.haze != null ? s.haze : 1
+      aColor[i * 4] = s.color[0] * k
+      aColor[i * 4 + 1] = s.color[1] * k
+      aColor[i * 4 + 2] = s.color[2] * k
+      aColor[i * 4 + 3] = k
     })
     geo.setAttribute('aBase', new THREE.InstancedBufferAttribute(aBase, 3))
-    geo.setAttribute('aBeam', new THREE.InstancedBufferAttribute(aBeam, 3))
-    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 3))
+    geo.setAttribute('aBeam', new THREE.InstancedBufferAttribute(aBeam, 4))
+    geo.setAttribute('aColor', new THREE.InstancedBufferAttribute(aColor, 4))
     base.dispose()
 
     this.material = new THREE.ShaderMaterial({

@@ -69,6 +69,13 @@ const skyline = {
   /** Energy beams are a void element (art-direction-void.md §4.4). */
   beams: false,
 
+  /**
+   * The distant scenery layer (`src/fx/voidbackdrop.js`). Off here: the sunset
+   * archipelago already carries its own far band as real ghost islands in
+   * level.js, and two backdrops would be two answers to the same question.
+   */
+  backdrop: false,
+
   // null = the module default GRADE / exposure limits.
   grade: null,
   exposure: null,
@@ -239,6 +246,12 @@ const voidTheme = {
 
   /** §4.4. Off for any theme that does not ask for it. */
   beams: true,
+
+  /**
+   * §5, "depth in three bands". ON, and it is the thing that stops the void
+   * being a course in front of flat violet fog — see `src/fx/voidbackdrop.js`.
+   */
+  backdrop: true,
 
   grade: {
     // Crushed toe, violet shadows, cold highlights, and saturation pushed
