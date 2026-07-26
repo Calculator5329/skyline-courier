@@ -268,6 +268,54 @@ const BASE_TUNING = {
   // which is the same shape as every other difference between the modes.
   grappleHoldRelatch: 1,
 
+  // --- the pendulum: FUN's swing and HARDCORE's tether, one solver ----------
+  // The design insight (docs, task brief): FUN's "go crazy with momentum" swing
+  // and HARDCORE's "holds distance, no winch" tether are the SAME constraint —
+  // a rope of a fixed length that removes only the velocity that would STRETCH
+  // it and never the tangential swing speed you build. So there is ONE distance
+  // solver (`_airMove`, grapple branch) and the modes are dialects of it:
+  //
+  //   grapplePendulum  run the swing solver at all. Base is FUN → 1. NORMAL
+  //                    overlays 0, which restores today's pure-winch pull
+  //                    bit-for-bit (that branch is untouched), because NORMAL
+  //                    must feel exactly as it shipped.
+  //   grappleReel      also shorten the rope while held. FUN reels (a spider
+  //                    swing that tightens and flings you); HARDCORE holds the
+  //                    length it bit at — all the reach, none of the assist.
+  //   grappleGravity   how much gravity survives the pull (already a mode knob).
+  //                    Near-zero in FUN reads as flight; most of it in HARDCORE
+  //                    makes it a real pendulum you have to time.
+  //   grappleReleaseBoost  the forgiveness of the release. FUN pays a swing exit
+  //                    on any let-go; HARDCORE's 1.0 pays nothing but what the
+  //                    physics already gave you.
+  //
+  // Base is FUN, so FUN's grapple is now a swing by construction and
+  // `MODES.fun.tuning` stays the empty overlay it is contractually required to
+  // be. NORMAL is the overlay that turns the swing back into today's winch.
+  grapplePendulum: 1,
+  grappleReel: 1,
+  grappleReelSpeed: 10,    // m/s the rope shortens (and hauls you in) while reeling
+
+  // --- the momentum bank: stored speed, spent as a burst (all three modes) ---
+  // A shared resource that pays for playing well. Clean contact — a fast
+  // landing, a slide, a wall-run, a wall-jump, a vault, a climb, a clean cuff
+  // arrival — deposits speed you carry forward; a dash withdraws it as a
+  // stronger, longer burst. It is the language every mode speaks; the grapple
+  // is what makes each mode a dialect, and in HARDCORE (no winch) the bank is
+  // the primary way you manufacture reach.
+  //
+  // Risk the brief flags: infinite air-chain × a stored burst × the release
+  // boost is three multipliers on one number. The cap is on the SPEND, not the
+  // fill — `bankSpend` bounds what one withdrawal can add, so mastery still
+  // pays into a bigger reserve but a single burst has a KNOWABLE ceiling. And
+  // the burst only ever adds to horizontal speed, which the `maxSpeed` clamp
+  // already rails at 34: a banked dash tops out at top speed, never past it, so
+  // it cannot compound off a grapple exit into orbit.
+  bankMax: 22,             // storage cap (m/s-equivalent); fill accrues up to here
+  bankSpend: 8,            // MAX a single dash may withdraw — the knowable ceiling
+  bankFill: 1.0,           // global scalar on every deposit (mode-scaled)
+  bankDashStretch: 0.014,  // extra dashTime per m/s spent — a flatter, longer burst
+
   maxSpeed: 34,
 }
 
@@ -298,6 +346,11 @@ export const MODES = {
   normal: {
     label: 'Normal',
     tuning: {
+      // Turn the swing back off: NORMAL is the pure winch it always was, and the
+      // `grapplePendulum: 0` branch in `_airMove` is today's pull code verbatim.
+      // Range, pull and max-time are untouched (see the note above) so every
+      // authored crossing still arrives.
+      grapplePendulum: 0,
       grappleGravity: 0.62,
       grappleAirChain: 1,
       grappleRefreshCharges: 0,
@@ -307,11 +360,52 @@ export const MODES = {
       // `grappleHoldRelatch`: the forgiveness is base behaviour and this is the
       // overlay that removes it, so FUN needs no overlay of its own.
       grappleHoldRelatch: 0,
+      // A modest bank: a gentle reward for a clean line, not a second flight
+      // system. It exists so the resource is the shared language the brief asks
+      // for, present in every mode — just quietest here, where the winch already
+      // does the heavy lifting.
+      bankFill: 0.7,
+      bankMax: 14,
+      bankSpend: 5,
     },
   },
   fun: {
     label: 'Fun',
     tuning: {},
+  },
+  // HARDCORE — the tether, and the bank as the primary tool.
+  //
+  // There is NO grapple in the winch sense: the cuff fires a rigid pole that
+  // holds the distance it bit at (`grappleReel: 0`) instead of reeling you in.
+  // Same 34 m reach as every mode — range is the level's connectivity graph and
+  // is never a difficulty knob — but it lends you nothing. Most of gravity
+  // survives the pull (`grappleGravity: 0.85`), the release pays no boost
+  // (`grappleReleaseBoost: 1.0`), and no charges come back on a bite. You swing
+  // on the pendulum and convert it to speed yourself with a well-timed let-go,
+  // or you get nothing.
+  //
+  // The bank is the counterweight to all that austerity, and it is deliberately
+  // the biggest here: a full reserve pays a dash all the way to top speed with a
+  // flatter, longer flight, which — with the tether-swing feeding it — is how
+  // HARDCORE crosses the same gaps NORMAL crosses with the winch.
+  hardcore: {
+    label: 'Hardcore',
+    tuning: {
+      grapplePendulum: 1,
+      grappleReel: 0,             // holds distance; never reels in
+      grappleGravity: 0.85,       // a real pendulum you have to time
+      grappleReleaseBoost: 1.0,   // no assist — the swing is the whole payout
+      grappleRefreshCharges: 0,
+      grappleHoldRelatch: 0,      // every tether is a deliberate press
+      grappleCooldown: 0.5,       // short, so you can re-tether across a chain
+      // Air-chain stays open: crossing the archipelago on a tether means swing,
+      // release, tether the next anchor. The reach is real; the assistance is
+      // not. (`grappleAirChain` is Infinity in the base table.)
+      bankFill: 1.5,
+      bankMax: 32,
+      bankSpend: 13,              // a full bank pays a dash to the 34 m/s clamp
+      bankDashStretch: 0.02,
+    },
   },
 }
 
@@ -391,6 +485,21 @@ export class Player {
     /** How far the shot was when it bit, and how long it has been live. */
     this.grappleFireDist = 0
     this.grappleHeldTime = 0
+    /**
+     * The rope's current length, for the pendulum solver (FUN + HARDCORE).
+     *
+     * Set to the bite distance when a pendulum line fires. FUN reels it in
+     * toward `grappleMinRange`; HARDCORE holds it fixed — that single difference
+     * is what makes one a swing and the other a tether. Unused by NORMAL's
+     * winch, which does not run the solver.
+     */
+    this.ropeLen = 0
+    /**
+     * Stored momentum, in m/s-equivalent. Charged by clean contact, spent by a
+     * dash as a stronger burst. Read by the HUD (see the note in `_bankFill`);
+     * reset with the body on a respawn like every other in-flight resource.
+     */
+    this.momentumBank = 0
     /**
      * Why the line last came off, and every reason so far this session.
      *
@@ -528,6 +637,29 @@ export class Player {
   }
 
   /**
+   * Deposit into the momentum bank for a clean, fast piece of contact.
+   *
+   * `base` is the FUN-mode deposit for that verb; `T.bankFill` scales it per
+   * mode (quiet in NORMAL, loudest in HARDCORE). The deposit is proportional to
+   * the speed you did it at, so the bank rewards *carrying momentum through*
+   * contact rather than merely touching a surface — a wall-run taken at a crawl
+   * pays almost nothing, one taken at a sprint pays in full. Capped at
+   * `bankMax`; the ceiling that actually matters (a single withdrawal) is capped
+   * separately at `bankSpend`, per the compounding note on those constants.
+   */
+  _bankFill(base, speed) {
+    const T = TUNING
+    if (!(base > 0)) return
+    const q = Math.min(1.4, Math.max(0, (speed ?? this.speed)) / T.sprintSpeed)
+    this.momentumBank = Math.min(T.bankMax, this.momentumBank + base * T.bankFill * q)
+  }
+
+  /** Bank charge as a 0..1 fraction, for a HUD meter. */
+  get bankFraction() {
+    return TUNING.bankMax > 0 ? Math.min(1, this.momentumBank / TUNING.bankMax) : 0
+  }
+
+  /**
    * Full 3D speed, for anything the player *feels* rather than anything the
    * movement rules act on.
    *
@@ -560,6 +692,11 @@ export class Player {
     this._releaseGrapple('respawn')
     this.grappleTimer = 0
     this.grappleArm = 0
+    this.ropeLen = 0
+    // The bank is a resource the run earned; a respawn is the run failing, so it
+    // resets with everything else in-flight. Carrying it across a death would
+    // pay the player for the fall.
+    this.momentumBank = 0
     this.dashTimer = 0
     this.climbTimer = 0
     this.airJumpsLeft = TUNING.airJumps
@@ -680,6 +817,7 @@ export class Player {
         this.velocity.z *= k
       }
       this.events.push({ type: 'slide', speed: s })
+      this._bankFill(2.0, s)
     } else if (this.sliding && (!input.slide || this.speed < 3.0 || !this.grounded)) {
       // Only stand back up if there is actually room to.
       this._probe.copy(this.position)
@@ -766,6 +904,43 @@ export class Player {
       // a swing you have to aim.
       vel.y -= T.gravity * T.grappleGravity * dt
       if (!this.grappleSlack) {
+        if (T.grapplePendulum) {
+          // --- the pendulum: FUN's swing and HARDCORE's tether ---------------
+          // The rope is a distance constraint of length `ropeLen`. The solver
+          // touches ONLY the radial (along-rope) velocity and never the
+          // tangential swing speed, so it obeys the momentum rule: the speed you
+          // build by falling and steering across the arc is yours to keep and to
+          // release. `this._toAnchor` points INWARD (toward the anchor).
+          //
+          // `targetRad` is the radial speed the rope wants, measured OUTWARD:
+          //   0            hold the sphere — HARDCORE's rigid tether, and FUN
+          //                once it has reeled all the way in.
+          //   -reelSpeed   haul inward at the reel rate — FUN's spider-swing that
+          //                tightens and flings you toward the anchor.
+          let targetRad = 0
+          if (T.grappleReel && this.ropeLen > T.grappleMinRange) {
+            this.ropeLen = Math.max(T.grappleMinRange, this.ropeLen - T.grappleReelSpeed * dt)
+            targetRad = -T.grappleReelSpeed
+          }
+          if (dist >= this.ropeLen) {
+            // Outward radial speed right now.
+            const vOut = -(vel.x * this._toAnchor.x + vel.y * this._toAnchor.y + vel.z * this._toAnchor.z)
+            // A rope only PULLS: pin the radial speed down to the target when the
+            // body is trying to move outward faster than the rope allows, but let
+            // it fall inward freely (a slack line does nothing). Setting the
+            // radial speed — never accumulating into it — is what keeps this
+            // stable frame to frame.
+            const corr = vOut - targetRad
+            if (corr > 0) vel.addScaledVector(this._toAnchor, corr)
+            // Clean up the chord-vs-arc drift of tangential motion by nudging the
+            // position back onto the sphere. Tiny (sub-cm) per frame and always
+            // INWARD, so it can never fling the body through geometry.
+            const err = dist - this.ropeLen
+            if (err > 0) this.position.addScaledVector(this._toAnchor, err)
+          }
+          return
+        }
+        // NORMAL winch — today's pure pull toward the anchor, unchanged.
         vel.addScaledVector(this._toAnchor, T.grapplePull * dt)
         return
       }
@@ -955,6 +1130,9 @@ export class Player {
       this.grappleHeldTime = 0
       this.grappleFireDist = this.position.distanceTo(this.aimedAnchor)
       this.grappleAnchor.copy(this.aimedAnchor)
+      // The pendulum's rope length starts at the bite distance. FUN reels it in
+      // from here; HARDCORE holds it. NORMAL's winch never reads it.
+      this.ropeLen = this.grappleFireDist
       this.grappleCooldown = T.grappleCooldown
       // Spend a link of the chain. In FUN this is Infinity and stays Infinity.
       this.airChainLeft--
@@ -1010,13 +1188,25 @@ export class Player {
     if (input.dashPressed && this.dashReady && this.dashCooldown <= 0 && this.dashTimer <= 0) {
       this.dashReady = false
       this.dashCooldown = T.dashCooldown
-      this.dashTimer = T.dashTime
+      // Withdraw from the momentum bank: a dash is how stored speed is spent.
+      // The withdrawal is capped at `bankSpend` (the knowable ceiling, not the
+      // reserve), so a full bank makes the dash faster AND flatter/longer, but
+      // by a bounded amount. `maxSpeed` still rails the result at 34, so a
+      // banked dash tops out at top speed rather than compounding past it.
+      const spend = Math.min(this.momentumBank, T.bankSpend)
+      this.momentumBank -= spend
+      this.dashTimer = T.dashTime * (1 + spend * T.bankDashStretch)
+      const burst = T.dashSpeed + spend
       // Dash where you are steering; fall back to where you are looking.
       const dir = wishing ? this._wish : this._forward
-      this.velocity.x = dir.x * T.dashSpeed
-      this.velocity.z = dir.z * T.dashSpeed
+      this.velocity.x = dir.x * burst
+      this.velocity.z = dir.z * burst
       if (this.velocity.y < 0) this.velocity.y *= 0.25
-      this.events.push({ type: 'dash', speed: T.dashSpeed })
+      this.events.push({ type: 'dash', speed: burst })
+      // A distinct cue when the burst was bank-fed, so the HUD/audio can mark a
+      // withdrawal without having to diff dash speeds. Unknown event types are
+      // ignored by every consumer, so this is safe to emit.
+      if (spend > 0.01) this.events.push({ type: 'boost', speed: burst, spend })
     }
   }
 
@@ -1096,6 +1286,7 @@ export class Player {
         this.wallTimer = Math.min(T.wallRunTime, this.wallTimer + 0.6)
         this._detachWall()
         this.events.push({ type: 'walljump', speed: this.speed })
+        this._bankFill(2.5, this.speed)
         return
       }
     }
@@ -1290,6 +1481,11 @@ export class Player {
       if (this.landImpact > 0.02) {
         this.events.push({ type: 'land', impact: this.landImpact, speed: this.speed })
       }
+      // A landing that carries speed is the cleanest deposit there is — it is
+      // the whole "stick the landing and keep moving" fantasy. `_bankFill`
+      // scales by speed, so face-planting to a stop pays nothing and sailing
+      // through pays in full.
+      this._bankFill(3.0, this.speed)
     }
 
     // --- vault / step-up -------------------------------------------------
@@ -1335,6 +1531,7 @@ export class Player {
           this.wallRunning = false
           if (airborne || rise > 0.35) {
             this.events.push({ type: 'vault', speed: this.speed })
+            this._bankFill(1.5, this.speed)
           }
           return
         }
@@ -1412,6 +1609,7 @@ export class Player {
     // dead-end in NORMAL for no reason the player could see.
     this.airChainLeft = TUNING.grappleAirChain
     this.events.push({ type: 'climb', speed: this._preSpeed })
+    this._bankFill(2.0, this._preSpeed)
     return true
   }
 
@@ -1455,6 +1653,7 @@ export class Player {
         this.velocity.y = Math.max(this.velocity.y * 0.25, 0) + T.wallRunLift
       }
       this.events.push({ type: 'wallrun', speed: this.speed })
+      this._bankFill(2.5, this.speed)
     }
     this.wallNormal.set(hit.nx, hit.ny, hit.nz).normalize()
     this.wallSide = hit.side
@@ -1479,11 +1678,22 @@ export class Player {
     this.grappling = false
     this.grappleSlack = false
     this.grappleTimer = 0
-    if (arrived) {
+    // The exit boost pays on an arrival (as it always has) and, for the
+    // pendulum modes, on a deliberate let-go — releasing a swing at the moment
+    // you choose IS the payoff, so it pays the multiplier too. HARDCORE's
+    // multiplier is 1.0, so its tether pays nothing but the physics; FUN's 1.14
+    // is what makes a well-timed swing exit feel unhinged. NORMAL never runs the
+    // pendulum, so only its arrivals boost — identical to today.
+    const boost = arrived || (TUNING.grapplePendulum && reason === 'letgo')
+    if (boost) {
       this.velocity.multiplyScalar(TUNING.grappleReleaseBoost)
       // A little lift on arrival so you clear the anchor you just flew at
       // instead of clipping its underside.
-      this.velocity.y = Math.max(this.velocity.y, 3.2)
+      if (arrived) {
+        this.velocity.y = Math.max(this.velocity.y, 3.2)
+        // A clean cuff arrival is skilful contact — it pays into the bank.
+        this._bankFill(3.0, this.speed)
+      }
     }
     this.releaseTally[reason] = (this.releaseTally[reason] || 0) + 1
     const info = {
