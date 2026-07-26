@@ -17,9 +17,18 @@ to art is verified by a screenshot from the actual gameplay camera.
 
 ## Hard rules
 
-1. **Zero external art assets.** No image, model, or font file enters this repo.
-   Every mesh is generated geometry and every texture is a canvas or shader.
-   `three` is the only runtime dependency.
+1. **Zero external art assets.** No image, model, or font file is LOADED BY THE
+   GAME. Every mesh is generated geometry and every texture is a canvas or
+   shader. `three` is the only runtime dependency.
+
+   **This bans assets the game SHIPS, not documents the team READS.**
+   Reference images live in `docs/reference/` and are welcome there — they are
+   never imported, never bundled, and `vite build` never sees them. Ethan,
+   2026-07-26, correcting me for refusing to save his reference image into the
+   repo: *"NOooooo it has to reference the exact file. Who bans image files? I
+   dont."* He is right; I had over-applied this rule to art DIRECTION, which is
+   the opposite of what it is for. A written description of a reference is a
+   lossy copy of a file we could simply have kept.
 
    **The one exception is music** (Ethan, 2026-07-25): `public/audio/*.ogg` are
    generated tracks and are allowed. All *sound effects* remain Web Audio

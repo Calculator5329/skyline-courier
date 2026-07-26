@@ -3,11 +3,21 @@
 The second theme. Read `docs/art-direction.md` first for the house rules; this
 document overrides its palette and light, not its principles.
 
-Written from Ethan's reference image, 2026-07-25. **The repo holds no image
-files** (CLAUDE.md rule 1), so this document IS the reference. Everything below
-is a description of that frame, and where a number appears it was read off the
-image rather than invented. An agent that cannot see the image can still hit it
-by hitting these numbers.
+## THE REFERENCE IMAGE IS `docs/reference/theme2-void.png`
+
+**LOOK AT IT.** Read that file before you read another word of this document,
+and look at it again before you judge any frame you have rendered. It is the
+target. This document is commentary ON it — measurements, palette anchors and
+acceptance numbers taken off that image — and commentary is a lossy copy.
+
+It lives in the repo deliberately. CLAUDE.md rule 1 bans art assets THE GAME
+LOADS; it does not ban documents the team reads, and this one is never
+imported, never bundled and never seen by `vite build`. (I got that wrong once
+and wrote this document as a substitute for the file. Ethan: *"NOooooo it has
+to reference the exact file. Who bans image files? I dont."*)
+
+Written from that image, 2026-07-25. Where a number appears below it was read
+off the image rather than invented.
 
 Ethan's brief, verbatim on the parts that bind:
 
