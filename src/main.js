@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { CollisionWorld } from './collision.js'
-import { Player, TUNING } from './player.js'
+import { Player, TUNING, MODES, DEFAULT_MODE, setMode, getMode } from './player.js'
 import { CameraRig } from './camera.js'
 import { buildCourse } from './level.js'
 import { buildWorld } from './world.js'
@@ -22,6 +22,22 @@ import { Music } from './music.js'
 
 const FIXED_STEP = 1 / 120
 const MAX_FRAME = 0.1
+
+// ---------------------------------------------------------------- difficulty
+//
+// Applied before anything constructs a Player or reads a tuning constant, so
+// the whole boot happens under one consistent rule set. NORMAL is the default
+// for a first-time player because it is the truer parkour experience; FUN is
+// one click away on the start overlay and is remembered thereafter.
+const MODE_KEY = 'skyline-courier:mode'
+
+function loadMode() {
+  try {
+    const v = localStorage.getItem(MODE_KEY)
+    return v && MODES[v] ? v : DEFAULT_MODE
+  } catch { return DEFAULT_MODE }        // private mode
+}
+setMode(loadMode())
 
 // ---------------------------------------------------------------- renderer
 
@@ -154,7 +170,11 @@ function readInput() {
 
 const canvas = renderer.domElement
 
-hud.overlay.addEventListener('click', () => {
+hud.overlay.addEventListener('click', (e) => {
+  // The mode buttons live inside the overlay, whose own click starts the run.
+  // Without this guard, picking a difficulty would immediately grab the pointer
+  // and drop you into the course you were still deciding about.
+  if (e.target.closest('.modebtn')) return
   audio.init()
   // Music has to be built after the AudioContext exists, and the context can
   // only be created from a real user gesture — so this is the earliest
@@ -193,6 +213,33 @@ document.addEventListener('mousedown', (e) => {
   if (e.button === 2) input.dashPressed = true
 })
 canvas.addEventListener('contextmenu', (e) => e.preventDefault())
+
+// ------------------------------------------------------------- mode picker
+
+/**
+ * Switch difficulty and start over.
+ *
+ * The reset is not optional. Mode changes the rules the *current* airborne
+ * state was created under — a player mid-grapple in FUN who switches to NORMAL
+ * would be flying on a chain link that no longer exists — and it changes what a
+ * time means, so carrying a part-run across the boundary would silently corrupt
+ * the split it eventually produces.
+ */
+function applyMode(name) {
+  if (name === getMode()) return
+  setMode(name)
+  try { localStorage.setItem(MODE_KEY, getMode()) } catch { /* private mode */ }
+  resetRun()
+  hud.setMode(getMode(), MODES)
+}
+
+for (const btn of document.querySelectorAll('.modebtn')) {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    applyMode(btn.dataset.mode)
+  })
+}
+hud.setMode(getMode(), MODES)
 
 // ---------------------------------------------------------------- respawn
 
@@ -374,7 +421,7 @@ function saveBest(t) {
 // and for driving the game from a browser console during development.
 window.__game = {
   player, rig, run, level, camera, scene, renderer, input, keys, respawn, resetRun,
-  tick,
+  tick, TUNING, MODES, getMode, setMode: applyMode,
   /** Advance `frames` fixed frames without waiting on rAF. */
   drive(frames, dt = 1 / 60) {
     for (let i = 0; i < frames; i++) tick(dt)

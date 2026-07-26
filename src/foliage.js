@@ -63,13 +63,36 @@ import { rng } from './materials/textures.js'
  * order-independent and stable.
  *
  * `alphaToCoverage true` on top of that buys back the one thing a hard test
- * loses. The pipeline's HDR target runs 4x MSAA (`render/index.js`, `samples`),
- * and three's own `alphatest_fragment` chunk turns the test into a
- * `smoothstep( alphaTest, alphaTest + fwidth(a), a )` when ALPHA_TO_COVERAGE is
- * defined, so the leaf edge resolves across four samples instead of stair-
- * stepping. It also gives the distance fade below a real dissolve for free.
- * On a context with no samples it degrades to precisely the hard test — the
- * feature can never break the frame, only fail to soften it.
+ * loses: the leaf edge resolves across the HDR target's MSAA samples instead of
+ * stair-stepping, and the distance fade below gets a real dissolve for free.
+ *
+ * WHAT THIS FILE WILL NOT DO IS ASSUME A2C IS LIVE.
+ *
+ * Three defines ALPHA_TO_COVERAGE from the MATERIAL flag, at compile time, and
+ * that define replaces the `discard` with a `smoothstep`. Whether the fractional
+ * alpha it produces means anything is a property of the FRAMEBUFFER — of
+ * `gl.SAMPLE_ALPHA_TO_COVERAGE` and of the sample count of whatever target the
+ * pipeline is rendering into. Those are set in different places by code this
+ * file does not own, and there are several passes (`render/gbuffer.js`, a
+ * reflection or thumbnail render, a low-end context created without
+ * `antialias`) where the answer is legitimately "no samples". When the two
+ * disagree, a fractional alpha lands in an opaque pass with blending off and
+ * every leaf card renders as its FULL QUAD — a soft translucent rectangle of
+ * dilated atlas colour smeared over whatever is behind it. That is the
+ * "invisible glass" failure, and it is expensive precisely because it looks
+ * like a material problem rather than a state problem.
+ *
+ * So the fragment path below does not take the pipeline's word for it:
+ *
+ *   - a REAL `discard` runs unconditionally, on every path, every frame. That
+ *     is the guarantee, and it depends on no GL state whatsoever;
+ *   - fractional coverage is written ONLY when `uFoliageA2C` says the bound
+ *     target actually has samples, which `material.onBeforeRender` measures
+ *     from the framebuffer immediately before the draw (see `a2cLive`); and
+ *   - the distance fade falls back to a dithered discard when it cannot have a
+ *     sample mask, so a plant still dissolves rather than popping.
+ *
+ * The worst case is therefore a hard-edged plant, never a pane of glass.
  * ============================================================================
  */
 
@@ -162,25 +185,49 @@ const ATLAS_SEED = 0xF0117A
  */
 const SPECIES = {
   /** Broadleaf clusters. The mass of any planted bed. */
-  leaf: { cells: [0, 1, 2], size: [0.34, 0.78], aspect: 1.25, wind: 1.0, hang: 0 },
+  leaf: { cells: [0, 1, 2], size: [0.34, 0.78], aspect: 1.25, wind: 1.0, hang: 0, lean: 0.13 },
   /** Ivy sprigs, upright — for a wall base or the shady side of a plinth. */
-  ivy: { cells: [3, 4], size: [0.26, 0.55], aspect: 0.85, wind: 0.9, hang: 0 },
+  ivy: { cells: [3, 4], size: [0.26, 0.55], aspect: 0.85, wind: 0.9, hang: 0, lean: 0.15 },
   /** Grass tufts. The cheapest, smallest, most numerous thing here. */
-  grass: { cells: [5, 6, 7], size: [0.15, 0.30], aspect: 1.30, wind: 1.5, hang: 0 },
+  grass: { cells: [5, 6, 7], size: [0.15, 0.30], aspect: 1.30, wind: 1.5, hang: 0, lean: 0.18 },
   /** Flower clusters — the accent. Never the mass. */
-  flower: { cells: [8, 9, 10], size: [0.17, 0.31], aspect: 1.05, wind: 1.25, hang: 0 },
+  flower: { cells: [8, 9, 10], size: [0.17, 0.31], aspect: 1.05, wind: 1.25, hang: 0, lean: 0.12 },
   /** Fern fronds, for damp shade under an arch or beside a waterfall. */
-  fern: { cells: [11, 12], size: [0.30, 0.58], aspect: 1.15, wind: 0.75, hang: 0 },
+  fern: { cells: [11, 12], size: [0.30, 0.58], aspect: 1.15, wind: 0.75, hang: 0, lean: 0.14 },
   /**
    * The moss wedge. Wide, low and nearly static: this is the geometry half of
    * docs/roadmap.md's "moss wedge creeping up walls", scattered along a
    * floor/wall junction where the shader term alone measured invisible.
    */
-  moss: { cells: [13], size: [0.17, 0.34], aspect: 1.5, wind: 0.2, hang: 0 },
-  /** Hanging ivy. Painted attached at the TOP of its cell; `hang` moves the
-   *  sway to the free bottom end. This is the mass that `hangFromEdge` drapes. */
-  hangingIvy: { cells: [14, 15], size: [0.9, 2.4], aspect: 0.52, wind: 1.15, hang: 1 },
+  moss: { cells: [13], size: [0.17, 0.34], aspect: 1.5, wind: 0.2, hang: 0, lean: 0.07 },
+  /**
+   * Hanging ivy. Painted attached at the TOP of its cell; `hang` moves the sway
+   * to the free bottom end. This is the mass that `hangFromEdge` drapes.
+   *
+   * ASPECT 0.72, up from 0.52. The card's non-uniform scale squeezes the square
+   * atlas cell horizontally by exactly this factor, and at 0.52 every ivy leaf
+   * on every drape in the world was rendered at 52% of its painted width —
+   * round leaves as narrow ovals, which is a large part of why the drapes read
+   * as printed rather than grown. 0.72 halves that distortion while keeping the
+   * strands narrow enough that kit.js's 1.15 m pitch is still broken cover
+   * rather than the continuous hedge its comment warns about.
+   */
+  hangingIvy: { cells: [14, 15], size: [0.9, 2.4], aspect: 0.72, wind: 1.15, hang: 1, lean: 0 },
 }
+
+/** Cells painted from the TOP of the cell down — the drapes. See `fitCell`. */
+const TOP_ANCHORED = new Set([14, 15])
+
+/**
+ * Supersampling factor for the painters.
+ *
+ * Every cell is painted into a scratch canvas at SS x the atlas cell size and
+ * resolved down by `fitCell`'s `drawImage`. Two reasons, and the second is the
+ * one that matters: it antialiases the painted silhouettes at 4 samples per
+ * texel for free, and it means `fitCell` is nearly always DOWN-scaling, so the
+ * fit costs no sharpness. Sixteen 512-px canvases at load is a few ms.
+ */
+const SUPERSAMPLE = 2
 
 /**
  * Module-level atlas cache, keyed BY SEED.
@@ -220,15 +267,23 @@ function buildAtlas(seed) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   ctx.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE)
 
+  // The scratch cell every painter actually draws into, at SUPERSAMPLE
+  // resolution. Reused across all sixteen cells — one allocation, not sixteen.
+  const scratch = document.createElement('canvas')
+  scratch.width = scratch.height = CELL * SUPERSAMPLE
+  const sctx = scratch.getContext('2d', { willReadFrequently: true })
+
   for (let i = 0; i < ATLAS_COLS * ATLAS_ROWS; i++) {
     const cx = (i % ATLAS_COLS) * CELL
     const cy = Math.floor(i / ATLAS_COLS) * CELL
-    ctx.save()
-    ctx.translate(cx, cy)
-    // Every painter draws inside a 0..CELL box, base at the bottom edge minus
-    // the margin, with canvas Y pointing DOWN.
-    paintCell(ctx, i, rand)
-    ctx.restore()
+    sctx.clearRect(0, 0, scratch.width, scratch.height)
+    // Every painter draws inside a 0..S box, base at the bottom edge minus the
+    // margin, with canvas Y pointing DOWN. S is the SCRATCH size, so a painter
+    // that expresses every dimension as a fraction of `span` is resolution
+    // independent — which all of them do, and which is why SUPERSAMPLE is a
+    // constant here rather than a rewrite.
+    paintCell(sctx, i, rand, scratch.width, CELL_MARGIN * SUPERSAMPLE)
+    fitCell(ctx, scratch, sctx, cx, cy, TOP_ANCHORED.has(i))
   }
 
   const img = ctx.getImageData(0, 0, ATLAS_SIZE, ATLAS_SIZE)
@@ -254,6 +309,72 @@ function buildAtlas(seed) {
   texture.needsUpdate = true
 
   return { seed, cols: ATLAS_COLS, rows: ATLAS_ROWS, cells: ATLAS_COLS * ATLAS_ROWS, pages: [{ texture, index: 0 }] }
+}
+
+/**
+ * Resolve one painted scratch cell into its atlas cell, scaled so the PLANT
+ * fills the cell rather than the canvas the plant was drawn on.
+ *
+ * ================== THE BUG THIS FIXES: CARDS THAT LIE ABOUT THEIR SIZE ======
+ * A card is scaled in world by the HEIGHT the caller asks for, but what the
+ * player sees is the height of the INK inside it. Measured against the first
+ * atlas, the ink filled between 50% and 85% of its cell depending on species —
+ * so `scatterOnBox(…, { maxHeight: 0.24 })` was planting 12 cm of grass out of
+ * cell 7 and 20 cm out of cell 6, and the caller had no way to know. The whole
+ * deck came back reading as speckle scattered over bare stone rather than as
+ * something grown, because half of every card was transparent air and the
+ * spacing was computed from the card.
+ *
+ * So the painters get to compose freely and the fit is mechanical: measure the
+ * alpha bounding box, scale UNIFORMLY (never stretch — a stretched leaf is a
+ * different plant) until the box touches the cell margin on its tighter axis,
+ * and anchor it. A ground plant anchors its BASE to the bottom margin; a drape
+ * anchors its GRIP to the top margin, which is the edge `hangFromEdge` puts on
+ * the lip. Both are pinned where the plant meets the world, so nothing floats.
+ *
+ * The consequence a caller can rely on: a `height` of h metres now buys very
+ * nearly h metres of visible plant, for every species.
+ * ============================================================================
+ *
+ * The threshold is the material's own ALPHA_TEST: the bounding box has to be
+ * the box of what will actually be DRAWN, not of the antialiased fringe around
+ * it, or a species with a soft edge would measure larger and fit smaller.
+ */
+function fitCell(dst, scratchCanvas, sctx, cellX, cellY, anchorTop) {
+  const N = scratchCanvas.width
+  const data = sctx.getImageData(0, 0, N, N).data
+  let minX = N, maxX = -1, minY = N, maxY = -1
+  const cut = ALPHA_TEST * 255
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      if (data[(y * N + x) * 4 + 3] < cut) continue
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  }
+  if (maxX < 0) return                       // nothing painted; leave it empty
+
+  const boxW = maxX - minX + 1
+  const boxH = maxY - minY + 1
+  const span = CELL - CELL_MARGIN * 2
+  // Uniform, and capped: a cell that somehow measured a few ink pixels must not
+  // be blown up 40x into an abstract smear.
+  const scale = Math.min(span / boxW, span / boxH, 4)
+
+  // Where the plant meets the world, in scratch pixels and then in cell pixels.
+  const srcAnchorX = (minX + maxX + 1) * 0.5
+  const srcAnchorY = anchorTop ? minY : maxY + 1
+  const dstAnchorX = cellX + CELL * 0.5
+  const dstAnchorY = cellY + (anchorTop ? CELL_MARGIN : CELL - CELL_MARGIN)
+
+  dst.save()
+  dst.translate(dstAnchorX, dstAnchorY)
+  dst.scale(scale, scale)
+  dst.translate(-srcAnchorX, -srcAnchorY)
+  dst.drawImage(scratchCanvas, 0, 0)
+  dst.restore()
 }
 
 /**
@@ -395,6 +516,43 @@ function buildMipChain(base, size) {
   return mipmaps
 }
 
+/**
+ * Per-cell alpha bounding box of a finished atlas page, as fractions of a cell.
+ *
+ * `fitCell` makes a promise the rest of the file is built on — that a card of
+ * height h shows h metres of plant — and this is what lets the self test check
+ * it rather than assert it. Measured on the FINISHED page, so it catches a
+ * painter that overflows its margin as readily as one that under-fills.
+ */
+function cellExtents(data, size, cols, rows) {
+  const cw = size / cols
+  const ch = size / rows
+  const cut = ALPHA_TEST * 255
+  const out = []
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      let minX = cw, maxX = -1, minY = ch, maxY = -1
+      for (let y = 0; y < ch; y++) {
+        const row = (r * ch + y) * size
+        for (let x = 0; x < cw; x++) {
+          if (data[(row + c * cw + x) * 4 + 3] < cut) continue
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+      out.push(maxX < 0
+        ? { width: 0, height: 0 }
+        : {
+          width: +((maxX - minX + 1) / cw).toFixed(3),
+          height: +((maxY - minY + 1) / ch).toFixed(3),
+        })
+    }
+  }
+  return out
+}
+
 /** Fraction of texels whose alpha passes `threshold` (0..255). */
 function coverageOf(data, threshold) {
   let hit = 0
@@ -516,26 +674,24 @@ function fillLeaf(ctx, len, baseCol, tipCol, rib) {
  * 3-4 upright ivy, 5-7 grass, 8-10 flowers, 11-12 fern, 13 moss wedge,
  * 14-15 hanging ivy.
  */
-function paintCell(ctx, index, rand) {
-  const S = CELL
-  const M = CELL_MARGIN
+function paintCell(ctx, index, rand, S, M) {
   switch (index) {
-    case 0: return paintLeafCluster(ctx, S, M, rand, { leaves: 26, tone: 0.0, ivy: true })
-    case 1: return paintLeafCluster(ctx, S, M, rand, { leaves: 38, tone: 0.35, ivy: false })
-    case 2: return paintLeafCluster(ctx, S, M, rand, { leaves: 46, tone: -0.3, ivy: false })
-    case 3: return paintIvySprig(ctx, S, M, rand, { leaves: 11, lean: 0.16 })
-    case 4: return paintIvySprig(ctx, S, M, rand, { leaves: 8, lean: -0.22 })
-    case 5: return paintGrassTuft(ctx, S, M, rand, { blades: 28, tall: 0.86, seed: false })
-    case 6: return paintGrassTuft(ctx, S, M, rand, { blades: 20, tall: 0.98, seed: true })
-    case 7: return paintGrassTuft(ctx, S, M, rand, { blades: 34, tall: 0.64, seed: false })
+    case 0: return paintLeafCluster(ctx, S, M, rand, { leaves: 46, tone: 0.0, ivy: true })
+    case 1: return paintLeafCluster(ctx, S, M, rand, { leaves: 62, tone: 0.35, ivy: false })
+    case 2: return paintLeafCluster(ctx, S, M, rand, { leaves: 74, tone: -0.3, ivy: false })
+    case 3: return paintIvySprig(ctx, S, M, rand, { stems: 3, leaves: 10, lean: 0.16 })
+    case 4: return paintIvySprig(ctx, S, M, rand, { stems: 4, leaves: 8, lean: -0.22 })
+    case 5: return paintGrassTuft(ctx, S, M, rand, { blades: 46, tall: 0.86, seed: false })
+    case 6: return paintGrassTuft(ctx, S, M, rand, { blades: 36, tall: 0.98, seed: true })
+    case 7: return paintGrassTuft(ctx, S, M, rand, { blades: 54, tall: 0.72, seed: false })
     case 8: return paintFlowerCluster(ctx, S, M, rand, BLOOM.orange, 9)
     case 9: return paintFlowerCluster(ctx, S, M, rand, BLOOM.red, 7)
     case 10: return paintFlowerCluster(ctx, S, M, rand, BLOOM.white, 11)
-    case 11: return paintFern(ctx, S, M, rand, 1)
+    case 11: return paintFern(ctx, S, M, rand, 2)
     case 12: return paintFern(ctx, S, M, rand, 3)
     case 13: return paintMossWedge(ctx, S, M, rand)
-    case 14: return paintHangingIvy(ctx, S, M, rand, { strands: 3, leaves: 13, drift: 0.10 })
-    default: return paintHangingIvy(ctx, S, M, rand, { strands: 2, leaves: 10, drift: -0.16 })
+    case 14: return paintHangingIvy(ctx, S, M, rand, { strands: 4, leaves: 20, drift: 0.10 })
+    default: return paintHangingIvy(ctx, S, M, rand, { strands: 3, leaves: 17, drift: -0.16 })
   }
 }
 
@@ -572,12 +728,20 @@ function paintLeafCluster(ctx, S, M, rand, { leaves, tone, ivy }) {
     // Shorter and much broader than the first pass, which came back reading as
     // an agave: a long narrow blade rotated about one point IS a succulent, and
     // the brief asks for "leafy canopies". Length down, width nearly doubled.
-    const len = span * (0.24 + rand() * 0.20) * (0.74 + depth * 0.32)
-    // 0.58, arrived at by looking at both failures: 0.48 read as an agave
-    // (long narrow blades round a point) and 0.74 read as a cabbage (six huge
-    // leaves you can count). A cluster has to be more leaves than you can
-    // count, each narrower than it is long.
-    const wid = len * (ivy ? 0.92 : 0.58)
+    //
+    // Down AGAIN, to 0.15-0.28 span, with the leaf count up by ~60%. The comment
+    // below says a cluster has to be more leaves than you can count; at 0.24-0.44
+    // span each leaf was a third of the whole plant, so you could count six of
+    // them and the card read as a houseplant in a pot. What makes a bush is many
+    // small overlapping leaves, and `fitCell` gives back the height that costs.
+    const len = span * (0.15 + rand() * 0.13) * (0.74 + depth * 0.32)
+    // 0.58 was the compromise between two failures — 0.48 read as an agave
+    // (long narrow blades round a point) and 0.74 as a cabbage (six huge leaves
+    // you could count) — but it was tuned when there were 26 leaves. With the
+    // count up to 46-74 the cabbage risk is gone, and 0.58 was the surviving
+    // half of the agave: cells 1 and 2 came back as a succulent again, a rosette
+    // of pointed blades. A broadleaf is nearly as wide as it is long. 0.82.
+    const wid = len * (ivy ? 0.92 : 0.82)
     // Leaves sit up the stems, not all at one point — a rosette reads as a
     // pinwheel, and nothing in the reference is a pinwheel.
     const rise = span * (0.10 + rand() * 0.46)
@@ -585,7 +749,7 @@ function paintLeafCluster(ctx, S, M, rand, { leaves, tone, ivy }) {
     ctx.translate(bx + Math.sin(a) * rise * 0.55, by - rise)
     ctx.rotate(a * 0.85)
     if (ivy) ivyLeafPath(ctx, len, wid)
-    else leafPath(ctx, len, wid, (rand() - 0.5) * 0.5)
+    else leafPath(ctx, len, wid, (rand() - 0.5) * 0.9)
 
     const dry = rand() < 0.09
     const hue = THREE.MathUtils.clamp(0.5 + tone * 0.5 + (rand() - 0.5) * 0.5, 0, 1)
@@ -601,41 +765,65 @@ function paintLeafCluster(ctx, S, M, rand, { leaves, tone, ivy }) {
 }
 
 /**
- * An upright ivy sprig: one arcing stem with alternating leaves, thinning
- * toward the tip.
+ * An upright ivy sprig: `stems` arcing runners with alternating leaves, thinning
+ * toward each tip.
+ *
+ * STEMS, PLURAL. One stem measured 0.38 of its cell wide against 0.85 tall, so
+ * after `fitCell` the species was a single vertical strand: a picket, not a
+ * plant, and unmistakably the same picket every time it appeared. Ivy spreads
+ * sideways — that is the entire thing ivy is known for — so a sprig is a small
+ * fan of runners leaving one root, and the extra runners are what give the card
+ * a silhouette that changes with its atlas cell.
  */
-function paintIvySprig(ctx, S, M, rand, { leaves, lean }) {
-  const bx = S * 0.5 - lean * S * 0.2
+function paintIvySprig(ctx, S, M, rand, { stems = 1, leaves, lean }) {
   const by = S - M
   const span = S - M * 2
-  const tipX = bx + lean * span
-  const tipY = by - span * 0.94
 
-  ctx.strokeStyle = shade(GREEN.stem, 0.95)
-  ctx.lineWidth = Math.max(2, span * 0.016)
-  ctx.beginPath()
-  ctx.moveTo(bx, by)
-  ctx.quadraticCurveTo(bx + lean * span * 0.2, by - span * 0.5, tipX, tipY)
-  ctx.stroke()
+  for (let k = 0; k < stems; k++) {
+    // Runners fan from a common root, each with its own lean, so the card is
+    // wide at the top and pinched at the base — which is how a plant grows and
+    // is also what keeps `fitCell`'s anchor on something solid.
+    const spread = stems === 1 ? 0 : ((k / (stems - 1)) - 0.5) * 1.5
+    const myLean = lean + spread * 0.55
+    const rootX = S * 0.5 + spread * span * 0.06
+    const bx = rootX - myLean * S * 0.2
+    // Shorter side runners: a fan of equal stems is a trident.
+    const reach = 0.94 - Math.abs(spread) * 0.26
+    const tipX = bx + myLean * span
+    const tipY = by - span * reach
+    const ctrlX = bx + myLean * span * 0.2
+    const ctrlY = by - span * reach * 0.53
 
-  for (let i = 0; i < leaves; i++) {
-    const t = (i + 0.6) / leaves
-    // Point on the quadratic, so leaves sit ON the stem rather than near it.
-    const mt = 1 - t
-    const px = mt * mt * bx + 2 * mt * t * (bx + lean * span * 0.2) + t * t * tipX
-    const py = mt * mt * by + 2 * mt * t * (by - span * 0.5) + t * t * tipY
-    const side = i % 2 === 0 ? 1 : -1
-    const len = span * (0.28 - t * 0.13) * (0.85 + rand() * 0.3)
-    ctx.save()
-    ctx.translate(px, py)
-    ctx.rotate(side * (0.75 + rand() * 0.4) + lean * 0.5)
-    ivyLeafPath(ctx, len, len * 0.95)
-    const body = rand() < 0.2 ? GREEN.cool : GREEN.mid
-    fillLeaf(ctx, len,
-      mixHex(GREEN.deep, body, 0.45),
-      mixHex(body, GREEN.bright, 0.25 + rand() * 0.3),
-      mixHex(GREEN.deep, body, 0.55, 0.5))
-    ctx.restore()
+    ctx.strokeStyle = shade(GREEN.stem, 0.95)
+    ctx.lineWidth = Math.max(2, span * 0.014)
+    ctx.beginPath()
+    ctx.moveTo(rootX, by)
+    ctx.quadraticCurveTo(ctrlX, ctrlY, tipX, tipY)
+    ctx.stroke()
+
+    const n = Math.max(3, Math.round(leaves * (0.75 + rand() * 0.5)))
+    for (let i = 0; i < n; i++) {
+      const t = (i + 0.6) / n
+      // Point on the quadratic, so leaves sit ON the stem rather than near it.
+      const mt = 1 - t
+      const px = mt * mt * bx + 2 * mt * t * ctrlX + t * t * tipX
+      const py = mt * mt * by + 2 * mt * t * ctrlY + t * t * tipY
+      const side = i % 2 === 0 ? 1 : -1
+      // Smaller leaves than the first pass (0.28 down to 0.19 of the span). An
+      // ivy leaf is 5-8 cm on a runner a metre long; at 0.28 span each leaf was
+      // a quarter of the whole sprig and the plant read as a rubber tree.
+      const len = span * (0.19 - t * 0.08) * (0.85 + rand() * 0.3)
+      ctx.save()
+      ctx.translate(px, py)
+      ctx.rotate(side * (0.75 + rand() * 0.4) + myLean * 0.5)
+      ivyLeafPath(ctx, len, len * 0.95)
+      const body = rand() < 0.2 ? GREEN.cool : GREEN.mid
+      fillLeaf(ctx, len,
+        mixHex(GREEN.deep, body, 0.45),
+        mixHex(body, GREEN.bright, 0.25 + rand() * 0.3),
+        mixHex(GREEN.deep, body, 0.55, 0.5))
+      ctx.restore()
+    }
   }
 }
 
@@ -647,14 +835,27 @@ function paintGrassTuft(ctx, S, M, rand, { blades, tall, seed }) {
 
   for (let i = 0; i < blades; i++) {
     const depth = i / (blades - 1)
-    const bend = (rand() - 0.5) * 1.5
+    // Narrower and stouter than the first pass, and deliberately so.
+    //
+    // `fitCell` scales a cell up until its tighter axis touches the margin, so
+    // a WIDE painting is a SHORT plant: measured, the old tuft fanned to 0.84 of
+    // its cell across and therefore stopped at 0.61 of it tall, which handed
+    // back a third of the height the caller asked for. A tuft is a fountain, not
+    // a starburst — pulling the roots together and the tips in buys the height
+    // straight back, and thicker blades stop the result reading as wire.
+    const bend = (rand() - 0.5) * 1.1
     const len = span * (0.42 + rand() * 0.58)
-    const wid = span * (0.026 + rand() * 0.026)
+    const wid = span * (0.030 + rand() * 0.030)
     ctx.save()
-    ctx.translate(bx + (rand() - 0.5) * span * 0.30, by)
-    ctx.rotate((rand() - 0.5) * 0.5)
+    ctx.translate(bx + (rand() - 0.5) * span * 0.20, by)
+    ctx.rotate((rand() - 0.5) * 0.40)
     bladePath(ctx, len, wid, bend)
-    const body = rand() < 0.16 ? GREEN.dry : (rand() < 0.3 ? GREEN.cool : GREEN.mid)
+    // Dry down from 16% to 9%. At 16%, on a tuft that is only ~30 px tall from
+    // the gameplay camera, one blade in six being straw plus three straw seed
+    // heads made the deck read yellow-brown against warm sandstone — the exact
+    // opposite of art-direction.md's "lush saturated" green. Two dry blades per
+    // tuft is life; five is a lawn in August.
+    const body = rand() < 0.09 ? GREEN.dry : (rand() < 0.34 ? GREEN.cool : GREEN.mid)
     fillLeaf(ctx, len,
       mixHex(GREEN.deep, body, 0.30 + depth * 0.4),
       mixHex(body, GREEN.bright, 0.35 + rand() * 0.4), null)
@@ -662,23 +863,32 @@ function paintGrassTuft(ctx, S, M, rand, { blades, tall, seed }) {
   }
 
   if (seed) {
-    // Seed heads: a few dry spikes above the blade line. Two or three per tuft
-    // is the whole reason a meadow reads as a meadow and not as a green rug.
-    for (let i = 0; i < 3; i++) {
-      const x = bx + (rand() - 0.5) * span * 0.5
+    // Seed heads: a couple of spikes above the blade line. Two per tuft is the
+    // reason a meadow reads as a meadow and not as a green rug.
+    //
+    // TONED DOWN from three heads of pure `GREEN.dry`. One grass cell in three
+    // carries seed heads, so at three bright straw spikes each, a deck under a
+    // low warm key came back looking like stubble — the tufts read as the
+    // yellowest thing on a sandstone floor rather than as the greenest. Two
+    // heads, mixed two thirds of the way back toward leaf green, and slimmer:
+    // they still catch the sun and break the blade line, which is their whole
+    // job, without deciding what colour the deck is.
+    const head = mixHex(GREEN.dry, GREEN.mid, 0.34)
+    for (let i = 0; i < 2; i++) {
+      const x = bx + (rand() - 0.5) * span * 0.42
       const h = span * (0.82 + rand() * 0.18)
-      ctx.strokeStyle = shade(GREEN.dry, 0.95, 0.9)
-      ctx.lineWidth = Math.max(1, span * 0.012)
+      ctx.strokeStyle = mixHex(GREEN.dry, GREEN.stem, 0.4, 0.9)
+      ctx.lineWidth = Math.max(1, span * 0.010)
       ctx.beginPath()
       ctx.moveTo(bx, by)
       ctx.quadraticCurveTo(x, by - h * 0.6, x + (rand() - 0.5) * span * 0.1, by - h)
       ctx.stroke()
-      ctx.fillStyle = shade(GREEN.dry, 1.08)
+      ctx.fillStyle = head
       for (let k = 0; k < 7; k++) {
         const t = 0.55 + (k / 7) * 0.45
         ctx.beginPath()
-        ctx.ellipse(x + (rand() - 0.5) * span * 0.05, by - h * t,
-          span * 0.014, span * 0.030, (rand() - 0.5) * 0.6, 0, Math.PI * 2)
+        ctx.ellipse(x + (rand() - 0.5) * span * 0.04, by - h * t,
+          span * 0.011, span * 0.026, (rand() - 0.5) * 0.6, 0, Math.PI * 2)
         ctx.fill()
       }
     }
@@ -790,8 +1000,14 @@ function paintMossWedge(ctx, S, M, rand) {
   // smear with no top edge to break the wall line, which was the whole job.
   const domeH = span * 0.72
 
+  // Lobe and shoot counts are DENSITIES, not counts: they were tuned against a
+  // 256-px cell and the painters now run at SUPERSAMPLE resolution, so a fixed
+  // count would thin the fuzz out by the square of that factor and hand back
+  // the smooth-edged blob this whole function exists to avoid.
+  const density = (S / CELL) * (S / CELL)
+
   // The body: overlapping lobes on a dome profile, darkest where it meets stone.
-  for (let i = 0; i < 110; i++) {
+  for (let i = 0, n = Math.round(110 * density); i < n; i++) {
     const u = rand()
     const x = cx + (u - 0.5) * span * 0.94
     // Dome: height falls off toward the edges, so the silhouette is a mound and
@@ -818,7 +1034,7 @@ function paintMossWedge(ctx, S, M, rand) {
   // the wedge reading as a painted blob — moss has no smooth edge at any scale
   // a player gets close to, and a smooth edge is exactly what a radial gradient
   // produces on its own.
-  for (let i = 0; i < 1600; i++) {
+  for (let i = 0, n = Math.round(1600 * density); i < n; i++) {
     const u = rand()
     const x = cx + (u - 0.5) * span * 1.0
     const lift = Math.cos((u - 0.5) * Math.PI) * domeH
@@ -851,13 +1067,18 @@ function paintHangingIvy(ctx, S, M, rand, { strands, leaves, drift }) {
   const span = S - M * 2
   const ty = M
 
-  // TWO OR THREE STRANDS PER CARD, not one. A single strand painted in a square
+  // THREE OR FOUR STRANDS PER CARD, not one. A single strand painted in a square
   // cell is ~30% ink and 70% air, so a row of those cards reads as a picket
-  // fence however tightly they are pitched. Three strands per card plus the
-  // 0.5 m pitch in hangFromEdge is what closes a drape into a curtain.
+  // fence however tightly they are pitched. Several strands per card plus the
+  // pitch in hangFromEdge is what closes a drape into a curtain.
+  //
+  // The two cells also have to agree with each other. Measured, the old pair
+  // came in at 32% and 16% ink, so every second drape card was half as dense as
+  // its neighbour and the whole curtain read as moth-eaten in patches. 4 and 3
+  // strands put them within a few percent while keeping them distinguishable.
   for (let k = 0; k < strands; k++) {
-    const off = strands === 1 ? 0 : ((k / (strands - 1)) - 0.5) * span * 0.62
-    const tx = S * 0.5 + off + (rand() - 0.5) * span * 0.08
+    const off = strands === 1 ? 0 : ((k / (strands - 1)) - 0.5) * span * 0.80
+    const tx = S * 0.5 + off + (rand() - 0.5) * span * 0.07
     const d = drift * (0.5 + rand())
     // Strands end at different depths: a drape cut off level at the bottom is
     // a valance, and nothing in the reference has a hem.
@@ -885,7 +1106,13 @@ function paintHangingIvy(ctx, S, M, rand, { strands, leaves, drift }) {
       const side = i % 2 === 0 ? 1 : -1
       // Leaves get SMALLER down the strand: growth is at the top, and a strand
       // with uniform leaves reads as a garland from a party shop.
-      const len = span * (0.20 - t * 0.09) * (0.85 + rand() * 0.35)
+      //
+      // AND SMALLER OVERALL: 0.20 of the span down to 0.125. A drape card is
+      // 0.7-2.4 m tall in world, so a leaf at 0.20 span was 20-40 cm across —
+      // three or four times life size, which is exactly why the balustrade ivy
+      // read as a printed pattern rather than as a plant you could put your
+      // hand into. At 0.125 an ivy leaf on a 1.2 m drape is about 9 cm.
+      const len = span * (0.125 - t * 0.05) * (0.85 + rand() * 0.35)
       ctx.save()
       ctx.translate(px, py)
       // Leaves hang: rotated past horizontal so their tips point down.
@@ -1086,8 +1313,56 @@ const VERT_PROJECT = /* glsl */ `
   gl_Position = projectionMatrix * mvPosition;
 `
 
+/**
+ * 1.0 when the pass about to be drawn can actually turn a fractional alpha into
+ * a sample mask, 0.0 when it cannot. Shared, like the clock — see `a2cLive`.
+ *
+ * Starts at 0, which is the SAFE value: until something has measured the
+ * framebuffer, foliage is a hard cutout.
+ */
+const _a2c = { value: 0 }
+
+/**
+ * Is alpha-to-coverage meaningful in the target the renderer is pointed at?
+ *
+ * The honest answer is a property of the bound draw framebuffer, so that is
+ * what gets asked: `gl.SAMPLES`. Memoised on the render-target object, because
+ * the answer only changes when the target does and `getParameter` is a driver
+ * round trip we do not want once per instanced draw.
+ *
+ * `material.alphaToCoverage` being true is what makes three enable
+ * `SAMPLE_ALPHA_TO_COVERAGE` for these draws; this is the other half of the
+ * question, and both halves have to be true before the shader is allowed to
+ * emit anything but 0 or 1.
+ */
+let _a2cTarget = false          // false, not null: null is a real target value
+let _a2cSamples = 0
+
+function a2cLive(renderer) {
+  const rt = renderer.getRenderTarget ? renderer.getRenderTarget() : null
+  if (rt !== _a2cTarget) {
+    _a2cTarget = rt
+    let samples = 0
+    try {
+      const gl = renderer.getContext()
+      samples = gl.getParameter(gl.SAMPLES) | 0
+    } catch (e) {
+      samples = 0
+    }
+    _a2cSamples = samples
+  }
+  return _a2cSamples > 1
+}
+
+/** What the last `a2cLive` measured. Diagnostic, and the self test's evidence. */
+export function foliageCoverageState() {
+  return { samples: _a2cSamples, softCoverage: _a2c.value === 1 }
+}
+
 const FRAG_PARS = /* glsl */ `
 uniform vec3 uSunDirWorld;
+// 1 when the bound framebuffer is multisampled, 0 otherwise. See a2cLive.
+uniform float uFoliageA2C;
 // x strength, y power, z/w unused
 uniform vec4 uTranslucency;
 uniform vec3 uTranslucencyTint;
@@ -1109,6 +1384,44 @@ varying float vFoliageFade;
  * the sun, so their dot peaks when the sun is directly behind the leaf.
  * Multiplied by the leaf's own albedo, so a dark leaf transmits dark.
  */
+/**
+ * Interleaved-gradient noise, 0..1, from the pixel address.
+ *
+ * The stand-in for a coverage mask when there is no coverage mask. A screen-
+ * space threshold pattern is order-independent (every fragment decides for
+ * itself, with no reference to what was drawn before it), which is the same
+ * property that let this file put foliage in the opaque pass in the first
+ * place. Jorge Jimenez's constants: cheap, and it does not band.
+ */
+float scFoliageDither( vec2 p ) {
+  return fract( 52.9829189 * fract( dot( p, vec2( 0.06711056, 0.00583715 ) ) ) );
+}
+
+/**
+ * THE CUTOUT. Replaces three's "alphatest_fragment" wholesale.
+ *
+ * Line 1 is the guarantee: a real discard, unconditional, on every path. Nothing
+ * below it can put a soft rectangle on the screen, because everything the test
+ * rejects is already gone.
+ *
+ * What "uFoliageA2C" then buys is WHERE the cutoff sits and what alpha survives
+ * it. With no sample mask the cut is exactly "alphaTest" and the surviving alpha
+ * is exactly 1 — a hard, honest stencil. With a sample mask the cut drops one
+ * alpha-gradient width and the survivors ramp 0..1 across two, so the edge is
+ * antialiased symmetrically about "alphaTest" rather than eroded inward from it
+ * (which is what three's own chunk does, and it visibly thins grass).
+ *
+ * "fwidth" of a texture read is the per-pixel derivative of the alpha, so one
+ * gradient width IS one pixel of edge, at whatever distance and angle this
+ * fragment happens to be.
+ */
+float scAlphaCutout( float a, float threshold ) {
+  float w = max( fwidth( a ), 1e-4 );
+  float cut = threshold - w * uFoliageA2C;
+  if ( a < cut ) discard;
+  return mix( 1.0, clamp( ( a - cut ) / ( w * 2.0 ), 0.0, 1.0 ), uFoliageA2C );
+}
+
 vec3 scFoliageTranslucency( vec3 albedo ) {
   if ( uTranslucency.x <= 0.0 ) return vec3( 0.0 );
   vec3 L = normalize( ( viewMatrix * vec4( uSunDirWorld, 0.0 ) ).xyz );
@@ -1125,7 +1438,7 @@ vec3 scFoliageTranslucency( vec3 albedo ) {
  * survive an edit to this file inside a dev session — the same discipline
  * `render/patch.js` documents, and for the same reason.
  */
-const SHADER_VERSION = 1
+const SHADER_VERSION = 2
 
 /**
  * The foliage material: `MeshStandardMaterial`, patched.
@@ -1157,6 +1470,7 @@ function foliageMaterial(page, opts) {
         1 / Math.max(0.001, opts.fadeEnd - opts.fadeStart), 0),
     },
     uSunDirWorld: _sunDir,
+    uFoliageA2C: _a2c,
     uTranslucency: { value: new THREE.Vector4(opts.translucency, opts.translucencyPower, 0, 0) },
     uTranslucencyTint: { value: new THREE.Color(opts.translucencyTint) },
   }
@@ -1216,19 +1530,46 @@ function foliageMaterial(page, opts) {
 
     let fs = shader.fragmentShader
     fs = fs.replace('#include <common>', '#include <common>\n' + FRAG_PARS)
+    // OURS, not three's. three's chunk hands the ALPHA_TO_COVERAGE decision to a
+    // compile-time define and hopes the GL state agrees; scAlphaCutout discards
+    // first and asks second. See THE SAFETY ARGUMENT in the header.
+    fs = fs.replace(
+      '#include <alphatest_fragment>',
+      '  diffuseColor.a = scAlphaCutout( diffuseColor.a, alphaTest );'
+    )
     fs = fs.replace(
       '#include <opaque_fragment>',
       '  outgoingLight += scFoliageTranslucency( diffuseColor.rgb );\n' +
       '#include <opaque_fragment>\n' +
-      // The distance fade, written as COVERAGE rather than as blended alpha.
-      // With alphaToCoverage the hardware turns a fractional alpha into a
-      // sample mask, so this is a real dissolve that needs no sorting and no
-      // blend state. Applied AFTER the alpha test on purpose: multiplying it in
-      // before would push every texel under the 0.5 threshold at once and the
-      // whole plant would vanish in a single frame.
-      '  gl_FragColor.a *= vFoliageFade;'
+      // The distance fade. Applied AFTER the alpha test on purpose: multiplying
+      // it in before would push every texel under the 0.5 threshold at once and
+      // the whole plant would vanish in a single frame.
+      //
+      // Two paths, for the same reason the cutout has two. With a sample mask
+      // this is a real dissolve that needs no sorting and no blend state.
+      // Without one, a fractional alpha here would be exactly the glass bug
+      // arriving by the back door — 40% opacity on a plant at 80 m is still a
+      // pane — so the fade becomes a dithered discard instead. Both dissolve;
+      // only one of them can smear.
+      '  if ( uFoliageA2C > 0.5 ) {\n' +
+      '    gl_FragColor.a *= vFoliageFade;\n' +
+      '  } else if ( scFoliageDither( gl_FragCoord.xy ) > vFoliageFade ) {\n' +
+      '    discard;\n' +
+      '  }'
     )
     shader.fragmentShader = fs
+  }
+
+  /**
+   * Measure the target, once per draw, right before the draw.
+   *
+   * `material.onBeforeRender` rather than `mesh.onBeforeRender`: kit.js already
+   * owns the mesh hook (it drives the wind clock from there), and quietly
+   * stealing it would stop every plant in the world swaying. The renderer calls
+   * both, and this one is unclaimed.
+   */
+  mat.onBeforeRender = (renderer) => {
+    _a2c.value = a2cLive(renderer) ? 1 : 0
   }
 
   mat.customProgramCacheKey = () => `sc-foliage-${SHADER_VERSION}`
@@ -1240,6 +1581,8 @@ function foliageMaterial(page, opts) {
 
 const _m4 = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
+const _qLean = new THREE.Quaternion()
+const _leanAxis = new THREE.Vector3()
 const _scale = new THREE.Vector3()
 const _pos = new THREE.Vector3()
 const _AXIS_Y = new THREE.Vector3(0, 1, 0)
@@ -1345,8 +1688,40 @@ export class FoliageField {
 
     const page = this._pages[opts.page ?? 0]
     if (!page) throw new Error(`FoliageField: no atlas page ${opts.page}`)
-    _pos.set(x, y, z)
+
+    /**
+     * THE LEAN, and the sink that pays for it.
+     *
+     * Every card standing exactly plumb is the single loudest tell that a bed
+     * was stamped rather than grown: a hundred perfectly vertical rectangles
+     * whose tops all line up, on a deck where nothing else in the frame is
+     * plumb. A few degrees of per-instance tilt about a random horizontal axis
+     * breaks that, and it costs one quaternion multiply at load.
+     *
+     * Tilting about the card's BASE lifts its upwind bottom corner off the
+     * surface by half its width times sin(lean) — which is a plant hovering
+     * over the floor, a worse artefact than the one being fixed. So the
+     * instance sinks by exactly that lift. The base edge then cuts INTO the
+     * surface instead of resting on it, which is both provably not floating and
+     * what makes a tuft read as growing out of the stone rather than standing
+     * on it. The cap keeps the sink well under the ledge guard's tolerance for
+     * every species this file ships.
+     *
+     * Drapes get no lean: a hanging thing hangs plumb, and its top edge has to
+     * stay on the lip it grips.
+     */
+    const leanMax = opts.lean ?? sp.lean ?? 0
+    let sink = 0
     _q.setFromAxisAngle(_AXIS_Y, yaw)
+    if (leanMax > 0) {
+      const lean = (rand() * 2 - 1) * leanMax
+      const axis = rand() * Math.PI * 2
+      _leanAxis.set(Math.cos(axis), 0, Math.sin(axis))
+      _qLean.setFromAxisAngle(_leanAxis, lean)
+      _q.multiply(_qLean)
+      sink = Math.min(0.04, w * 0.5 * Math.abs(Math.sin(lean)))
+    }
+    _pos.set(x, y - sink, z)
     // Non-uniform scale is what lets one square atlas cell serve a 2.4 m ivy
     // drape and a 0.15 m tuft: the CARD carries the aspect, the ART stays
     // square. three's instancing normal path divides by the per-axis squared
@@ -1431,6 +1806,7 @@ export class FoliageField {
        * flag; this is that documented opt-out, used for its exact purpose.
        */
       mesh.userData.scNoPrepass = true
+      if (globalThis.__SC_NO_FOLIAGE) mesh.visible = false
       // InstancedMesh derives its bounding sphere from the geometry's box and
       // every instance matrix, so this is the real extent of the planted area
       // and per-field frustum culling actually means something.
@@ -1932,6 +2308,7 @@ export function foliageSelfTest(opts = {}) {
 
   const first = coverage[0]
   const drift = coverage.reduce((mx, c) => Math.max(mx, Math.abs(c - first)), 0)
+  const cellFill = cellExtents(page.mipmaps[0].data, ATLAS_SIZE, ATLAS_COLS, ATLAS_ROWS)
 
   const checks = [
     ['atlas has a full mip chain to 1x1',
@@ -1947,6 +2324,23 @@ export function foliageSelfTest(opts = {}) {
       fields.every((f) => f.group.children.every((c) => c.userData.scNoPrepass === true))],
     ['nothing foliage emits is transparent-blended',
       fields.every((f) => f.group.children.every((c) => c.material.transparent === false))],
+    // The invisible-glass guard, as a check rather than as a comment. The
+    // fragment path has to contain an unconditional discard and must never be
+    // three's own chunk, whose softening is gated on a compile-time define this
+    // file cannot verify against the actual framebuffer.
+    ['the cutout keeps an unconditional discard',
+      /\bdiscard\b/.test(FRAG_PARS) && /scAlphaCutout/.test(FRAG_PARS)],
+    ['soft coverage is gated on a measured sample count',
+      /uFoliageA2C/.test(FRAG_PARS)
+      && fields.every((f) => f.group.children.every(
+        (c) => typeof c.material.onBeforeRender === 'function'
+          && c.material.userData.foliageUniforms.uFoliageA2C === _a2c))],
+    // fitCell's contract: what a caller asks for is what the player sees.
+    // The ceiling is (CELL - 2 * CELL_MARGIN) / CELL = 0.84, which is what a
+    // cell fitted on its height measures; 0.6 is the floor below which a card
+    // is once again mostly air and the caller's `height` is once again a lie.
+    ['every atlas cell fills its card',
+      cellFill.every((c) => c.height >= 0.6 && c.width >= 0.4)],
   ]
 
   const result = {
@@ -1956,6 +2350,8 @@ export function foliageSelfTest(opts = {}) {
       mipLevels: page.mipmaps.length,
       coverage,
       coverageDrift: +drift.toFixed(4),
+      /** How much of each cell the plant in it actually occupies. See fitCell. */
+      cellFill,
       // Time for THIS call. 0 means the atlas was already cached by an earlier
       // field, which is the normal case and is the point of the cache — the
       // paint cost is paid once for the whole world.

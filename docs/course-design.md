@@ -106,6 +106,51 @@ rather than the only content.
 - Falling stays survivable — the cloud deck is below everything, so a fall
   returns you to the last checkpoint rather than ending anything.
 
+## Two envelopes: NORMAL and FUN
+
+Ethan, 2026-07-25: *"the hook is a little bit op... because I can just fly,
+this little parkour course [is] pretty boring."*
+
+The resolution is **modes, not a nerf**. `BASE_TUNING` in `src/player.js` is FUN
+verbatim; `MODES.FUN.tuning` is literally `{}`, so FUN is provably today's
+numbers with no second copy to drift. NORMAL is an overlay on top.
+
+**Everything in the table above is unchanged in both modes.** Sprint 11, dash
+21, jump 7.3 m, double jump 13.7 m, and — importantly — **`grappleRange` stays
+34 m in both**.
+
+Range is deliberately *not* a difficulty knob. This document makes it the
+connectivity graph: placing a lantern is what makes a crossing exist. Shortening
+it in NORMAL would silently delete authored routes rather than make them harder,
+and would break the "every checkpoint reachable from the previous one" rule in
+ways nobody would notice until a player was stuck.
+
+What NORMAL removes is **repetition, not reach**:
+
+| | FUN | NORMAL |
+|---|---|---|
+| `grappleAirChain` — hooks per contact | ∞ | **1** |
+| `grappleRefreshCharges` — charges back on hook | 1 | **0** |
+| `grappleGravity` — gravity fraction during pull | 0.28 | **0.62** |
+| `grappleReleaseBoost` | 1.14 | **1.0** |
+| `grappleCooldown` | 0.7 s | **1.4 s** |
+
+Ground, wall-run **and vertical climb** all restore the chain budget — the cuff
+is paid for with contact. Measured, two anchors alone in open sky with a bot
+alternating between them:
+
+| | FUN | NORMAL |
+|---|---|---|
+| hooks before falling | 42 | **1** |
+| time airborne | 60 s (still flying when the test timed out) | **12.8 s, then fell** |
+
+Indefinite hook-chaining in NORMAL is not "harder" — it is arithmetically
+impossible, because the budget only refills on contact.
+
+**Design consequence:** the course must be completable in NORMAL. FUN is a
+superset — anything reachable in NORMAL is reachable in FUN, never the reverse.
+Build and verify routes against NORMAL, and let FUN be the playground.
+
 ## What "bigger" means concretely
 
 The current course is ~230 m along a single straight +X axis, seven

@@ -128,14 +128,10 @@
     border-color: var(--brass-hi);
     box-shadow: 0 0 8px rgba(217, 164, 65, .75);
   }
-  #splits {
-    font-size: 11px;
-    opacity: .6;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    font-variant-numeric: tabular-nums;
-  }
-  #hud.finished #splits { opacity: .95; color: var(--brass); }
+  /* Which rule set this run is being played under. Deliberately the quietest
+     thing in the cluster — you need it once, when you wonder why the cuff
+     behaved the way it did, and never again. */
+  #modetag { margin-top: 2px; }
 
   /* --- top-right: bearing rose ----------------------------------------- */
   /* The precise instrument. The edge chevron is what you catch at speed; this
@@ -492,9 +488,16 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 36px;
+    /* `safe` keeps the overflow case honest: plain `center` on a flex column
+       clips BOTH ends when the content is taller than the box, so a short
+       window loses the title at the top and the start button at the bottom with
+       no way to scroll to either. With safe centring plus a scroll, a laptop at
+       1280x720 degrades to a scrollable menu instead of an unusable one. */
+    justify-content: safe center;
+    overflow-y: auto;
+    gap: clamp(16px, 2.9vh, 30px);
     text-align: center;
-    padding: 40px 24px 72px;
+    padding: 28px 24px 56px;
     /* Warm rather than blue-black, so the menu belongs to the same world as
        the brass-and-porcelain game behind it, and light enough that the
        blurred skyline still reads as a place. */
@@ -509,7 +512,7 @@
 
   .title { display: flex; flex-direction: column; align-items: center; }
   #overlay h1 {
-    font-size: clamp(34px, 6.4vw, 76px);
+    font-size: clamp(32px, 5.4vw, 68px);
     font-weight: 600;
     letter-spacing: .22em;
     text-transform: uppercase;
@@ -527,7 +530,7 @@
     text-transform: uppercase;
     color: var(--brass);
     opacity: .75;
-    margin-top: 18px;
+    margin-top: 13px;
     text-indent: .5em;
   }
   .rule {
@@ -536,7 +539,7 @@
     justify-content: center;
     gap: 14px;
     width: min(340px, 60vw);
-    margin-top: 20px;
+    margin-top: 14px;
   }
   .rule span {
     flex: 1;
@@ -549,7 +552,7 @@
   #keys {
     display: grid;
     grid-template-columns: max-content 1fr;
-    gap: 10px 26px;
+    gap: 7px 26px;
     font-size: 13px;
     text-align: left;
     max-width: 500px;
@@ -568,11 +571,101 @@
     text-transform: uppercase;
     color: var(--brass);
     opacity: .5;
-    margin-top: 8px;
+    margin-top: 6px;
     border-top: 1px solid rgba(217, 164, 65, .18);
-    padding-top: 10px;
+    padding-top: 8px;
   }
   #keys .sec:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
+
+  /* On a short window the key reference is what has to give, not the choice
+     the player came here to make. Pairing it two-across roughly halves its
+     height and keeps the selector and the start button above the fold on a
+     1280x720 laptop — the smallest screen this is likely to be played on. */
+  @media (max-height: 880px) {
+    #overlay { gap: clamp(12px, 2.1vh, 22px); padding: 20px 24px 46px; }
+    #overlay h1 { font-size: clamp(28px, 4.4vw, 54px); }
+    #overlay .tag { margin-top: 10px; }
+    .rule { margin-top: 10px; }
+    #keys {
+      grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+      max-width: min(960px, 94vw);
+      gap: 6px 22px;
+      font-size: 12px;
+    }
+    /* The section rules still run the full width, so the grouping survives. */
+    #keys .sec { margin-top: 4px; padding-top: 6px; }
+    #esc { display: none; }        /* the ESC line is repeated in the table */
+  }
+
+  /* --- difficulty selector --------------------------------------------- */
+  /* Two brass cards, chosen before the run. The distinction they carry is the
+     one Ethan drew after playing: the cuff can be a flight system or it can be
+     a tool, and both are legitimate games. Neither card is framed as the
+     lesser one — FUN is not "easy mode", it is the reason the movement feels
+     the way it does, and the copy says so. */
+  #modes {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .modebtn {
+    pointer-events: auto;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    width: 268px;
+    padding: 12px 17px 13px;
+    border: 1px solid rgba(217, 164, 65, .22);
+    border-radius: 2px;
+    background: rgba(14, 11, 8, .34);
+    /* A machined edge along the top, so an unpicked card still reads as a plate
+       of the same alloy as the instruments rather than as a web button. */
+    box-shadow: inset 0 1px 0 rgba(247, 226, 171, .1);
+    transition: border-color .18s, background .18s, box-shadow .18s, opacity .18s;
+    opacity: .62;
+  }
+  .modebtn:hover { opacity: .88; border-color: rgba(217, 164, 65, .45); }
+  .modebtn:focus-visible { outline: 1px solid var(--brass-hi); outline-offset: 2px; }
+  .modebtn.on {
+    opacity: 1;
+    border-color: rgba(217, 164, 65, .8);
+    background: rgba(58, 40, 16, .4);
+    box-shadow: inset 0 1px 0 rgba(247, 226, 171, .3), 0 0 18px rgba(217, 164, 65, .22);
+  }
+  .modebtn .mrow { display: flex; align-items: center; gap: 9px; }
+  /* The lamp is the same panel lamp as the DASH / AIR / HOOK chips, on purpose:
+     lit means live, in both places. */
+  .modebtn .mlamp {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex: none;
+    background: rgba(232, 211, 173, .28);
+    box-shadow: inset 0 0 2px rgba(0, 0, 0, .8);
+    transition: background .18s, box-shadow .18s;
+  }
+  .modebtn.on .mlamp {
+    background: radial-gradient(circle at 35% 32%, #fff6e2, var(--brass) 62%, var(--brass-lo));
+    box-shadow: 0 0 9px rgba(247, 226, 171, .95);
+  }
+  .modebtn .mname {
+    font-size: 13px;
+    letter-spacing: .28em;
+    text-transform: uppercase;
+    color: var(--cream);
+  }
+  .modebtn.on .mname { color: var(--brass-hi); }
+  .modebtn .mdesc {
+    display: block;
+    margin-top: 7px;
+    font-size: 11px;
+    line-height: 1.5;
+    letter-spacing: .02em;
+    opacity: .66;
+  }
 
   #cta {
     font-size: 13px;
@@ -580,7 +673,7 @@
     text-transform: uppercase;
     color: var(--cream);
     text-indent: .34em;
-    padding: 13px 30px;
+    padding: 11px 28px;
     border: 1px solid rgba(217, 164, 65, .45);
     border-radius: 2px;
     animation: pulse 2.4s ease-in-out infinite;
@@ -605,7 +698,8 @@
     #navpulse, #cta, #toast.hold #sealspin, #toast.split.on, #toast.hold.on {
       animation: none !important;
     }
-    #reticle, #speedfill, .chip, #verb, #toast, #compass, #alt, #nav, #cppips b {
+    #reticle, #speedfill, .chip, #verb, #toast, #compass, #alt, #nav, #cppips b,
+    .modebtn, .modebtn .mlamp {
       transition: none !important;
     }
   }
@@ -633,7 +727,7 @@
     <div id="timer">0.00</div>
     <div class="hair"></div>
     <div id="cppips" class="empty"></div>
-    <div id="splits">checkpoint 0 / 0</div>
+    <div id="modetag" class="cap">normal</div>
   </div>
 
   <!-- bearing rose ------------------------------------------------------ -->
@@ -759,6 +853,20 @@
     <b>CHEVRON</b><span>the brass arrow on the screen edge points at your next drop</span>
     <b>R</b><span>restart from the last checkpoint</span>
     <b>ESC</b><span>release the cursor</span>
+  </div>
+  <div id="modes">
+    <button type="button" class="modebtn" id="mode-normal" data-mode="normal" aria-pressed="true">
+      <span class="mrow"><i class="mlamp"></i><span class="mname">Normal</span></span>
+      <span class="mdesc">The cuff is a tool. One hook between landings, gravity still has
+        you through the pull, and it puts you down where it took you. The course
+        is the parkour again.</span>
+    </button>
+    <button type="button" class="modebtn" id="mode-fun" data-mode="fun" aria-pressed="false">
+      <span class="mrow"><i class="mlamp"></i><span class="mname">Fun</span></span>
+      <span class="mdesc">The cuff is a flight system. Chain hooks forever, every latch hands
+        back your dash and your double jump, and the skyline is open. Nothing is
+        toned down.</span>
+    </button>
   </div>
   <div id="cta">click to run</div>
   <div id="esc">escape releases the cursor at any time</div>

@@ -13,7 +13,17 @@ import * as THREE from 'three'
  * the entire reason this genre feels good.
  */
 
-export const TUNING = {
+/**
+ * The base tuning — this is FUN mode, verbatim, and it is the reference the
+ * whole course is built against (docs/course-design.md).
+ *
+ * Do not edit a number here to make an obstacle harder. That is a standing
+ * decision (docs/intent.md): "the design response to 'this trivialises the
+ * course' is build a bigger course, never reduce the ability." Difficulty
+ * modes are the sanctioned alternative, and they are expressed as an *overlay*
+ * on top of this table (see `MODES`), never as an edit to it.
+ */
+const BASE_TUNING = {
   radius: 0.34,
   standHeight: 1.75,
   slideHeight: 0.95,
@@ -194,8 +204,91 @@ export const TUNING = {
   // Upward pop the moment the line bites, so the pull starts from the air
   // rather than dragging the capsule along the roof it was just standing on.
   grappleLaunch: 2.6,
+  // Fraction of gravity that still acts while the line is pulling. Below 1 the
+  // pull arcs rather than running on rails; at 0.28 the arc is barely there,
+  // which is most of why the cuff currently reads as a flight system.
+  grappleGravity: 0.28,
+  // How many times the cuff may fire between two touches of ground or wall.
+  // Infinite here on purpose: chaining hooks across open air is the FUN-mode
+  // fantasy, and it is exactly the thing NORMAL mode takes away.
+  grappleAirChain: Infinity,
+  // Whether latching refills the dash charge and the air jump. Combined with an
+  // unlimited chain this is the second half of free flight — every hook hands
+  // back every other airborne verb, so the player never runs out of anything.
+  grappleRefreshCharges: 1,
 
   maxSpeed: 34,
+}
+
+/**
+ * Difficulty modes.
+ *
+ * FUN is the empty overlay by construction, so it is *provably* today's
+ * tuning — there is no second copy of the numbers to drift out of sync.
+ *
+ * NORMAL changes only how the grapple behaves, and deliberately leaves
+ * `grappleRange` at 34. Range is not a difficulty knob here, it is the level's
+ * connectivity graph (docs/course-design.md: "an anchor defines a 34 m sphere
+ * of reachable space... placing a brass lantern is what makes a route exist").
+ * Shortening it would delete authored crossings rather than make them harder,
+ * which is the one thing a difficulty mode must not do. `grapplePull` and
+ * `grappleMaxTime` stay put for the same reason: every anchor the level places
+ * must still be arrived at.
+ *
+ * What NORMAL takes away is *repetition*. One hook per launch, no free charges
+ * back, real gravity through the pull, no exit multiplier, and a cooldown long
+ * enough that you cannot simply turn round and re-hook what you just left. The
+ * cuff crosses the gap the designer built it for and then puts you back on your
+ * feet — which is the difference between a traversal tool and a flight system.
+ * No verb is removed in either mode.
+ */
+export const MODES = {
+  normal: {
+    label: 'Normal',
+    tuning: {
+      grappleGravity: 0.62,
+      grappleAirChain: 1,
+      grappleRefreshCharges: 0,
+      grappleReleaseBoost: 1.0,
+      grappleCooldown: 1.4,
+    },
+  },
+  fun: {
+    label: 'Fun',
+    tuning: {},
+  },
+}
+
+export const DEFAULT_MODE = 'normal'
+
+/** The live tuning table. Mutated in place by `setMode` — see the note there. */
+export const TUNING = { ...BASE_TUNING }
+
+let currentMode = DEFAULT_MODE
+
+/**
+ * Switch difficulty.
+ *
+ * `TUNING` is mutated in place rather than replaced because half the codebase
+ * holds a live reference to it (camera.js, hud.js, fx/) and captured it at
+ * module-eval time. Rebinding the export would leave every one of those readers
+ * pointing at the previous mode's numbers — a bug that would show up as the
+ * camera and the speed bar disagreeing with the controller, which is far harder
+ * to spot than it is to avoid. Assigning the full base first means an overlay
+ * key that one mode sets and another does not can never leak across a switch.
+ *
+ * The caller is responsible for resetting the run: a mode change mid-flight
+ * would otherwise leave a player mid-grapple under rules that no longer apply.
+ */
+export function setMode(name) {
+  const mode = MODES[name] ? name : DEFAULT_MODE
+  Object.assign(TUNING, BASE_TUNING, MODES[mode].tuning)
+  currentMode = mode
+  return mode
+}
+
+export function getMode() {
+  return currentMode
 }
 
 const UP = new THREE.Vector3(0, 1, 0)
@@ -226,6 +319,14 @@ export class Player {
     this.grappleArm = 0
     this.grappleCooldown = 0
     this.grappleAnchor = new THREE.Vector3()
+    /**
+     * Hooks left before the courier has to touch ground or wall again.
+     *
+     * `Infinity` in FUN, so the counter exists in both modes and the branch
+     * that reads it is the same code path in both — a mode that runs different
+     * code is a mode that gets a different bug.
+     */
+    this.airChainLeft = TUNING.grappleAirChain
     /** Populated by the level: brass anchor points the cuff can latch onto. */
     this.anchors = []
     /** The anchor currently in range and on-axis, or null. Read by the HUD. */
@@ -364,6 +465,8 @@ export class Player {
     this.dashTimer = 0
     this.climbTimer = 0
     this.airJumpsLeft = TUNING.airJumps
+    this.airChainLeft = TUNING.grappleAirChain
+    this.grappleCooldown = 0
     this.dashReady = true
     this.coyote = 0
     this.jumpBuffered = 0
@@ -550,8 +653,10 @@ export class Player {
       const dist = this._toAnchor.length()
       if (dist > 0.001) this._toAnchor.divideScalar(dist)
       // Gravity is reduced but not cancelled, so a long grapple still arcs.
-      // A perfectly straight pull reads as being on rails.
-      vel.y -= T.gravity * 0.28 * dt
+      // A perfectly straight pull reads as being on rails. How much survives is
+      // a mode decision (`grappleGravity`): near-zero is flight, most of it is
+      // a swing you have to aim.
+      vel.y -= T.gravity * T.grappleGravity * dt
       vel.addScaledVector(this._toAnchor, T.grapplePull * dt)
       return
     }
@@ -647,7 +752,11 @@ export class Player {
     const cp = Math.cos(this._pitch)
     this._look.set(-Math.sin(this._yaw) * cp, Math.sin(this._pitch), -Math.cos(this._yaw) * cp)
 
-    this.aimedAnchor = (this.grappleCooldown <= 0 && !this.grappling)
+    // The chain budget gates *aiming*, not just firing, so the reticle and the
+    // HOOK lamp go dark the moment the cuff is spent. An ability that silently
+    // does nothing is indistinguishable from one that is broken — that is a
+    // lesson this HUD already paid for once with the dash charge.
+    this.aimedAnchor = (this.grappleCooldown <= 0 && !this.grappling && this.airChainLeft > 0)
       ? this._findAnchor()
       : null
 
@@ -669,8 +778,12 @@ export class Player {
       this.grappleArm = T.grappleArmTime
       this.grappleAnchor.copy(this.aimedAnchor)
       this.grappleCooldown = T.grappleCooldown
-      this.dashReady = true          // latching on refreshes the dash
-      this.airJumpsLeft = T.airJumps
+      // Spend a link of the chain. In FUN this is Infinity and stays Infinity.
+      this.airChainLeft--
+      if (T.grappleRefreshCharges) {
+        this.dashReady = true        // latching on refreshes the dash
+        this.airJumpsLeft = T.airJumps
+      }
       // The cuff yanks you off the roof. Without this the capsule stayed in
       // ground contact, took `_groundMove` instead of the pull, and the shot
       // read as a dead button.
@@ -696,10 +809,15 @@ export class Player {
     if (this.grounded) this.climbTimer = 0
 
     // Landing and attaching to a wall both restore the dash, so a good line
-    // gets to use it repeatedly and a flailing one does not.
+    // gets to use it repeatedly and a flailing one does not. They restore the
+    // grapple's chain budget on the same rule. That
+    // is the whole shape of NORMAL mode: the cuff is not rationed, it is *paid
+    // for with contact*. Cross the gap, land it, and the cuff is yours again —
+    // so the parkour between the hooks is the thing you have to actually do.
     if (this.grounded || this.wallRunning) {
       this.dashReady = true
       this.airJumpsLeft = T.airJumps
+      this.airChainLeft = T.grappleAirChain
     }
 
     if (input.dashPressed && this.dashReady && this.dashCooldown <= 0 && this.dashTimer <= 0) {
@@ -1080,6 +1198,11 @@ export class Player {
     this.wallSide = 0
     this.grounded = false
     this.dashReady = true
+    // A vertical wall-run is contact, so it pays for the cuff like a landing
+    // does. Without this, a grapple into a wall-climb — the exact combination
+    // docs/course-design.md asks the middle of the course to demand — would
+    // dead-end in NORMAL for no reason the player could see.
+    this.airChainLeft = TUNING.grappleAirChain
     this.events.push({ type: 'climb', speed: this._preSpeed })
     return true
   }

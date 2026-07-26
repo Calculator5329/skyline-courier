@@ -41,7 +41,7 @@ export class Hud {
   constructor() {
     this.root = $('hud')
     this.timer = $('timer')
-    this.splits = $('splits')
+    this.modetag = $('modetag')
     this.pips = $('cppips')
     this.speedval = $('speedval')
     this.speednum = $('speednum')
@@ -75,7 +75,6 @@ export class Hud {
     this._toastUntil = 0
     this._lastVerb = ''
     this._lastTime = ''
-    this._lastSplits = ''
     this._lastKmh = -1
     this._lastFrac = -1
     this._hot = null
@@ -84,7 +83,6 @@ export class Hud {
     this._hookReady = null
     this._pipCount = -1
     this._pipsLit = 0
-    this._finished = null
 
     // nav state
     this._camera = null
@@ -135,6 +133,23 @@ export class Hud {
     if (this._camera && this._level) this.compass.classList.add('live')
   }
 
+  /**
+   * Name the difficulty in the run register, and mark the picked card on the
+   * start overlay.
+   *
+   * Written once per mode change, never per frame — the tag is a fact about the
+   * run, not telemetry. It sits under the timer's hairline in the same engraved
+   * caption style as ELEVATION and NEXT DROP, so it reads as a stamp on the
+   * instrument rather than as a fourth number competing with the timer.
+   */
+  setMode(name, modes) {
+    if (this.modetag) this.modetag.textContent = (modes?.[name]?.label || name)
+    for (const btn of document.querySelectorAll('.modebtn')) {
+      btn.classList.toggle('on', btn.dataset.mode === name)
+      btn.setAttribute('aria-pressed', btn.dataset.mode === name ? 'true' : 'false')
+    }
+  }
+
   setOverlay(visible) {
     this.overlay.classList.toggle('hidden', !visible)
   }
@@ -143,14 +158,9 @@ export class Hud {
     const t = formatTime(time)
     if (t !== this._lastTime) { this._lastTime = t; this.timer.textContent = t }
 
-    const splits = finished ? 'route complete' : `checkpoint ${checkpointsHit} / ${checkpointsTotal}`
-    if (splits !== this._lastSplits) { this._lastSplits = splits; this.splits.textContent = splits }
-
-    if (finished !== this._finished) {
-      this._finished = finished
-      this.root.classList.toggle('finished', !!finished)
-    }
-
+    // The finish is announced by the held toast, which is an event the player
+    // cannot miss. The run register used to *also* recolour itself, but the
+    // only thing it recoloured was the checkpoint counter, and that is gone.
     this._updatePips(checkpointsHit, checkpointsTotal)
 
     // km/h reads more legibly than m/s at a glance, and makes the difference
