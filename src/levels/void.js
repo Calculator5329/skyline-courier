@@ -1,6 +1,9 @@
 import * as THREE from 'three'
 import { Level, Archipelago } from '../level.js'
 import { trackedKit } from '../kit.js'
+import { greatWall, runeSlab, sigilRing, monolith, finishVoidKit, voidColors } from '../voidkit.js'
+import { CrystalField } from '../crystals.js'
+import { getTheme } from '../theme.js'
 
 /**
  * THE VOID — theme 2's course.
@@ -70,11 +73,45 @@ export function buildVoidCourse(collision) {
   L.killY = -140
 
   const nodes = new Map()
+  // Stable per-island seed. Placement order must not decide what an island
+  // looks like, or inserting one changes every one after it.
+  const hash = (str) => {
+    let h = 2166136261
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) }
+    return h >>> 0
+  }
+  const colors = voidColors({}, (() => { try { return getTheme() } catch { return null } })())
+  // One field for the whole course: crystals are instanced per (shape, LOD),
+  // so putting every cluster through one field is what keeps 300 of them at a
+  // dozen draw calls instead of 300.
+  //
+  // INTENSITY IS RE-CALIBRATED HERE, and it had to be. `crystals.js` ships
+  // 3.2, measured against a scratch scene that was mostly empty sky — so the
+  // auto-exposure meter sat about a stop and a half hot and 3.2 looked right.
+  // Dropped into a course full of rock the meter closes down, every shard
+  // clipped to white, and the two families stopped being violet and blue at
+  // all. Its author flagged exactly this. 1.35 keeps the cores bright enough
+  // to clear the 0.78 bloom threshold while the BODY of the shard still
+  // carries its hue, which is the whole point of having two families.
+  const crystals = new CrystalField({ seed: 0x5EED, intensity: 1.35 })
 
   /** A landing surface: collider and graph node from ONE declaration. */
   const pad = (id, x, y, z, w, d = w) => {
     A.node(id, x, y, z, w, d)
-    L.solid(x, y - 0.6, z, w, 1.2, d, 'stone')
+    // A CARVED RUNE SLAB, not a box. `runeSlab` puts its walkable top at `y`,
+    // which is exactly this helper's contract, and it emits its own collider
+    // for every surface it draws.
+    //
+    // The glowing inlay is not decoration: art-direction-void.md §6 makes it
+    // the readability channel — "a glowing rune means you may stand here" —
+    // and it is the ONLY such channel a near-black level has. So every landing
+    // in this course gets one, and nothing that is not a landing ever does.
+    runeSlab(L, x, y, z, {
+      sizeX: w, sizeZ: d, detail: 2, seed: hash(id),
+      // Bigger landings get a proportionally quieter rune, or the hero islands
+      // read as light sources rather than as floors.
+      runeIntensity: 2.4 * Math.min(1, 7 / Math.max(4, w)) + 1.1,
+    })
     const n = { id, x, y, z, w, d }
     nodes.set(id, n)
     return n
@@ -228,7 +265,20 @@ export function buildVoidCourse(collision) {
     // the flight a wall-run face and the frame a vertical (§5). Placeholder
     // slab until src/voidkit.js lands.
     if (i % 2 === 0) {
-      L.solid(Math.cos(ang) * (r + 15), y + 10, Math.sin(ang) * (r + 15), 3.5, 42, 26, 'stone')
+      const wx = Math.cos(ang) * (r + 16), wz = Math.sin(ang) * (r + 16)
+      // `greatWall` only runs along X or Z, so pick whichever is more nearly
+      // tangential to the spiral here — that is the face the player travels
+      // alongside, and therefore the one they can wall-run.
+      const axis = Math.abs(Math.cos(ang)) > Math.abs(Math.sin(ang)) ? 'z' : 'x'
+      greatWall(L, wx, y - 14, wz, {
+        height: 46, length: 40, thickness: 4, axis, detail: 2, seed: hash(`wall-${i}`),
+      })
+      // The sigil ring rides the wall face. §4.1 calls it the most memorable
+      // element after the crystals, and it doubles as a landmark for reading
+      // which way is on.
+      if (i % 4 === 0) {
+        sigilRing(L, wx, y + 6, wz, { radius: 7.5, axis, color: colors.sigil, detail: 2 })
+      }
     }
   }
 
@@ -290,6 +340,61 @@ export function buildVoidCourse(collision) {
   L.finish = new THREE.Vector3(spire.x, spire.y + 1.0, spire.z)
   // Tall and narrow: the one thing visible from the floor of the shaft.
   L.beaconAt = { x: spire.x, y: spire.y + 8, z: spire.z, height: 210, radius: 4.0 }
+
+  // ============================================================== CRYSTALS
+  //
+  // §4.3: two families. HERO shards are architecture — big enough to frame a
+  // vantage — and go beside the landings and at the foot of the walls, where
+  // they light the thing the player is aiming at. SCATTER shards go under the
+  // slab lips and along the ruin edges, and their job is continuity: they are
+  // what stops the world reading as a set of staged objects with nothing
+  // between them.
+  //
+  // They are also the LIGHT in this theme (§1), so placement is a lighting
+  // decision, not a dressing one — every landing gets one within a few metres.
+  const CRYSTAL = [colors.rune, colors.sigil, colors.cool]
+  let ci = 0
+  for (const n of nodes.values()) {
+    const a0 = hash(n.id) / 0xffffffff * Math.PI * 2
+    const half = n.w / 2
+    // Hero cluster just off the rim, never ON the landing: a crystal you can
+    // trip over is a movement bug, and §6 keeps the standing surface clean.
+    crystals.add('hero', n.x + Math.cos(a0) * (half + 2.6), n.y - 1.2,
+      n.z + Math.sin(a0) * (half + 2.6), {
+        color: CRYSTAL[ci % CRYSTAL.length], detail: 2, size: 0.34 + (hash(n.id) % 7) * 0.05,
+      })
+    // Scatter under the lip, hanging into the void the way §4.2 describes the
+    // undersides.
+    for (let k = 0; k < 5; k++) {
+      const a1 = a0 + 1.35 + k * 1.31
+      // OUTSIDE the rim and well under the lip. A shard that pokes through the
+      // landing surface is a trip hazard the collider does not know about, and
+      // §6 keeps the standing surface clean so the rune stays the only thing
+      // saying "stand here".
+      crystals.add('scatter', n.x + Math.cos(a1) * half * 1.02, n.y - 2.6,
+        n.z + Math.sin(a1) * half * 1.02, {
+          color: CRYSTAL[(ci + k) % CRYSTAL.length], detail: k < 2 ? 2 : 1,
+          size: 0.5 + k * 0.09,
+        })
+    }
+    ci++
+  }
+
+  // Broken obelisks for mid-ground silhouette. Decor by placement — they stand
+  // off the route, so they read as ruin rather than as something to land on.
+  for (let i = 0; i < 9; i++) {
+    const a2 = i * 2.1
+    const rr = 34 + (i % 4) * 16
+    monolith(L, Math.cos(a2) * rr, 6 + i * 22, Math.sin(a2) * rr, {
+      height: 11 + (i % 3) * 4, detail: 1, seed: hash(`mono-${i}`),
+    })
+  }
+
+  L.group.add(crystals.build())
+  // Flushes the glow channel into instanced meshes, and asserts every rune it
+  // drew is over something standable.
+  const glow = finishVoidKit(L)
+  void glow
 
   const spineIds = ['plaza']
   for (let i = 3; i < HEROES; i += 4) spineIds.push(heroIds[i])
