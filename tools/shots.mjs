@@ -189,4 +189,52 @@ export const SHOTS = {
   },
 }
 
+/**
+ * The VOID shot table — theme 2's course, which is a different level entirely
+ * and therefore a different set of coordinates. `src/levels/void.js` is a
+ * vertical spiral: a 16 m base pad at the origin, 58 pads of 4.5 m rising
+ * 1.4 m each on a spiral of radius ~7-8.5, summit at y ~83.
+ *
+ * These are deliberately framed to test the ART DIRECTION rather than to be
+ * pretty: art-direction-void.md's acceptance table (§2) is measured off them,
+ * and §5 says the hero vantages must LOOK UP, because the vanishing point of
+ * this level sits above the frame.
+ */
+export const VOID_SHOTS = {
+  // On the base pad at the bottom of the shaft, looking straight up the climb.
+  // This is the establishing shot and the one that has to sell the scale.
+  ascent: {
+    pos: [0, DECK, 0],
+    yaw: 0,
+    pitch: 0.55,
+    note: 'VOID: from the floor of the shaft, looking up the whole climb',
+  },
+  // Mid-climb, standing on a pad, looking across and up at the next few.
+  // The readability test: can a player tell where to go next in the dark?
+  midclimb: {
+    pos: [7.0, 28.0 + DECK, 0.5],
+    yaw: yawTo(-1, 0.3),
+    pitch: 0.22,
+    vel: [8, 0, 0],
+    note: 'VOID: mid-spiral, reading the next landing',
+  },
+  // Airborne between pads, looking DOWN the shaft. The depth read, and the
+  // shot where a bottomless void either works or does not.
+  plunge: {
+    pos: [4, 46, 4],
+    yaw: yawTo(-1, -1),
+    pitch: -0.75,
+    vel: [6, -2, 6],
+    note: 'VOID: airborne, looking back down the shaft',
+  },
+  // From the summit looking out and slightly up — the payoff frame.
+  summit: {
+    pos: [0, 83.6 + DECK, 0],
+    yaw: yawTo(1, 0.2),
+    pitch: 0.12,
+    note: 'VOID: the summit, looking out over the void',
+  },
+}
+
+export const VOID_SHOT_NAMES = Object.keys(VOID_SHOTS)
 export const SHOT_NAMES = Object.keys(SHOTS)

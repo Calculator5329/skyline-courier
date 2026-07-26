@@ -17,7 +17,7 @@
 
 import { mkdir, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { SHOTS, SHOT_NAMES } from './shots.mjs'
+import { SHOTS, SHOT_NAMES, VOID_SHOTS, VOID_SHOT_NAMES } from './shots.mjs'
 import { analyzeFile } from './analyze.mjs'
 import {
   DEFAULTS, REPO, buildDist, glRenderer, hideChrome, launchBrowser, num,
@@ -32,10 +32,16 @@ async function main() {
   const height = num(args.height, DEFAULTS.height)
   const frames = num(args.frames, DEFAULTS.frames)
 
+  // A shot table belongs to a LEVEL, not to the harness. `--theme void`
+  // selects the void course (src/main.js picks the course from the theme), so
+  // the skyline's coordinates would be pointing at empty space.
+  const themeArg = args.theme && args.theme !== true ? String(args.theme) : null
+  const table = themeArg === 'void' ? VOID_SHOTS : SHOTS
+  const allNames = themeArg === 'void' ? VOID_SHOT_NAMES : SHOT_NAMES
   const names = args.only && args.only !== true
     ? String(args.only).split(',').map((s) => s.trim()).filter(Boolean)
-    : SHOT_NAMES
-  const unknown = names.filter((n) => !SHOTS[n])
+    : allNames
+  const unknown = names.filter((n) => !table[n])
   if (unknown.length) {
     console.error(`unknown shots: ${unknown.join(', ')}`)
     process.exit(2)
@@ -74,7 +80,7 @@ async function main() {
       if (shotErrors.length) fail.push('page-error')
 
       results.push({
-        shot: name, file, bytes, note: SHOTS[name].note,
+        shot: name, file, bytes, note: table[name].note,
         render: info, image, errors: shotErrors,
         pass: fail.length === 0, fail,
       })

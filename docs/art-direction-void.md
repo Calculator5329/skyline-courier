@@ -18,6 +18,29 @@ Ethan's brief, verbatim on the parts that bind:
 
 ---
 
+## 0. THIS IS A NEW LEVEL, NOT A REPAINT
+
+Ethan, 2026-07-25, after being shown the existing course rendered in violet:
+
+> "I like that you did colors different, but that's not going to be the theme.
+> The theme is a totally different map with totally new sprites, totally new
+> everything to match the screen. It's like a totally different level."
+
+Binding, and it overrides any reading of `docs/scaling-plan.md` that treats a
+theme as a palette swap. The deliverable is a **second level**: its own course,
+its own geometry, its own prefabs, its own layout. The sunset archipelago
+recoloured violet is explicitly NOT it.
+
+What the theme descriptor in `src/theme.js` is actually for: it carries the
+light, fog, grade and exposure so the new level is lit correctly from the first
+frame. It is plumbing under the level, not the level. Do not mistake a passing
+value-structure table (§2) for a finished theme — those numbers only say the
+LIGHTING is right.
+
+The work is, in order: **new prefabs** (crystals, great walls, rune slabs,
+sigils, beams) → **a new vertical course built from them** → the lighting that
+already exists → the harsh review loop. Effort should follow that order.
+
 ## 1. The one-sentence read
 
 **A near-black cathedral of carved ruins, lit entirely from within by violet

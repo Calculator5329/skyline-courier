@@ -3,6 +3,7 @@ import { CollisionWorld } from './collision.js'
 import { Player, TUNING, MODES, DEFAULT_MODE, setMode, getMode } from './player.js'
 import { CameraRig } from './camera.js'
 import { buildCourse } from './level.js'
+import { buildVoidCourse } from './levels/void.js'
 import { buildWorld } from './world.js'
 import { Audio } from './audio.js'
 import { Hud, formatTime } from './hud.js'
@@ -62,7 +63,11 @@ const world = buildWorld(scene, renderer, theme)
 // ------------------------------------------------------------------- level
 
 const collision = new CollisionWorld()
-const level = buildCourse(collision)
+// The course is chosen by the theme, not independently of it: a level and the
+// light it was authored under are one artistic decision, and letting them be
+// mixed produces frames nobody designed. `?theme=void` therefore selects the
+// void COURSE as well as the void lighting.
+const level = theme.name === 'void' ? buildVoidCourse(collision) : buildCourse(collision)
 scene.add(level.build())
 
 const player = new Player(collision, level.spawn)

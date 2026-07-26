@@ -2671,8 +2671,27 @@ export function trackedKit() {
     }
   }
   api.placed = placed
-  api.assertAllPlaced = () => {
-    const missing = Object.keys(PREFABS).filter((k) => !placed.has(k))
+  /**
+   * @param {string[]} [expected] the prefabs THIS course claims to use.
+   *
+   * Defaults to the whole kit, which is the original behaviour and what
+   * `buildCourse()` still gets. The parameter exists because the invariant
+   * "every declared prefab is placed" stops being checkable from one course
+   * the moment there are two of them: the void course legitimately places no
+   * `waterfall`, no `cypress` and no `vineCurtain`, and without this it would
+   * simply throw on boot.
+   *
+   * A course therefore declares its own manifest and is held to exactly that,
+   * which still catches the thing this guard is for — a prefab written and
+   * then never wired up — and additionally catches a course whose manifest has
+   * drifted from what it actually builds.
+   */
+  api.assertAllPlaced = (expected = Object.keys(PREFABS)) => {
+    const unknown = expected.filter((k) => !PREFABS[k])
+    if (unknown.length) {
+      throw new Error(`course expects prefabs that do not exist: ${unknown.join(', ')}`)
+    }
+    const missing = expected.filter((k) => !placed.has(k))
     if (missing.length) {
       throw new Error(`kit prefabs declared but never placed in the course: ${missing.join(', ')}`)
     }

@@ -201,7 +201,7 @@ const BAND_RANK = { free: 0, standard: 1, committed: 2, grapple: 3 }
  * Ethan's most repeated complaint about round one was "I can't get to the
  * other islands". A comment cannot fix that. A failing build can.
  */
-class Archipelago {
+export class Archipelago {
   constructor() {
     this.nodes = new Map()
     this.edges = []

@@ -22,7 +22,7 @@ import { readFile } from 'node:fs/promises'
 import { extname, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { SHOTS } from './shots.mjs'
+import { SHOTS, VOID_SHOTS } from './shots.mjs'
 
 export const REPO = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -171,7 +171,11 @@ export async function openGame(browser, url, { width, height }) {
 
   await page.goto(url, { waitUntil: 'load' })
   await page.waitForFunction('window.__READY__ === true', null, { timeout: 30000 })
-  await page.evaluate((shots) => { window.__SHOTS__ = shots }, SHOTS)
+  // Both tables are injected, keyed by name. A shot belongs to a LEVEL, and
+  // `--theme void` boots a different level, so the harness cannot assume the
+  // skyline coordinates are the ones in play. Names are disjoint across the
+  // two tables, so one merged object is unambiguous.
+  await page.evaluate((shots) => { window.__SHOTS__ = shots }, { ...SHOTS, ...VOID_SHOTS })
 
   return { context, page, errors }
 }
