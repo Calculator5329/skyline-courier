@@ -625,18 +625,31 @@ function discOutline(rects, squash, pull, chamfer) {
 }
 
 function mossCapGeometry(rects, squash, thickness, overhang, bevel, rand) {
-  // 1% of guaranteed inset, so the mat's outer face is inside the collider
-  // rather than on it, plus a per-island 0-2% so no two caps are the same size
-  // at the same radius.
-  const pull = 0.99 - rand() * 0.02
+  // THE CAP MUST REACH ITS OWN COLLIDER. This used to be `0.99 - rand()*0.02`,
+  // an inset "so the mat's outer face is inside the collider rather than on
+  // it" plus a per-island size jitter. Measured on the terrace, that inset is
+  // 5-15 cm of floor on Z and 15-45 cm on X that the player STANDS ON and can
+  // SEE THROUGH, all the way round every island — Ethan, playing: "between the
+  // main path and the guardrail on the side it's completely transparent".
+  //
+  // An invisible ledge is a worse bug than a coincident face. Vertices lying
+  // exactly ON the collider boundary is the contract every other generator in
+  // props.js already keeps ("inscribed in the r-radius box at worst, never
+  // outside it"), and inscribed includes touching.
+  const pull = 1
   // The chamfer that turns the outline's corners over. It is asked for large
   // and clamped by `discOutline` to 45% of the shorter of the two edges at
   // each corner, which is what turns the union's 90-degree steps into a
   // faceted, roughly octagonal rim instead of a jigsaw edge. The corner
   // gussets the review saw were the cap and the drum below it turning their
   // arrises over by different amounts; both are now driven by `bevel`.
+  //
+  // ONLY where there IS a staircase to soften. At `facets: 1` the footprint is
+  // a single rectangle, so this had nothing to round off and instead cut a
+  // 1.05 m notch out of each corner of the terrace — the same invisible-floor
+  // bug as the inset above, just concentrated in four places.
   const outline = discOutline(rects, squash, pull,
-    Math.max(bevel * 2.6, rects[0].hx * 0.07))
+    rects.length > 1 ? Math.max(bevel * 2.6, rects[0].hx * 0.07) : bevel * 2.6)
   const M = outline.length
   const relief = Math.min(0.10, thickness * 0.42)
   const nSeed = ((rand() * 0xffffff) | 0) || 1

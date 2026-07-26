@@ -168,6 +168,25 @@ export const SHOTS = {
     pitch: -0.62,            // down at the rail's foot and the strip beyond it
     note: 'ACCEPTANCE: the deck strip outside the balustrade — must show no sky',
   },
+
+  // The unambiguous one. Both shots above look OUT over the island's edge,
+  // where sky is the correct answer and the bug is therefore not falsifiable.
+  // This stands at the last centimetre of the terrace's COLLIDER (z=-5.2, so
+  // feet at -5.15) and looks STRAIGHT DOWN. The player is standing here, so
+  // there is floor here by definition: any sky in this frame is floor that was
+  // never drawn. Nothing else in the frame to argue about.
+  edgefeet: {
+    // Hovering 6 m above the deck and 4 m inboard, looking down and out across
+    // the rim. Straight-down does not work: the rig clamps pitch short of the
+    // nadir, so a -87 degree shot comes back looking at the horizon. This
+    // angle still puts the whole strip — deck, balustrade, outer edge, and the
+    // void past it — in one frame, and the deck either reaches the edge or it
+    // does not.
+    pos: [8, 6, -1.0],
+    yaw: NORTH,
+    pitch: -0.95,
+    note: 'ACCEPTANCE: the deck rim from above — deck must reach its own edge',
+  },
 }
 
 export const SHOT_NAMES = Object.keys(SHOTS)
