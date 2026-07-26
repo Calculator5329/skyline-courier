@@ -555,27 +555,45 @@
 
   /* --- start / pause overlay ------------------------------------------- */
   /*
-   * The menu is a courier's dispatch card: pick the ROUTE (which world), pick
-   * the RULES (how the cuff behaves), then go. It sits over a LIVE 3D frame
-   * that can be a bright golden sky or a near-black void, so nothing here may
-   * rely on the backdrop for contrast — every surface that carries text brings
-   * its own scrim, and the accent colour follows the booted theme so the menu
-   * reads as part of the world behind it rather than as a web page over it.
+   * The menu is a courier's dispatch panel, and it asks exactly two questions:
+   * WHICH WORLD, then WHICH RULES. Everything else on this screen — the key
+   * chips, the escape note, the full control table — is reference material and
+   * is built to look like reference material.
+   *
+   * It is drawn over a LIVE frame of the game, and neither world is a polite
+   * backdrop: the skyline is a blown-out golden sky and the void is a saturated
+   * violet shaft crossed by lit beams. The first pass tried to keep the world
+   * half-visible THROUGH the panel at ~60% alpha; what that actually bought was
+   * body copy sitting on a moving cloud deck and a panel edge that vanished
+   * over the void. So the plate is now opaque and the world stays visible
+   * AROUND it, blurred and pushed down. The panel is an object lying on the
+   * frame, not a tint applied to it.
+   *
+   * Only the accent follows the booted world. The HUD does not — it is a brass
+   * instrument in both worlds; this is chrome, and chrome may change colour.
    */
   #overlay {
-    /* Menu-local tokens. Deliberately NOT the HUD's --brass etc: the HUD is a
-       fixed brass instrument panel and must not change colour with the theme;
-       the menu is chrome and should. */
-    --m-ink: #f4ead8;
+    /* Menu-local tokens. Deliberately NOT the HUD's --brass etc. */
+    --m-ink: #f6eddd;
+    --m-dim: #cabca3;
     --m-accent: #d9a441;
     --m-accent-hi: #f7e2ab;
-    --m-line: rgba(217, 164, 65, .22);
-    --m-line-on: rgba(217, 164, 65, .78);
-    --m-glow: rgba(217, 164, 65, .22);
-    --m-panel-a: rgba(26, 21, 16, .60);
-    --m-panel-b: rgba(13, 10, 8, .80);
-    --m-veil: rgba(16, 13, 10, .58);
-    --m-sel: rgba(58, 40, 16, .45);
+    --m-accent-lo: #a5732a;
+    --m-line: rgba(217, 164, 65, .20);
+    --m-line-on: rgba(217, 164, 65, .72);
+    --m-glow: rgba(217, 164, 65, .45);
+    --m-panel-a: rgba(27, 21, 15, .95);
+    --m-panel-b: rgba(12, 9, 7, .97);
+    /* The same two colours with the alpha taken out, for the one surface that
+       has to hide the panel behind it rather than sit on the world. */
+    --m-solid-a: #1a1510;
+    --m-solid-b: #0b0806;
+    --m-veil: rgba(14, 11, 8, .62);
+    --m-card: rgba(246, 237, 221, .035);
+    --m-card-hi: rgba(246, 237, 221, .075);
+    --m-card-on: rgba(217, 164, 65, .12);
+    --m-foot: rgba(0, 0, 0, .3);
+    --m-cta-ink: #1b1207;
 
     position: fixed;
     inset: 0;
@@ -591,11 +609,11 @@
     overflow-y: auto;
     text-align: center;
     padding: 24px 20px 28px;
-    /* A vignette rather than a flat wash: the world stays a place, the middle
-       stays legible. Kept light because the panel does the real contrast work. */
+    /* A vignette rather than a flat wash: the world stays a place. The blur is
+       what makes it read as BEHIND the panel rather than around it. */
     background: radial-gradient(ellipse 100% 80% at 50% 48%,
-                                rgba(0, 0, 0, .18), var(--m-veil) 78%);
-    backdrop-filter: blur(6px) saturate(1.04);
+                                rgba(0, 0, 0, .26), var(--m-veil) 76%);
+    backdrop-filter: blur(9px) saturate(.94);
     cursor: pointer;
     z-index: 10;
   }
@@ -604,51 +622,61 @@
   /* Cold violet for the void, so booting into it is announced by the menu
      itself before a single frame is read. */
   :root[data-theme="void"] #overlay {
+    --m-ink: #f2ecff;
+    --m-dim: #b9aede;
     --m-accent: #a98bff;
     --m-accent-hi: #ded0ff;
+    --m-accent-lo: #6a4ec7;
     --m-line: rgba(169, 139, 255, .24);
-    --m-line-on: rgba(169, 139, 255, .82);
-    --m-glow: rgba(169, 139, 255, .28);
-    --m-panel-a: rgba(20, 16, 34, .62);
-    --m-panel-b: rgba(8, 6, 16, .84);
-    --m-veil: rgba(8, 6, 16, .55);
-    --m-sel: rgba(52, 36, 92, .5);
+    --m-line-on: rgba(169, 139, 255, .78);
+    --m-glow: rgba(169, 139, 255, .5);
+    --m-panel-a: rgba(19, 15, 34, .95);
+    --m-panel-b: rgba(7, 5, 14, .97);
+    --m-solid-a: #130f22;
+    --m-solid-b: #06040d;
+    --m-veil: rgba(7, 5, 15, .6);
+    --m-card: rgba(232, 224, 255, .04);
+    --m-card-hi: rgba(232, 224, 255, .08);
+    --m-card-on: rgba(169, 139, 255, .14);
+    --m-cta-ink: #110b26;
   }
 
   /* --- the panel -------------------------------------------------------- */
-  /* One opaque-enough plate carries EVERY piece of text in the menu. That is
-     the whole legibility strategy: over a blown-out golden sky and over a
-     near-black void the text sits on the same surface either way. */
+  /* One plate, and the footer band is part of the same casting: it bleeds to
+     the panel edge so the reference material reads as the base of the object
+     rather than as a fourth stacked row floating under it. */
   #menu {
     position: relative;
-    width: min(820px, 94vw);
+    width: min(780px, 94vw);
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: clamp(14px, 2.2vh, 22px);
-    padding: clamp(20px, 3vh, 34px) clamp(18px, 3vw, 40px) clamp(16px, 2.2vh, 26px);
+    gap: clamp(12px, 1.9vh, 19px);
+    padding: clamp(18px, 2.6vh, 28px) clamp(16px, 2.4vw, 30px) 0;
     background: linear-gradient(168deg, var(--m-panel-a), var(--m-panel-b));
     border: 1px solid var(--m-line);
-    border-radius: 2px;
-    box-shadow: 0 26px 90px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .07);
+    border-radius: 3px;
+    box-shadow: 0 30px 90px rgba(0, 0, 0, .62), inset 0 1px 0 rgba(255, 255, 255, .07);
+    overflow: hidden;
   }
   /* Machined corner brackets — the same "this is an instrument" language as the
      HUD bezels, at almost no cost. */
   #menu::before, #menu::after {
     content: "";
     position: absolute;
-    width: 20px; height: 20px;
+    width: 18px; height: 18px;
     border: 1px solid var(--m-accent);
-    opacity: .6;
+    opacity: .55;
     pointer-events: none;
+    z-index: 2;
   }
-  #menu::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
-  #menu::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+  #menu::before { left: 0; top: 0; border-right: 0; border-bottom: 0; }
+  #menu::after { right: 0; bottom: 0; border-left: 0; border-top: 0; }
 
   /* --- title ------------------------------------------------------------ */
   .title { display: flex; flex-direction: column; align-items: center; }
   #overlay h1 {
-    font-size: clamp(24px, 3.5vw, 42px);
+    font-size: clamp(21px, 2.9vw, 34px);
     font-weight: 600;
     letter-spacing: .3em;
     text-transform: uppercase;
@@ -665,8 +693,8 @@
     align-items: center;
     justify-content: center;
     gap: 12px;
-    width: min(420px, 74%);
-    margin-top: 11px;
+    width: min(400px, 74%);
+    margin-top: 9px;
   }
   .rule span {
     flex: 1;
@@ -678,7 +706,7 @@
     flex: none;
     height: auto;
     background: none;
-    font-size: clamp(9px, .95vw, 10px);
+    font-size: 9px;
     letter-spacing: .42em;
     text-transform: uppercase;
     color: var(--m-accent);
@@ -688,17 +716,30 @@
   }
 
   /* --- section headers -------------------------------------------------- */
+  /* These are the only labels that get to say what the screen is FOR, so they
+     are legible rather than decorative: the number after the word is the step,
+     because the two questions are asked in an order. */
   .sec-h {
     display: flex;
     align-items: center;
-    gap: 12px;
-    font-size: 9px;
-    letter-spacing: .38em;
+    gap: 10px;
+    font-size: 10px;
+    letter-spacing: .34em;
     text-transform: uppercase;
     color: var(--m-accent);
-    opacity: .72;
-    margin-bottom: 9px;
+    margin-bottom: 8px;
     text-align: left;
+  }
+  .sec-h i {
+    flex: none;
+    font-style: normal;
+    font-size: 9px;
+    letter-spacing: 0;
+    padding: 1px 5px;
+    color: var(--m-cta-ink);
+    background: var(--m-accent);
+    border-radius: 1px;
+    opacity: .85;
   }
   .sec-h::after {
     content: "";
@@ -706,9 +747,20 @@
     height: 1px;
     background: linear-gradient(90deg, var(--m-line), transparent);
   }
-  .sec-h em { font-style: normal; opacity: .55; letter-spacing: .18em; }
+  .sec-h em {
+    font-style: normal;
+    color: var(--m-dim);
+    opacity: .6;
+    letter-spacing: .16em;
+    text-transform: none;
+  }
 
   /* --- the two pickers -------------------------------------------------- */
+  /* Same grid, deliberately different weight. ROUTE is two picture plates;
+     RULES is two label plates half their height. An earlier pass gave both
+     rows the identical card and the screen read as a 2x2 of four equal
+     options, with the RULES paragraphs — the SMALLER decision — carrying the
+     most ink on the screen. */
   .picks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .pickcard {
     pointer-events: auto;
@@ -719,26 +771,28 @@
     color: var(--m-ink);
     text-align: left;
     display: flex;
-    gap: 12px;
-    padding: 11px 13px 12px;
+    flex-direction: column;
     border: 1px solid var(--m-line);
     border-radius: 2px;
-    background: rgba(10, 8, 6, .42);
+    background: var(--m-card);
+    overflow: hidden;
     /* A machined edge along the top, so an unpicked card still reads as a plate
        of the same alloy as the instruments rather than as a web button. */
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
-    transition: border-color .18s, background .18s, box-shadow .18s, opacity .18s;
-    opacity: .58;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
+    transition: border-color .18s, background .18s, box-shadow .18s;
   }
-  .pickcard:hover { opacity: .9; border-color: var(--m-line-on); }
+  /* The unpicked card is NOT faded out. Fading it made the thing it is there to
+     show — the other world, the other rule set — the hardest thing on screen to
+     read, which is backwards: you are being asked to compare them. It is held
+     back by weight instead: no lamp, no accent, quieter copy. */
+  .pickcard:hover { border-color: var(--m-line-on); background: var(--m-card-hi); }
   .pickcard:focus-visible { outline: 1px solid var(--m-accent-hi); outline-offset: 2px; }
   .pickcard.on {
-    opacity: 1;
     border-color: var(--m-line-on);
-    background: var(--m-sel);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 0 20px var(--m-glow);
+    background: var(--m-card-on);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 0 24px -6px var(--m-glow);
   }
-  .pickcard .cbody { flex: 1; min-width: 0; }
+  .cbody { padding: 10px 12px 11px; display: flex; flex-direction: column; gap: 5px; }
   .crow { display: flex; align-items: center; gap: 8px; }
   /* The lamp is the same panel lamp as the DASH / AIR / HOOK chips, on purpose:
      lit means live, in both places. */
@@ -746,7 +800,7 @@
     width: 8px; height: 8px;
     border-radius: 50%;
     flex: none;
-    background: rgba(232, 211, 173, .26);
+    background: rgba(232, 211, 173, .22);
     box-shadow: inset 0 0 2px rgba(0, 0, 0, .8);
     transition: background .18s, box-shadow .18s;
   }
@@ -756,93 +810,159 @@
   }
   .cname {
     font-size: 12px;
-    letter-spacing: .26em;
+    letter-spacing: .24em;
     text-transform: uppercase;
+    color: var(--m-dim);
   }
   .pickcard.on .cname { color: var(--m-accent-hi); }
   .cdesc {
     display: block;
-    margin-top: 6px;
     font-size: 11px;
-    line-height: 1.45;
-    opacity: .66;
-  }
-
-  /* --- map cards -------------------------------------------------------- */
-  /* Each map keeps its OWN colours whatever theme is booted — that is the
-     point of the pair: warm golden archipelago against cold violet void, side
-     by side, decided at a glance. The thumbnails carry their own background so
-     they read over any sky. */
-  .mapbtn .thumb {
-    flex: none;
-    width: 96px; height: 62px;
-    border-radius: 2px;
-    overflow: hidden;
-    border: 1px solid rgba(0, 0, 0, .55);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .07);
-    filter: saturate(.5) brightness(.75);
-    transition: filter .2s;
-  }
-  .mapbtn:hover .thumb { filter: saturate(.85) brightness(.92); }
-  .mapbtn.on .thumb { filter: none; }
-  .mapbtn .thumb svg { display: block; width: 96px; height: 62px; }
-  /* The honest part: choosing the other world rebuilds the IBL, the grade LUT
-     and every material, so it reloads. Saying so up front is better than a
-     surprise flash. */
-  .cnote {
-    display: block;
-    margin-top: 7px;
-    font-size: 9px;
-    letter-spacing: .22em;
-    text-transform: uppercase;
-    color: var(--m-accent);
+    line-height: 1.5;
+    color: var(--m-dim);
     opacity: .78;
   }
-  .pickcard.on .cnote { color: var(--m-accent-hi); opacity: .9; }
+  .pickcard.on .cdesc { opacity: .92; }
+
+  /* --- map cards -------------------------------------------------------- */
+  /* Each map keeps its OWN colours whatever theme is booted — that is the point
+     of the pair: warm golden archipelago against cold violet void, side by
+     side, decided at a glance. The thumbnail is a full-bleed banner, not a
+     96px icon, because it is the single most useful thing on this screen: it
+     is the answer to the only question that changes the whole game.
+     Both were redrawn against real frames (tools/shotset.mjs) — the skyline is
+     hazy olive-gold and not orange, and the void has sigils, beams and depth
+     bands it did not have when the first pair were guessed at. */
+  .mapbtn .thumb {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 7 / 3;
+    border-bottom: 1px solid var(--m-line);
+    background: #0a0810;
+  }
+  .mapbtn .thumb svg { display: block; width: 100%; height: 100%; }
+  /* Held back with a scrim over the picture rather than a desaturate of it: the
+     unpicked world still has to be recognisable, because recognising it is how
+     you decide to pick it. */
+  .mapbtn .thumb::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(5, 4, 9, .58);
+    transition: background .2s;
+  }
+  .mapbtn:hover .thumb::after { background: rgba(5, 4, 9, .22); }
+  .mapbtn.on .thumb::after { background: rgba(6, 5, 10, 0); }
+  /* The honest part: choosing the other world rebuilds the IBL, the grade LUT
+     and every material, so it reloads. It is stated as a departure board entry
+     on the card itself — "RELOADS" with a travel chevron, sitting where the
+     picked card says "SELECTED" — so the page going is the thing the card just
+     told you it would do. */
+  .cnote {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 9px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--m-accent);
+    opacity: .7;
+  }
+  .pickcard.on .cnote { opacity: .95; }
+  .mapbtn:not(.on) .cnote::before {
+    content: "";
+    width: 0; height: 0;
+    border: 4px solid transparent;
+    border-left-color: currentColor;
+    border-right: 0;
+  }
+  .mapbtn:not(.on):hover .cnote { opacity: 1; }
+
+  /* --- rules cards: the smaller decision, at the smaller size ------------ */
+  .modebtn .cbody { padding: 9px 12px 10px; gap: 4px; }
+  .modebtn .cdesc { font-size: 10px; line-height: 1.45; }
 
   /* --- go --------------------------------------------------------------- */
-  .go { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  /* The one thing you MUST do was, until this pass, the faintest object on the
+     screen: a ghost outline that pulsed its own opacity down to .68 next to
+     four filled cards. It is now the only lit control on the panel. */
+  .go { display: flex; flex-direction: column; align-items: center; gap: 7px; }
   #cta {
     pointer-events: auto;
     appearance: none;
     -webkit-appearance: none;
     font: inherit;
     cursor: pointer;
+    width: 100%;
     font-size: 13px;
+    font-weight: 600;
     letter-spacing: .34em;
     text-transform: uppercase;
-    color: var(--m-ink);
+    color: var(--m-cta-ink);
     text-indent: .34em;
-    padding: 12px 34px;
-    background: rgba(10, 8, 6, .4);
-    border: 1px solid var(--m-line-on);
+    padding: 12px 20px;
+    border: 1px solid var(--m-accent-hi);
     border-radius: 2px;
-    animation: pulse 2.4s ease-in-out infinite;
+    /* The same rolled-alloy ramp the HUD bezels are cut from (--plate), in the
+       menu's accent rather than brass: the start control is a machined plate on
+       the panel, not a web button laid on top of one. */
+    background: linear-gradient(158deg, var(--m-accent-hi) 0%, var(--m-accent) 30%,
+                                var(--m-accent-lo) 58%, var(--m-accent) 80%, var(--m-accent-hi) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45),
+                inset 0 -1px 0 rgba(0, 0, 0, .32), 0 0 0 rgba(0, 0, 0, 0);
+    animation: pulse 2.6s ease-in-out infinite;
   }
-  #cta:hover { background: var(--m-sel); color: var(--m-accent-hi); }
+  #cta:hover {
+    background: linear-gradient(158deg, #fff 0%, var(--m-accent-hi) 34%,
+                                var(--m-accent) 58%, var(--m-accent-hi) 82%, #fff 100%);
+  }
   #cta:focus-visible { outline: 1px solid var(--m-accent-hi); outline-offset: 3px; }
+  /* Glow only. The old pulse dimmed the button itself, which made the primary
+     action spend half of every cycle being harder to read. */
   @keyframes pulse {
-    0%, 100% { opacity: .68; box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
-    50% { opacity: 1; box-shadow: 0 0 22px var(--m-glow); }
+    0%, 100% {
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45),
+                  inset 0 -1px 0 rgba(0, 0, 0, .32), 0 0 0 rgba(0, 0, 0, 0);
+    }
+    50% {
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45),
+                  inset 0 -1px 0 rgba(0, 0, 0, .32), 0 0 26px -2px var(--m-glow);
+    }
   }
   #esc {
-    font-size: 10px;
+    font-size: 9px;
     letter-spacing: .2em;
     text-transform: uppercase;
-    opacity: .38;
+    color: var(--m-dim);
+    opacity: .45;
   }
 
   /* --- controls: reference material, not the main event ----------------- */
-  /* The six keys you actually need are always on screen as one quiet strip;
-     the full table is one keystroke away behind a disclosure. This is what
-     stopped the keybind list from being the biggest object in the menu. */
+  /* One band at the foot of the plate, recessed and hairlined off, carrying
+     the six keys you actually need plus the way to the rest. Three separate
+     tail rows under the start button was three chances to look like the point.
+     This is one, and it looks like a legend. */
+  .ref {
+    margin: 0 calc(-1 * clamp(16px, 2.4vw, 30px));
+    padding: 10px clamp(16px, 2.4vw, 30px) 11px;
+    border-top: 1px solid var(--m-line);
+    background: var(--m-foot);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+  }
   .keystrip {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    gap: 6px 7px;
+    gap: 5px 6px;
     font-size: 10px;
-    opacity: .78;
+    color: var(--m-dim);
+    opacity: .8;
   }
   .keystrip span {
     display: inline-flex;
@@ -851,7 +971,7 @@
     padding: 3px 7px;
     border: 1px solid var(--m-line);
     border-radius: 2px;
-    background: rgba(10, 8, 6, .34);
+    background: rgba(0, 0, 0, .3);
     letter-spacing: .06em;
   }
   .keystrip b {
@@ -861,7 +981,7 @@
     font-size: 9px;
   }
 
-  #keysbox { text-align: left; }
+  #keysbox { text-align: left; width: 100%; }
   #keysbox > summary {
     pointer-events: auto;
     cursor: pointer;
@@ -874,8 +994,8 @@
     letter-spacing: .34em;
     text-transform: uppercase;
     color: var(--m-accent);
-    opacity: .6;
-    padding: 4px 0 2px;
+    opacity: .55;
+    padding: 2px 0;
     text-indent: .34em;
   }
   #keysbox > summary::-webkit-details-marker { display: none; }
@@ -896,9 +1016,9 @@
     grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
     gap: 5px 18px;
     font-size: 11px;
-    padding: 10px 4px 2px;
+    padding: 10px 2px 4px;
     border-top: 1px solid var(--m-line);
-    margin-top: 4px;
+    margin-top: 6px;
   }
   #keys b {
     color: var(--m-accent);
@@ -906,7 +1026,7 @@
     letter-spacing: .08em;
     white-space: nowrap;
   }
-  #keys span { opacity: .66; }
+  #keys span { color: var(--m-dim); opacity: .75; }
   #keys .sec {
     grid-column: 1 / -1;
     font-size: 9px;
@@ -921,45 +1041,65 @@
   /* --- the reload, made intentional ------------------------------------- */
   /* Switching world cannot be done live (theme is baked into the IBL, a 33^3
      grade LUT and every material at boot). So it reloads — and it announces
-     that it is doing so, holds for a beat, and keeps the panel on screen. A
-     silent white flash reads as a crash; this reads as a departure. */
+     that it is doing so.
+     The panel does not evaporate to 12% while a line of text floats in a black
+     pool, which is what a crashing page looks like. The SAME plate stays
+     exactly where it was, at exactly the same size, and its face changes: the
+     picker blurs out behind a departure card on the same alloy. The object
+     survives the reload even though the page does not. */
   #overlay.loading { cursor: progress; }
-  #overlay.loading #menu > * { opacity: .12; transition: opacity .22s; }
+  #overlay.loading #menu > *:not(#loadnote) {
+    opacity: .22;
+    filter: blur(2px);
+    transition: opacity .24s, filter .24s;
+  }
   #overlay.loading .pickcard, #overlay.loading #cta,
   #overlay.loading #keysbox > summary { pointer-events: none; }
-  /* Fixed, not absolute: the panel's height changes with the controls
-     disclosure, and the departure notice must land in the middle of the SCREEN
-     rather than wherever the middle of the panel happens to be. */
+  /* An open control table makes the plate 900px tall, and a departure card
+     floating in the middle of that much empty alloy reads as a dead screen.
+     The table is the one thing nobody is reading on the way out. */
+  #overlay.loading #keys { display: none; }
   #loadnote {
-    position: fixed;
+    position: absolute;
     inset: 0;
     display: none;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: 13px;
+    background: linear-gradient(168deg, var(--m-solid-a), var(--m-solid-b));
     opacity: 1 !important;
+    z-index: 1;
   }
   #overlay.loading #loadnote { display: flex; }
-  /* Its own pool of dark, so the notice never has to compete with whatever
-     part of the dimmed panel happens to sit behind it. */
-  #loadnote::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse 36% 26% at 50% 50%, rgba(0, 0, 0, .82), rgba(0, 0, 0, 0) 70%);
+  #loadnote .lcap {
+    font-size: 9px;
+    letter-spacing: .42em;
+    text-transform: uppercase;
+    color: var(--m-accent);
+    opacity: .65;
+    text-indent: .42em;
   }
   #loadnote .ltext {
-    font-size: 13px;
+    font-size: 14px;
     letter-spacing: .38em;
     text-transform: uppercase;
     color: var(--m-accent-hi);
     text-indent: .38em;
   }
+  /* Says WHY the page is going. A reload you were told the reason for is a
+     departure; the same reload unexplained is a crash. */
+  #loadnote .lsub {
+    max-width: 30em;
+    font-size: 10px;
+    line-height: 1.6;
+    color: var(--m-dim);
+    opacity: .5;
+  }
   #loadnote .lbar {
     position: relative;
     width: 180px; height: 2px;
-    background: var(--m-line-on);
+    background: var(--m-line);
     overflow: hidden;
   }
   #loadnote .lbar i {
@@ -973,18 +1113,35 @@
     to { transform: translateX(350%); }
   }
 
-  /* On a short window the panel tightens; the picker cards stay whole because
-     they are the choice the player came here to make. */
-  @media (max-height: 760px), (max-width: 700px) {
-    #overlay h1 { font-size: clamp(20px, 4.4vw, 30px); letter-spacing: .22em; text-indent: .22em; }
-    #menu { gap: 11px; padding: 16px 16px 14px; }
-    .rule { margin-top: 8px; }
-    .cdesc { font-size: 10px; margin-top: 4px; }
-    #cta { padding: 10px 26px; }
+  /* On a short window the panel tightens and the map banners crop wider — the
+     banner is the first thing that can afford to lose height, and cropping a
+     `slice` viewBox loses none of the subject. */
+  @media (max-height: 820px), (max-width: 700px) {
+    #overlay h1 { font-size: clamp(19px, 3.6vw, 26px); letter-spacing: .24em; text-indent: .24em; }
+    #menu { gap: 10px; padding-top: 15px; }
+    .rule { margin-top: 7px; }
+    .mapbtn .thumb { aspect-ratio: 16 / 5; }
+    .cdesc { font-size: 10px; }
+    .modebtn .cdesc { font-size: 9.5px; }
+    #cta { padding: 11px 18px; }
+    .ref { padding-top: 8px; padding-bottom: 9px; }
   }
-  /* Below this the two-across cards stop fitting and stack. */
+  /* Below this the two-across cards stop fitting and stack — and a stacked pair
+     of full-width banners is 400px of picture that pushes the start button off
+     the bottom of the window. So the route card turns on its side: the banner
+     becomes a tall crop down the left of the card and the panel stays short
+     enough to hold the whole decision plus the button. */
   @media (max-width: 620px) {
     .picks { grid-template-columns: 1fr; }
+    .mapbtn { flex-direction: row; align-items: stretch; }
+    .mapbtn .thumb {
+      flex: none;
+      width: 42%;
+      aspect-ratio: auto;
+      border-bottom: 0;
+      border-right: 1px solid var(--m-line);
+    }
+    .mapbtn .cbody { flex: 1; min-width: 0; }
     #keys { grid-template-columns: max-content minmax(0, 1fr); }
   }
 
@@ -1001,8 +1158,8 @@
     #loadnote .lbar i { width: 100%; background: var(--m-accent-hi); opacity: .7; }
     #reticle, #speedfill, .chip, #verb, #toast, #compass, #alt, #nav, #cppips b,
     #wallbar, #wallrail, #wallbar i, #wallrail i,
-    .pickcard, .lamp, .mapbtn .thumb, #keysbox > summary::after,
-    #overlay.loading #menu > * {
+    .pickcard, .lamp, .mapbtn .thumb::after, #keysbox > summary::after,
+    #overlay.loading #menu > *:not(#loadnote) {
       transition: none !important;
     }
   }
@@ -1141,108 +1298,239 @@
     </div>
 
     <!-- ROUTE: which world. Baked at boot, so picking the other one reloads.
-         Both cards are drawn in their OWN colours, whichever theme is live. -->
+         Both banners are drawn in their OWN colours, whichever theme is live,
+         and both were drawn against real captures of the two worlds rather
+         than from memory of them. -->
     <div class="pick">
-      <div class="sec-h">Route <em>&mdash; pick a world</em></div>
+      <div class="sec-h"><i>1</i>Route <em>&mdash; which world</em></div>
       <div class="picks" id="maps">
         <button type="button" class="pickcard mapbtn" data-map="skyline" aria-pressed="true">
           <span class="thumb">
-            <svg viewBox="0 0 96 62" aria-hidden="true">
+            <svg viewBox="0 0 336 144" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
               <defs>
-                <linearGradient id="tSky" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stop-color="#f8dda6" />
-                  <stop offset=".55" stop-color="#f0a862" />
-                  <stop offset="1" stop-color="#cf7040" />
+                <linearGradient id="skAir" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#6f6750" />
+                  <stop offset=".34" stop-color="#9a8862" />
+                  <stop offset=".6" stop-color="#c9ae83" />
+                  <stop offset=".8" stop-color="#e9d5ab" />
                 </linearGradient>
-                <radialGradient id="tSun">
-                  <stop offset="0" stop-color="#fff6dc" />
-                  <stop offset="1" stop-color="#ffca7d" stop-opacity="0" />
+                <radialGradient id="skSun">
+                  <stop offset="0" stop-color="#fffdf4" stop-opacity=".98" />
+                  <stop offset=".28" stop-color="#fff2d2" stop-opacity=".5" />
+                  <stop offset="1" stop-color="#ffe6b4" stop-opacity="0" />
                 </radialGradient>
+                <linearGradient id="skSea" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#f4e6c2" />
+                  <stop offset=".28" stop-color="#dcc496" />
+                  <stop offset="1" stop-color="#8b7a58" />
+                </linearGradient>
+                <linearGradient id="skHaze" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#dcc79c" stop-opacity="0" />
+                  <stop offset="1" stop-color="#e6d1a6" stop-opacity=".92" />
+                </linearGradient>
+                <!-- A drum island: a chunky cylinder of rock with a thin green
+                     cap. The first pass drew a shallow bowl, which read as a
+                     leaf floating on the sea rather than as a mass you land on
+                     with a kilometre of air underneath it. -->
+                <g id="skIsle">
+                  <path d="M-26 0-26 8C-26 19-15 27 0 30 15 27 26 19 26 8L26 0Z" fill="#66492c" />
+                  <path d="M0 30C15 27 26 19 26 8L26 0 0 0Z" fill="#33220f" opacity=".42" />
+                  <ellipse cy="2.5" rx="26" ry="7" fill="#8a6a3e" />
+                  <ellipse cy="0" rx="26" ry="7" fill="#33501f" />
+                  <ellipse cy="-2.6" rx="26" ry="7" fill="#79a057" />
+                  <ellipse cx="-8" cy="-4.2" rx="14" ry="3.4" fill="#9dc370" opacity=".65" />
+                </g>
               </defs>
-              <rect width="96" height="62" fill="url(#tSky)" />
-              <circle cx="66" cy="38" r="23" fill="url(#tSun)" />
-              <circle cx="66" cy="38" r="6" fill="#fff7e0" />
-              <!-- cloud deck: the horizon in this world is cloud, not ground -->
-              <path d="M0 45c8-5 14-1 20-4s12-4 19-1 12 5 19 3 13-4 20-1 12 3 18 1v18H0z"
-                    fill="#f6c992" opacity=".72" />
-              <path d="M0 53c10-4 17 1 26-1s15-3 24-1 17 3 27 1 13 0 19-2v12H0z"
-                    fill="#e8a76d" opacity=".85" />
-              <!-- drum islands: flat built top, chunky boulder underside -->
+
+              <rect width="336" height="144" fill="url(#skAir)" />
+              <!-- the low sun: a white disc in a wide warm haze, not an orange ball -->
+              <circle cx="200" cy="34" r="80" fill="url(#skSun)" />
+              <circle cx="200" cy="34" r="9" fill="#fffdf6" />
+
+              <!-- far silhouettes: the tower stacks and small drums, sunk in haze -->
+              <g fill="#7d735a" opacity=".8">
+                <path d="M28 38h10v44h-10zM19 78h28l-4 6H23z" />
+                <path d="M298 52h8v32h-8zM291 80h23l-3 5h-17z" />
+                <path d="M128 58h6v24h-6z" />
+              </g>
+              <g opacity=".72">
+                <use href="#skIsle" transform="translate(48 84) scale(.42)" />
+                <use href="#skIsle" transform="translate(134 80) scale(.32)" />
+                <use href="#skIsle" transform="translate(298 86) scale(.48)" />
+                <use href="#skIsle" transform="translate(240 78) scale(.26)" />
+              </g>
+              <!-- the haze wash that puts everything above it BEHIND the air -->
+              <rect y="24" width="336" height="70" fill="url(#skHaze)" />
+
+              <!-- the cloud sea: the horizon in this world is cloud, not ground,
+                   and it darkens toward the viewer so the frame has a floor -->
+              <path d="M0 88c26-6 44 3 68-1s40-7 66-3 44 7 70 3 42-7 66-4 38 5 66 1v60H0z"
+                    fill="url(#skSea)" />
+              <g fill="#fff6dd">
+                <ellipse cx="58" cy="93" rx="38" ry="3.2" opacity=".55" />
+                <ellipse cx="186" cy="90" rx="46" ry="2.8" opacity=".5" />
+                <ellipse cx="292" cy="95" rx="32" ry="3" opacity=".45" />
+                <ellipse cx="112" cy="106" rx="42" ry="3.4" opacity=".34" />
+                <ellipse cx="262" cy="112" rx="38" ry="3.2" opacity=".28" />
+                <ellipse cx="36" cy="124" rx="36" ry="3.6" opacity=".22" />
+              </g>
+
+              <!-- the route itself: drum islands with brass lanterns to hook -->
               <g>
-                <path d="M12 27h27l-5 7-8.5 6-8.5-6z" fill="#6d4127" />
-                <ellipse cx="25.5" cy="27" rx="13.5" ry="3.4" fill="#d9a441" />
-                <path d="M20 24.5v-5M28 25v-3.4M33 24.8v-4"
-                      stroke="#6f8f5f" stroke-width="2.2" stroke-linecap="round" />
+                <use href="#skIsle" transform="translate(84 106) scale(.62)" />
+                <g fill="#8a6224">
+                  <rect x="70" y="94" width="2.6" height="13" />
+                  <rect x="95" y="96" width="2.6" height="11" />
+                </g>
+                <g fill="#ffe6a8">
+                  <circle cx="71.3" cy="93" r="2.8" />
+                  <circle cx="96.3" cy="95" r="2.5" />
+                </g>
               </g>
-              <g opacity=".85">
-                <path d="M52 15h17l-3 4.5-5.5 4.5-5.5-4.5z" fill="#7a4b2d" />
-                <ellipse cx="60.5" cy="15" rx="8.5" ry="2.4" fill="#e2b76f" />
-                <path d="M58 13.2v-3.4" stroke="#6f8f5f" stroke-width="1.8" stroke-linecap="round" />
-              </g>
-              <g opacity=".5">
-                <path d="M78 32h12l-2 3.5-4 3.5-4-3.5z" fill="#8a5a37" />
-                <ellipse cx="84" cy="32" rx="6" ry="1.8" fill="#eccc94" />
+              <g>
+                <!-- the crossing: two islands and the run between them -->
+                <path d="M182 120h64v4h-64z" fill="#7a5628" />
+                <path d="M182 120h64v1.4h-64z" fill="#b98c47" />
+                <use href="#skIsle" transform="translate(256 130) scale(1.1)" />
+                <use href="#skIsle" transform="translate(166 124) scale(.76)" />
+                <g fill="#8a6224">
+                  <rect x="226" y="104" width="3.4" height="22" />
+                  <rect x="290" y="108" width="3.4" height="20" />
+                  <rect x="146" y="104" width="3" height="18" />
+                </g>
+                <g fill="#ffeeb8">
+                  <circle cx="227.7" cy="102" r="3.6" />
+                  <circle cx="291.7" cy="106" r="3.4" />
+                  <circle cx="147.5" cy="102" r="3" />
+                </g>
+                <g fill="#33501f">
+                  <path d="M244 122l3.4 9h-6.8zM276 124l4 10h-8zM158 118l3 8h-6z" />
+                </g>
               </g>
             </svg>
           </span>
           <span class="cbody">
-            <span class="crow"><i class="lamp"></i><span class="cname">Skyline</span></span>
-            <span class="cdesc">Golden-hour archipelago. Drum islands over a cloud sea,
-              brass lanterns to hook, long warm light.</span>
-            <span class="cnote" data-note>selected</span>
+            <span class="crow">
+              <i class="lamp"></i><span class="cname">Skyline</span>
+              <span class="cnote" data-note>selected</span>
+            </span>
+            <span class="cdesc">Golden hour over a cloud sea. Drum islands, brass
+              lanterns to hook, long warm light.</span>
           </span>
         </button>
 
         <button type="button" class="pickcard mapbtn" data-map="void" aria-pressed="false">
           <span class="thumb">
-            <svg viewBox="0 0 96 62" aria-hidden="true">
+            <svg viewBox="0 0 336 144" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
               <defs>
-                <linearGradient id="tVoid" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stop-color="#07050f" />
-                  <stop offset=".6" stop-color="#1d1536" />
-                  <stop offset="1" stop-color="#3a2b5e" />
+                <linearGradient id="vdAir" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#170838" />
+                  <stop offset=".44" stop-color="#4a1c93" />
+                  <stop offset=".78" stop-color="#39147a" />
+                  <stop offset="1" stop-color="#120830" />
                 </linearGradient>
-                <radialGradient id="tHaze">
-                  <stop offset="0" stop-color="#8b5cf6" stop-opacity=".6" />
-                  <stop offset="1" stop-color="#8b5cf6" stop-opacity="0" />
+                <radialGradient id="vdSig">
+                  <stop offset="0" stop-color="#ffffff" stop-opacity=".7" />
+                  <stop offset="1" stop-color="#c9b3ff" stop-opacity="0" />
                 </radialGradient>
-                <radialGradient id="tGlow">
-                  <stop offset="0" stop-color="#d9c6ff" stop-opacity=".9" />
-                  <stop offset="1" stop-color="#8b5cf6" stop-opacity="0" />
+                <radialGradient id="vdCry">
+                  <stop offset="0" stop-color="#ffb9bd" stop-opacity=".85" />
+                  <stop offset="1" stop-color="#ff7d8e" stop-opacity="0" />
                 </radialGradient>
+                <!-- A plate of the course: a lit top face over a real mass of
+                     rock. The first pass drew these as flat diamonds and they
+                     read as paper, which is the opposite of a thing you land on
+                     500 m above nothing. -->
+                <g id="vdSlab">
+                  <path d="M-26-4 10-9 26 2-6 8Z" fill="#0b0724" />
+                  <path d="M-26-4-6 8-6 15-26 3Z" fill="#08051a" />
+                  <path d="M-6 8 26 2 26 9-6 15Z" fill="#050310" />
+                  <path d="M-26 3-6 15-6 19-20 12Z" fill="#070417" />
+                  <path d="M-26-4 10-9 26 2-6 8Z" fill="none" stroke="#7f5ce0"
+                        stroke-width=".9" opacity=".8" />
+                </g>
+                <g id="vdRing">
+                  <circle r="13" fill="url(#vdSig)" />
+                  <ellipse rx="9" ry="3.6" fill="none" stroke="#ffffff" stroke-width="1.1" />
+                  <ellipse rx="5.4" ry="2.2" fill="none" stroke="#e6dcff" stroke-width=".9" />
+                  <path d="M0-2.6 1.8 0 0 2.6-1.8 0Z" fill="#ffffff" />
+                </g>
               </defs>
-              <rect width="96" height="62" fill="url(#tVoid)" />
-              <ellipse cx="48" cy="54" rx="52" ry="24" fill="url(#tHaze)" />
-              <!-- floating ruin, rimmed not lit: dark mass on brighter fog -->
-              <g fill="#120c22" stroke="#5b46a0" stroke-width=".9">
-                <path d="M10 40h24l-4 6-8 5-8-5z" />
-                <path d="M15 29h4v11h-4zM26 24h4v16h-4z" />
-                <path d="M13 27h19v3H13z" />
+
+              <rect width="336" height="144" fill="url(#vdAir)" />
+
+              <!-- the shaft is lined with shards, three bands deep: the far ones
+                   are LIGHTER, because the fog is between you and them -->
+              <g fill="#8a63dd" opacity=".2">
+                <path d="M20 0l9 54 8-54zM118 0l7 66 11-66z" />
+                <path d="M196 0l11 42 6-42zM300 0l9 58 12-58z" />
+                <path d="M44 144l10-46 8 46zM160 144l7-38 11 38zM268 144l12-52 7 52z" />
               </g>
-              <g fill="#150e28" stroke="#4c3a7a" stroke-width=".8" opacity=".9">
-                <path d="M62 30h20l-3 5-7 4-7-4z" />
-                <path d="M67 21h3.4v9H67zM76 18h3.4v12H76z" />
+              <g fill="#5b31b4" opacity=".3">
+                <path d="M0 0l14 78 10-78zM88 0l11 50 14-50zM238 0l13 70 9-70z" />
+                <path d="M104 144l13-58 11 58zM320 144l10-64 6 64z" />
               </g>
-              <!-- crystal: the light in this world comes from objects -->
-              <circle cx="46" cy="26" r="13" fill="url(#tGlow)" />
-              <path d="M46 13l5.4 12L46 38l-5.4-13z" fill="#b58bff" />
-              <path d="M46 13l5.4 12L46 38z" fill="#ede4ff" opacity=".85" />
-              <path d="M84 44l3.4 6.4-3.4 5.6-3.4-5.6z" fill="#ff3d6e" opacity=".9" />
-              <path d="M22 16l2.4 4.6-2.4 4-2.4-4z" fill="#5eb0ff" opacity=".85" />
+              <g fill="#25105c" opacity=".6">
+                <path d="M52 0l18 100 13-100zM172 0l15 86 17-86zM286 0l16 94 12-94z" />
+                <path d="M0 144l17-76 15 76zM222 144l18-60 14 60z" />
+              </g>
+
+              <!-- cut beams: the light in this world arrives as straight lines -->
+              <g stroke-linecap="round">
+                <path d="M74 150 154-14" stroke="#d24fd0" stroke-width="8" opacity=".16" />
+                <path d="M74 150 154-14" stroke="#ffc9f4" stroke-width="1.6" opacity=".95" />
+                <path d="M232 152 292-6" stroke="#ff8f6a" stroke-width="7" opacity=".14" />
+                <path d="M232 152 292-6" stroke="#ffe0c6" stroke-width="1.3" opacity=".85" />
+                <path d="M-8 128 58-12" stroke="#ffd8a8" stroke-width="6" opacity=".12" />
+                <path d="M-8 128 58-12" stroke="#fff0d8" stroke-width="1" opacity=".6" />
+              </g>
+
+              <!-- the climb: a widening spiral of plates, 508 m of it, swinging
+                   left and right as it rises out of the frame -->
+              <g>
+                <use href="#vdSlab" transform="translate(152 24) scale(.26)" />
+                <use href="#vdSlab" transform="translate(236 42) scale(.4)" />
+                <use href="#vdSlab" transform="translate(138 60) scale(.56)" />
+                <use href="#vdSlab" transform="translate(50 82) scale(.74)" />
+                <use href="#vdSlab" transform="translate(166 104) scale(.94)" />
+                <use href="#vdSlab" transform="translate(280 130) scale(1.16)" />
+              </g>
+              <!-- sigil rings, cut into the rock and lit from inside it -->
+              <use href="#vdRing" transform="translate(236 40) scale(.4)" />
+              <use href="#vdRing" transform="translate(48 80) scale(.68)" />
+              <use href="#vdRing" transform="translate(160 101) scale(.88)" />
+              <use href="#vdRing" transform="translate(284 126) scale(1.08)" />
+
+              <!-- crystal: coral, and the only warm thing in the world -->
+              <g transform="translate(212 92)">
+                <circle r="18" fill="url(#vdCry)" />
+                <path d="M0-18 6-3 0 12-6-3Z" fill="#f2929d" />
+                <path d="M0-18 6-3 0 12Z" fill="#ffd4d8" opacity=".8" />
+              </g>
+              <g transform="translate(100 64) scale(.62)">
+                <circle r="16" fill="url(#vdSig)" opacity=".7" />
+                <path d="M0-17 5-3 0 11-5-3Z" fill="#cbd8ff" />
+                <path d="M0-17 5-3 0 11Z" fill="#ffffff" opacity=".75" />
+              </g>
+
               <!-- motes -->
-              <g fill="#e6dcff">
-                <circle cx="35" cy="45" r=".9" opacity=".8" />
-                <circle cx="58" cy="47" r=".7" opacity=".6" />
-                <circle cx="70" cy="12" r=".8" opacity=".55" />
-                <circle cx="8" cy="18" r=".7" opacity=".5" />
+              <g fill="#efe6ff">
+                <circle cx="34" cy="44" r="1.1" opacity=".8" />
+                <circle cx="196" cy="22" r=".9" opacity=".6" />
+                <circle cx="308" cy="76" r="1" opacity=".55" />
+                <circle cx="118" cy="126" r="1.2" opacity=".7" />
+                <circle cx="20" cy="112" r=".9" opacity=".5" />
+                <circle cx="252" cy="66" r=".8" opacity=".5" />
               </g>
             </svg>
           </span>
           <span class="cbody">
-            <span class="crow"><i class="lamp"></i><span class="cname">The Void</span></span>
-            <span class="cdesc">A vertical dark. Broken ruins and jagged crystal in violet
-              fog, lit from within, climbing forever.</span>
-            <span class="cnote" data-note>reloads</span>
+            <span class="crow">
+              <i class="lamp"></i><span class="cname">The Void</span>
+              <span class="cnote" data-note>reloads</span>
+            </span>
+            <span class="cdesc">A 508 m climb through violet dark. Lit sigils, cut
+              beams, jagged crystal.</span>
           </span>
         </button>
       </div>
@@ -1250,24 +1538,23 @@
 
     <!-- RULES: how the cuff behaves. Neither card is framed as the lesser one —
          FUN is not "easy mode", it is the reason the movement feels the way it
-         does, and the copy says so. -->
+         does, and the copy says so. Half the height of a route card on purpose:
+         this is the smaller of the two decisions. -->
     <div class="pick">
-      <div class="sec-h">Rules <em>&mdash; how the cuff behaves</em></div>
+      <div class="sec-h"><i>2</i>Rules <em>&mdash; how the cuff behaves</em></div>
       <div class="picks" id="modes">
         <button type="button" class="pickcard modebtn" id="mode-normal" data-mode="normal" aria-pressed="true">
           <span class="cbody">
             <span class="crow"><i class="lamp"></i><span class="cname">Normal</span></span>
-            <span class="cdesc">The cuff is a tool. One hook between landings, gravity still
-              has you through the pull, and it puts you down where it took you. The course is
-              the parkour again.</span>
+            <span class="cdesc">One hook between landings, and gravity still has you
+              through the pull. The course is the parkour.</span>
           </span>
         </button>
         <button type="button" class="pickcard modebtn" id="mode-fun" data-mode="fun" aria-pressed="false">
           <span class="cbody">
             <span class="crow"><i class="lamp"></i><span class="cname">Fun</span></span>
-            <span class="cdesc">The cuff is a flight system. Chain hooks forever, every latch
-              hands back your dash and your double jump, and the skyline is open. Nothing is
-              toned down.</span>
+            <span class="cdesc">Chain hooks forever, and every latch hands back your
+              dash and your double jump. Nothing is toned down.</span>
           </span>
         </button>
       </div>
@@ -1278,40 +1565,46 @@
       <div id="esc">escape releases the cursor at any time</div>
     </div>
 
-    <div class="keystrip">
-      <span><b>WASD</b>run</span>
-      <span><b>SHIFT</b>sprint</span>
-      <span><b>SPACE</b>jump &middot; double &middot; wall-jump</span>
-      <span><b>CTRL</b>slide</span>
-      <span><b>Q</b>air dash</span>
-      <span><b>F</b>grapple</span>
+    <div class="ref">
+      <div class="keystrip">
+        <span><b>WASD</b>run</span>
+        <span><b>SHIFT</b>sprint</span>
+        <span><b>SPACE</b>jump &middot; double &middot; wall-jump</span>
+        <span><b>CTRL</b>slide</span>
+        <span><b>Q</b>air dash</span>
+        <span><b>F</b>grapple</span>
+      </div>
+
+      <details id="keysbox" data-nostart>
+        <summary>All controls</summary>
+        <div id="keys">
+          <div class="sec">movement</div>
+          <b>WASD</b><span>run</span>
+          <b>SHIFT</b><span>sprint</span>
+          <b>SPACE</b><span>jump &middot; double jump in the air &middot; wall-jump off a wall</span>
+          <b>CTRL</b><span>slide &mdash; jump out of it to keep the speed</span>
+          <b>MOUSE</b><span>look &mdash; run along a wall to wall-run</span>
+          <div class="sec">charges</div>
+          <b>Q / RIGHT-CLICK</b><span>air dash &mdash; one charge, recharges on landing</span>
+          <b>F</b><span>grapple &mdash; hold, aimed at any anchor in range</span>
+          <div class="sec">route</div>
+          <b>CHEVRON</b><span>the arrow on the screen edge points at your next drop</span>
+          <b>R</b><span>restart from the last checkpoint</span>
+          <b>P</b><span>photo mode &mdash; freeze the frame and free the cursor, without this
+            menu. click to resume</span>
+          <b>ESC</b><span>release the cursor</span>
+        </div>
+      </details>
     </div>
 
-    <details id="keysbox" data-nostart>
-      <summary>All controls</summary>
-      <div id="keys">
-        <div class="sec">movement</div>
-        <b>WASD</b><span>run</span>
-        <b>SHIFT</b><span>sprint</span>
-        <b>SPACE</b><span>jump &middot; double jump in the air &middot; wall-jump off a wall</span>
-        <b>CTRL</b><span>slide &mdash; jump out of it to keep the speed</span>
-        <b>MOUSE</b><span>look &mdash; run along a wall to wall-run</span>
-        <div class="sec">charges</div>
-        <b>Q / RIGHT-CLICK</b><span>air dash &mdash; one charge, recharges on landing</span>
-        <b>F</b><span>grapple &mdash; hold, aimed at any anchor in range</span>
-        <div class="sec">route</div>
-        <b>CHEVRON</b><span>the arrow on the screen edge points at your next drop</span>
-        <b>R</b><span>restart from the last checkpoint</span>
-        <b>P</b><span>photo mode &mdash; freeze the frame and free the cursor, without this
-          menu. click to resume</span>
-        <b>ESC</b><span>release the cursor</span>
-      </div>
-    </details>
-
-    <!-- Shown only while a world change is reloading the page. -->
+    <!-- Shown only while a world change is reloading the page: the same plate,
+         the same size, a different face. -->
     <div id="loadnote" role="status" aria-live="polite">
+      <div class="lcap">route change</div>
       <div class="ltext">entering the skyline</div>
       <div class="lbar"><i></i></div>
+      <div class="lsub">the world is baked at boot &mdash; rebuilding the light,
+        the grade and every material</div>
     </div>
   </div>
 </div>

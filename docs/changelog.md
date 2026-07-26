@@ -1,5 +1,81 @@
 # Changelog
 
+## 2026-07-25 — the menu, second pass: two decisions and a legend
+
+Ethan, asked what still bugged him: "the menu needs another pass." No detail,
+so the job was to find out what was wrong rather than to redecorate. What was
+wrong, in the order it mattered:
+
+- **The panel was not carrying its own text.** The stated strategy was "one
+  opaque-enough plate carries EVERY piece of text", but the plate was 60-80%
+  alpha over a 6px blur. Over the skyline a bright column of cloud ran up
+  through the title; over the void — which is not near-black any more, it is a
+  saturated violet shaft crossed by lit beams — the panel's own edge vanished
+  and the body copy at 66% opacity sat on the moving world. The plate is now
+  95-97% and the blur is 9px: the world is visible AROUND the panel and behind
+  nothing. That is the contrast strategy the original comment described; the
+  numbers just never matched the words.
+
+- **Four identical cards, and the smaller decision had the most ink.** ROUTE
+  and RULES were the same 2-up card in the same size, so the screen read as a
+  2x2 grid of four equal options; and because each RULES card carried a
+  four-line paragraph, the choice that does NOT change the world was the
+  heaviest object on the panel. ROUTE is now two picture plates with a
+  full-bleed banner; RULES is two label plates half their height and two lines
+  of copy. The section headers are numbered, because the questions are asked in
+  an order.
+
+- **The unpicked card was faded to 58%.** That is backwards: you are being
+  asked to compare two worlds, and the one you have not chosen was the hardest
+  thing on the screen to read. Nothing fades now — the unpicked card is held
+  back by weight (no lamp, no accent, quieter copy) and its banner by a scrim
+  over the picture rather than a desaturate of it.
+
+- **The thumbnails were 96x62 icons, and one of them was of a world that no
+  longer exists.** Both were redrawn at banner size against real captures from
+  `tools/shotset.mjs`: the skyline is hazy olive-gold with a white sun, a cloud
+  sea that darkens toward the viewer and drum islands with real rock under the
+  cap — not the saturated orange and floating bowls of the first pass. The void
+  now has what the void has: sigil rings lit from inside the rock, cut beams,
+  three depth bands of shards and a spiral of plates climbing out of the frame.
+
+- **The start button was the faintest object on the screen.** A ghost outline
+  that pulsed its own opacity DOWN to .68, next to four filled cards. It is now
+  a plate cut from the same rolled-alloy ramp as the HUD bezels, full width,
+  and the pulse moves the glow instead of the button's own legibility.
+
+- **Three tail rows of reference material.** The escape note, the six key chips
+  and the ALL CONTROLS disclosure were three separate bands under the start
+  button, each with a full gap. The chips and the disclosure are now one
+  recessed band bled to the panel edge — a legend cast into the base of the
+  object rather than a fourth stacked row floating under it.
+
+- **The reload read as the screen dying.** Everything dimmed to 12% and a line
+  of text floated in a black pool. The plate now stays exactly where it is at
+  exactly its size and changes its face: a departure card on the same alloy,
+  saying ROUTE CHANGE / ENTERING THE VOID and, underneath, WHY the page has to
+  go (the world is baked into the IBL, the grade LUT and every material at
+  boot). The open control table is collapsed on the way out so the card is not
+  adrift in 900px of empty alloy.
+
+- **`tools/menu-shots.mjs` was lying, and had been since it was written.**
+  `openGame` stubs `requestAnimationFrame`, and with rAF gone the page stops
+  producing compositor frames — so a CSS transition never advances. The picked
+  card's state is applied by `hud.setMap()` after first style resolution, which
+  means every menu shot ever taken was frozen a moment BEFORE the selection
+  landed: the chosen world's banner was still wearing the unpicked scrim in the
+  capture, which is the single thing these shots exist to verify. The harness
+  now finishes in-flight transitions before it shoots. Two shots were added: a
+  600x700 window (the picker stacks, and a stacked pair of full-width banners
+  would push the start button off the bottom — so the route card turns on its
+  side below 620px), and one under `prefers-reduced-motion`.
+
+Kept, because they were right: the reload announces itself and persists the
+choice; the accent follows the booted world while the HUD stays brass; the lamp
+is the same lamp as the HUD chips; both banners keep their own colours whatever
+theme is live; safe-centring plus scroll; and the `.modebtn, .mapbtn,
+[data-nostart]` guard with focus dropped on pointer lock.
+
 ## 2026-07-25 — the void gets a background, and its beams get cut to six
 
 Two notes from Ethan with the build beside the reference image, answered

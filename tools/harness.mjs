@@ -148,11 +148,14 @@ export async function launchBrowser() {
  * loop ticks exactly once (synchronously, from `frame()`) and then stops, and
  * every subsequent frame is one we asked for.
  */
-export async function openGame(browser, url, { width, height }) {
+export async function openGame(browser, url, { width, height, reducedMotion = 'no-preference' }) {
   const context = await browser.newContext({
     viewport: { width, height },
     deviceScaleFactor: 1,
-    reducedMotion: 'no-preference',
+    // Defaults to off so a shot set is comparable frame to frame; the menu set
+    // flips it on for one capture, because "everything decorative stops and
+    // every readout keeps its value" is a promise nothing else checks.
+    reducedMotion,
   })
   const page = await context.newPage()
 
