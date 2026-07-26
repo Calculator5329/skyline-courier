@@ -347,7 +347,7 @@ export class Archipelago {
    * @param finishId where the route ends
    * @param spine    checkpoint island ids, in route order
    */
-  verify(spawnId, finishId, spine) {
+  verify(spawnId, finishId, spine, opts = {}) {
     const bad = []
     for (const e of this.edges) if (!e.ok) bad.push(`  ${e.from} -> ${e.to} (${e.mode}): ${e.why}`)
     if (bad.length) {
@@ -371,7 +371,22 @@ export class Archipelago {
     // The safe line. course-design.md: dash and grapple are the FAST line, not
     // the only line, so each checkpoint must fall out of a walk that spends
     // neither. Checked leg by leg so a failure names the leg.
-    for (let i = 1; i < spine.length; i++) {
+    //
+    // OPT-OUT, per level. Ethan, 2026-07-25, after playing the void scaffold:
+    //
+    //   "I don't think there should be a rule that it should be doable without
+    //   the grapple and without the ability. The rule should just be it's
+    //   doable in NORMAL, and I'm the one who can determine that. So that way
+    //   you're not restricted or constrained in any way."
+    //
+    // The sunset course keeps this gate — it is a teaching course and the safe
+    // line is part of its design. The void is authored for the full movement
+    // set, and there the gate was producing timid geometry rather than
+    // catching bugs. The three gates ABOVE this one (bands honest, nothing
+    // orphaned, nothing a trap) still run, and so does the >34 m physical
+    // limit: what is switched off here is a taste rule, not a safety check.
+    // Playtest is the acceptance test for this course, by the owner's choice.
+    for (let i = 1; opts.requireSafeLine !== false && i < spine.length; i++) {
       const from = spine[i - 1]
       const safe = this._walk(from, 'out', SAFE_MODES)
       if (!safe.has(spine[i])) {

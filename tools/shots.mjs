@@ -201,38 +201,48 @@ export const SHOTS = {
  * this level sits above the frame.
  */
 export const VOID_SHOTS = {
-  // On the base pad at the bottom of the shaft, looking straight up the climb.
-  // This is the establishing shot and the one that has to sell the scale.
+  // Coordinates read off `src/levels/void.js` at build time, not invented:
+  //   plaza    0.0    0.0    0.0   (26 m, the floor)
+  //   hero-3  -26.5  31.0   11.2
+  //   hero-7  -33.5  59.7  -27.4
+  //   hero-11 -11.9  93.6  -57.7
+  //   spire    -7.4 104.6  -35.8   (the finish)
+
+  // On the floor of the shaft looking straight up the climb. The establishing
+  // shot, and the one that has to sell the scale.
   ascent: {
     pos: [0, DECK, 0],
-    yaw: 0,
-    pitch: 0.55,
+    yaw: yawTo(-1, 0.4),
+    pitch: 0.62,
     note: 'VOID: from the floor of the shaft, looking up the whole climb',
   },
-  // Mid-climb, standing on a pad, looking across and up at the next few.
-  // The readability test: can a player tell where to go next in the dark?
+
+  // Standing on hero-3, looking on toward the next crossing. The readability
+  // test: in a dark level, can a player tell where to go next?
   midclimb: {
-    pos: [7.0, 28.0 + DECK, 0.5],
-    yaw: yawTo(-1, 0.3),
-    pitch: 0.22,
-    vel: [8, 0, 0],
-    note: 'VOID: mid-spiral, reading the next landing',
+    pos: [-26.5, 31.0 + DECK, 11.2],
+    yaw: yawTo(-0.3, -1),
+    pitch: 0.16,
+    vel: [9, 0, -3],
+    note: 'VOID: on hero-3, reading the next crossing',
   },
-  // Airborne between pads, looking DOWN the shaft. The depth read, and the
-  // shot where a bottomless void either works or does not.
+
+  // Airborne off hero-7 with the void below. The depth read, and the frame
+  // where a bottomless drop either works or does not.
   plunge: {
-    pos: [4, 46, 4],
-    yaw: yawTo(-1, -1),
-    pitch: -0.75,
-    vel: [6, -2, 6],
-    note: 'VOID: airborne, looking back down the shaft',
+    pos: [-30, 55, -22],
+    yaw: yawTo(0.6, 0.8),
+    pitch: -0.70,
+    vel: [10, -4, 12],
+    note: 'VOID: airborne over the shaft, looking back down',
   },
-  // From the summit looking out and slightly up — the payoff frame.
+
+  // From the spire, back down over everything just climbed. The payoff.
   summit: {
-    pos: [0, 83.6 + DECK, 0],
-    yaw: yawTo(1, 0.2),
-    pitch: 0.12,
-    note: 'VOID: the summit, looking out over the void',
+    pos: [-7.4, 104.6 + DECK, -35.8],
+    yaw: yawTo(-0.2, -1),
+    pitch: -0.34,
+    note: 'VOID: the spire, looking back down the whole course',
   },
 }
 

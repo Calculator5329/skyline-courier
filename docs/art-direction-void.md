@@ -41,6 +41,43 @@ The work is, in order: **new prefabs** (crystals, great walls, rune slabs,
 sigils, beams) → **a new vertical course built from them** → the lighting that
 already exists → the harsh review loop. Effort should follow that order.
 
+## 0b. THE VOID IS BUILT FOR THE FULL MOVEMENT SET
+
+Ethan, 2026-07-25, after running the first scaffold climb:
+
+> "you're limiting yourself with how you place these. Like it's very very easy
+> and you don't realize how well I can do with the grapple and the air dash. So
+> I would say kind of release the constraints on yourself and you can make
+> things far apart. You can make things really creative in terms of the
+> placement of platforms. And then if I try it out and there's something that's
+> impossible I'll tell you but I highly doubt it."
+
+Binding, and it overrides how `docs/course-design.md`'s bands have been applied
+here. The scaffold's timid 5-8 m hops came from treating "every checkpoint
+reachable with no dash and no grapple" as a constraint on EVERY link. That is
+not what the rule says and it produced a boring course.
+
+What this means in practice for the void course:
+
+- **`committed` and `grapple` links are first-class**, not last resorts. Use
+  the full band table: 14-19 m committed, 20-32 m grapple-gated.
+- **Spacing should be generous and varied.** Long flights, big drops, real
+  distance between islands. The reference image is VAST; a course of polite
+  little steps cannot look like it.
+- **Place anchors deliberately** so grapple lines are part of the composition —
+  §5 asks every hero vantage to be framed by a vertical, and a grapple sightline
+  is a vertical the player creates.
+- **The physics limits still bind.** >34 m with no anchor in range is
+  impossible, not hard, and `Archipelago.verify()` still fails it. Ethan is
+  relaxing the TASTE constraint, not the engine.
+- **Keep a recovery line, not a safe line.** Falling must be survivable and
+  re-attemptable (§6, and course-design.md on recoverability). That is a
+  different and much weaker requirement than "traversable without dash".
+
+The failure mode to avoid now is the opposite of the old one: a course so
+loose it stops being readable. Readability comes from the rune-inlay language
+in §6, not from short jumps.
+
 ## 1. The one-sentence read
 
 **A near-black cathedral of carved ruins, lit entirely from within by violet
