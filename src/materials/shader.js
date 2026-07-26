@@ -436,8 +436,27 @@ const MAIN_FRAGMENT = /* glsl */ `
     // 45-degree chamfer takes about half, and a wall takes none.
     float down = smoothstep( -0.12, -0.72, scNw.y );
     float blotch = smoothstep( 0.28, 0.74, mac.r * 0.60 + mac.a * 0.50 );
+    // The crevice half keeps a floor under the blotch and the downward half does
+    // not, and that asymmetry is deliberate. A soffit either has grown a crust
+    // or it has not, so patchiness there is the whole read; a band channel on a
+    // VERTICAL plate always holds some film, and gating it on the same mask
+    // zeroed it over most of a wall — measured on the closeup brass, the
+    // fraction of texels greener than hue 52 came out at 0.33%, i.e. no cool
+    // pixel anywhere on the signature material, which is the finding this term
+    // exists to answer.
+    // 2.6 on the pocket term, because the raw cavity signal is not a mask.
+    // Measured on the brass tile: a rivet band channel is 40 code values below
+    // the plate, which against a radius-9 blur at gain 3.2 comes back as
+    // 1 - cavity = 0.26. Driving the crust off that directly puts a 19% film in
+    // the deepest channel on the material and nothing anywhere else, and 19% of
+    // a desaturated teal under a key this orange is not a colour — measured, it
+    // moved the channel's hue by 3 degrees and left the fraction of texels
+    // greener than hue 52 at 1.4%. Rescaled, a band floor reads ~0.67 and the
+    // crust lands at the brief's ~0.35.
+    float pocket = clamp( ( 1.0 - scCavity ) * 2.6, 0.0, 1.0 );
     scPatina = clamp( down * blotch * scPatinaP.x
-                      + ( 1.0 - scCavity ) * blotch * scPatinaP.y, 0.0, 0.55 );
+                      + pocket * ( 0.45 + 0.55 * blotch ) * scPatinaP.y,
+                      0.0, 0.60 );
     diffuseColor.rgb = mix( diffuseColor.rgb, scPatinaCol, scPatina );
     // Crust is matte. A green that keeps the plate's polish reads as tinted
     // lacquer; the roughness break is most of what says "different substance".
@@ -852,7 +871,7 @@ export const DEFAULT_PARAMS = {
   /** verdigris in crevices, riding the same cavity signal as `cavity` */
   patinaCavity: 0.30,
   /** how much metalness the crust kills where it is at full strength */
-  patinaMetal: 0.75,
+  patinaMetal: 0.85,
   /**
    * How much of the cloud-sea horizon band this surface mirrors back. 0
    * disables the term and its branch. See THE HORIZON GLINT — this is the knob

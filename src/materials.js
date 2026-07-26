@@ -284,7 +284,7 @@ const SURFACE = {
      * plate must still read through it.
      */
     patina: 0.40,
-    patinaCavity: 0.30,
+    patinaCavity: 0.70,
   },
   moss: {
     envMapIntensity: 1.05,
