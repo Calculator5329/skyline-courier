@@ -55,7 +55,14 @@ async function main() {
   let browser = null
   try {
     browser = await launchBrowser()
-    const { page } = await openGame(browser, server.url, { width: 640, height: 360 })
+    // `--page voidkit.html?theme=void` points the SAME invariant at a page
+    // other than the course. Added for `src/voidkit.js`, whose prefabs are not
+    // in the course yet and so could not be audited at all: a prefab library
+    // that has never been through this check is exactly how the three
+    // hollow-collider bugs in this file's header got shipped. Defaults to the
+    // course, so every existing invocation is unchanged.
+    const path = args.page && args.page !== true ? String(args.page) : ''
+    const { page } = await openGame(browser, server.url + path, { width: 640, height: 360 })
     const result = await page.evaluate(audit, { CELL })
 
     if (args.json) {

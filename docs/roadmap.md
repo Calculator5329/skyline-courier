@@ -193,6 +193,33 @@ Ordered by how much each one costs the frame, worst first.
       spawn to ~6 m, and widen the angular floor from ~27° to ~40° off the
       travel axis (horizontal half-FOV is ~50°, so 27° is not peripheral).
 
+### The void kit — what `src/voidkit.js` left open
+
+Found while building and photographing the void ruin prefabs (see
+`docs/changelog.md`, 2026-07-25). None of these are in the voidkit lane.
+
+- [ ] **The void's rock is not dark.** `PALETTE.stone` is the sunset level's
+      cool grey-green and both themes share it, so the great walls photograph
+      as pale limestone against `art-direction-void.md` §3's near-black
+      `#14101F`–`#2A2438`. `voidkit.js` already reads a `theme.surfaces.shade`
+      multiplier and applies it to every box and mesh it emits; nothing sets it
+      yet. Set it in the void descriptor, or repoint the albedo per theme.
+- [ ] **The void still draws a cloud sea and a warm horizon band.**
+      `world.js`'s cloud deck renders under the void theme, giving exactly the
+      readable horizon line §3 says is wrong ("there is no sun and no sky").
+      Visible in every frame of `docs/captures/voidkit/`.
+- [ ] **The wall-run face goes unreadable under the void's key light.** The
+      panel grooves and their 7.5 cm arrises read clearly under `?theme=skyline`
+      and nearly vanish at `keyIntensity: 0.35` with no crystal in the scene.
+      Geometry is doing what §6 asks; the light is not reaching it. Likely
+      answers are crystal fill near the run band or a bounce term, not more
+      relief — more relief would break the flat run plane.
+- [ ] **`voidkit` prefabs are not in a course.** They are exercised only by the
+      scratch stage, so they have never been judged from the gameplay camera on
+      a real route, and `trackedVoidKit().assertAllPlaced()` guards nothing yet.
+      Wire them into the void course and fold `tools/voidshots.mjs` into the
+      ship gate, or delete the stage.
+
 ### Far LOD
 
 - [ ] Replace the box-on-a-disc impostor with a silhouette carrying a moss cap,

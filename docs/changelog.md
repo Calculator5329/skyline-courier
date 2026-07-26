@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-07-25 — the void ruin prefabs (`src/voidkit.js`)
+
+`docs/art-direction-void.md` §4.1, §4.2 and the sigil rings, as four prefabs in
+a new file. Nothing in `kit.js`, `props.js`, `world.js`, `theme.js` or
+`level.js` changed — these import the same primitives and obey the same
+contracts.
+
+- **`greatWall()`** — the colossal carved wall that frames the space and is the
+  wall-run surface. Grooves are not cut: a core slab is declared at the groove
+  floor and the panels stand proud of it as separate solids, so every visible
+  face is a collider by construction. The run band (0–7 m) is one exact plane
+  at a finer ashlar module — twice the groove crossings per second of run, which
+  is §6's speed cue — and everything that would break that plane (recessed
+  panels, pier courses, the cornice) is confined above it.
+- **`runeSlab()`** — the floating ruin platform. Flat rectilinear top, a
+  two-course carved border, jagged `props.blob` tiers beneath and solid drip
+  spikes under those. The glowing rune is §6's landing promise and it is
+  **checked mechanically**: every rune registers its footprint, and
+  `finishVoidKit()` walks the real collision world and throws if any rune is not
+  sitting on a collider top face.
+- **`sigilRing()`** — concentric rings, radial ticks and a centre star, inlaid
+  on a wall face. Refuses to render in the rune colour: violet means "stand
+  here", and a 12 m ring on a vertical face must not be able to say that.
+- **`monolith()`** — leaning, tapering broken obelisks and stumps.
+
+Colour comes from the theme descriptor (`sky.sun`, `light.fillColor`,
+`light.bounceColor`) or from an option — never a constant. Rendered under
+`?theme=skyline` the same prefabs come out golden, which is the test.
+
+**Verified by looking**, not by reasoning: `voidkit.html` +
+`src/voidkit-scratch.js` is a scratch stage (build-flagged off, `SKYLINE_SCRATCH=1`),
+`tools/voidshots.mjs` photographs it through the real pipeline, and
+`tools/coverage.mjs --page` now audits any page. Four defects were found that
+way and none of them by reading code: the rune's knot strokes were wound
+clockwise and silently backface-culled; a 14% course overlap drew a monolith's
+top face 0.76 m above its collider; a tilted break course left a 4 m2 invisible
+roof; and the slab's top blob tier oversailed its fascia. Coverage on the stage
+went 40.25 m2 → **0.00 m2**.
+
+Triangles (chamfered box = 44, `bevel: 0` = 12, meshes counted exactly):
+
+| prefab | detail 0 | detail 1 | detail 2 | glow |
+| --- | --- | --- | --- | --- |
+| `greatWall` 48x30 | 24 | 1,716 | 11,220 | — |
+| `runeSlab` 6 m | 92 | 994 | 4,520 | 88 / 136 / 200 |
+| `sigilRing` | — | — | — | 136 / 288 / 568 |
+| `monolith` 9 m | 12 | 220 | 584 | — |
+
 ## 2026-07-25 — the underpass left flank was passable
 
 Reported: *"at the underpass you can go LEFT and leave the play volume
