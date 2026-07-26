@@ -185,6 +185,11 @@ async function main() {
 
   console.log(`\nblotch probe — shot "${SHOT}"  ->  ${OUT}\n`)
   const ctrl = rows.find((r) => r.mode === 'no-depth-squash')
+  // NOTE ON THE TABLE: only the `base` row's number is an assertion. The two
+  // ablation rows are compared against the same control and will read 0
+  // whenever they are globally BRIGHTER than it — `no-contact` is, because
+  // turning the pass off removes all the AO in the frame — even though those
+  // frames still carry blotches. They are here to localise, not to measure.
   console.log('mode                                lum   occluded% vs control')
   console.log('---------------------------------  -----  --------------------')
   for (const r of rows) {
