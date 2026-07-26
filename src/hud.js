@@ -150,6 +150,27 @@ export class Hud {
     }
   }
 
+  /**
+   * Mark the picked world on the start overlay.
+   *
+   * Separate from `setMode` because the two choices are not the same kind of
+   * thing: difficulty is applied live, but the world is baked into the IBL, the
+   * grade LUT and every material at boot — so this only ever reflects what IS
+   * booted, or what is about to be after the reload it triggers.
+   */
+  setMap(name) {
+    for (const btn of document.querySelectorAll('.mapbtn')) {
+      const on = btn.dataset.map === name
+      btn.classList.toggle('on', on)
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false')
+      const note = btn.querySelector('[data-note]')
+      // The card says what clicking it will actually do. A map swap that
+      // reloads without warning reads as a crash; a label that says "reloads"
+      // makes the same reload read as intended.
+      if (note) note.textContent = on ? 'selected' : 'reloads'
+    }
+  }
+
   setOverlay(visible) {
     this.overlay.classList.toggle('hidden', !visible)
   }

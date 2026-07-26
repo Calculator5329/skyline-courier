@@ -11,7 +11,7 @@ import { SpeedFX } from './fx/speed.js'
 import { GrappleFX } from './fx/grapple.js'
 import { RenderPipeline } from './render/index.js'
 import { Music } from './music.js'
-import { selectTheme, getTheme } from './theme.js'
+import { selectTheme, getTheme, THEMES } from './theme.js'
 
 /**
  * Bootstrap and the game loop.
@@ -230,10 +230,11 @@ function readInput() {
 const canvas = renderer.domElement
 
 hud.overlay.addEventListener('click', (e) => {
-  // The mode buttons live inside the overlay, whose own click starts the run.
-  // Without this guard, picking a difficulty would immediately grab the pointer
-  // and drop you into the course you were still deciding about.
-  if (e.target.closest('.modebtn')) return
+  // The picker cards and the controls disclosure live inside the overlay, whose
+  // own click starts the run. Without this guard, choosing a difficulty (or
+  // opening the key reference) would immediately grab the pointer and drop you
+  // into the course you were still deciding about.
+  if (e.target.closest('.modebtn, .mapbtn, [data-nostart]')) return
   audio.init()
   // Music has to be built after the AudioContext exists, and the context can
   // only be created from a real user gesture — so this is the earliest
@@ -255,6 +256,10 @@ document.addEventListener('pointerlockchange', () => {
   // whole point of it.
   hud.setOverlay(!locked && !photoMode)
   if (locked) {
+    // A menu button keeps DOM focus after the click that dismissed the menu, so
+    // an Enter mid-run would re-fire it — and on a map card that is a page
+    // reload in the middle of someone's run. Drop focus the moment we lock.
+    document.activeElement?.blur?.()
     if (!run.finished) music?.playGameplay()
   } else {
     keys.clear()
@@ -304,6 +309,58 @@ for (const btn of document.querySelectorAll('.modebtn')) {
   })
 }
 hud.setMode(getMode(), MODES)
+
+// -------------------------------------------------------------- map picker
+
+/**
+ * Switch world.
+ *
+ * This one cannot be done live and there is no honest way to pretend otherwise:
+ * the theme is baked into the IBL, a 33^3 grade LUT and every material during
+ * boot (see the comment on `selectTheme`), so changing it means booting again.
+ *
+ * So the reload is made deliberate rather than hidden. The choice is persisted,
+ * the picked card lights immediately, the panel dims behind a named status line
+ * for a beat, and only then does the page go. The alternative — reloading on the
+ * same tick — reads as the game crashing at the exact moment you touched it.
+ *
+ * The URL is updated alongside localStorage because `?theme=` outranks storage
+ * on the next boot: leaving a stale param in the address bar would silently
+ * undo the choice that was just made.
+ */
+const THEME_KEY = 'skyline-courier:theme'
+// Lets the menu's accent follow the booted world without touching the HUD,
+// which stays brass in both (it is an instrument panel, not chrome).
+document.documentElement.dataset.theme = theme.name
+hud.setMap(theme.name)
+
+let switchingMap = false
+
+function applyMap(name) {
+  if (switchingMap || !THEMES[name] || name === theme.name) return
+  switchingMap = true
+  try { localStorage.setItem(THEME_KEY, name) } catch { /* private mode */ }
+  hud.setMap(name)
+  const note = document.querySelector('#loadnote .ltext')
+  if (note) note.textContent = `entering ${THEMES[name].label}`
+  hud.overlay.classList.add('loading')
+  let url = location.href
+  try {
+    const u = new URL(location.href)
+    u.searchParams.set('theme', name)
+    u.searchParams.delete('level')      // the legacy alias, or it would win
+    url = u.toString()
+  } catch { /* non-URL context */ }
+  // Long enough to be read as a departure, short enough not to be a wait.
+  setTimeout(() => location.replace(url), 480)
+}
+
+for (const btn of document.querySelectorAll('.mapbtn')) {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    applyMap(btn.dataset.map)
+  })
+}
 
 // ---------------------------------------------------------------- respawn
 

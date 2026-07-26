@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-07-25 — the start menu picks the map
+
+Ethan: *"we will need a redesign of the initial menu to allow you to select
+both map and normal versus fun and kind of redesign to make it look better
+anyway."* There are two worlds now and no way to reach the second one except by
+typing `?theme=void` into the address bar, which is not a menu.
+
+The overlay is now one dispatch panel with two named choices — **ROUTE** (which
+world) above **RULES** (how the cuff behaves) — a start button, and the keybind
+table demoted from the biggest object on screen to a six-chip strip plus a
+disclosure. Each map card carries its own inline-SVG thumbnail in its own
+colours, so the warm archipelago and the cold violet void are told apart at a
+glance whichever one is booted.
+
+Three things this had to get right and did:
+
+- **The map change reloads, and says so.** The theme is baked into the IBL, a
+  33^3 grade LUT and every material at boot, so there is no honest live swap.
+  The unpicked card is labelled `RELOADS`, the pick lights immediately, the
+  panel dims behind an `ENTERING THE VOID` notice, and only then does the page
+  go. `?theme=` is rewritten alongside the stored key, because the URL param
+  outranks storage on the next boot and a stale one would silently undo the
+  choice.
+- **Picking something is not starting the run.** The overlay's own click takes
+  pointer lock; the guard that kept difficulty cards from dropping you into the
+  course now covers the map cards and the controls disclosure too. Focus is also
+  dropped when the lock is taken, or Enter mid-run would re-fire the last card
+  clicked.
+- **It is legible over both worlds.** Every word sits on one panel plate, so it
+  reads the same over a blown-out golden sky and over a near-black void; only
+  the accent colour follows the booted theme (brass, or violet). The HUD is
+  deliberately left brass in both — it is an instrument panel, not chrome.
+
+Verified by looking: `tools/menu-shots.mjs` shoots the menu over both themes at
+1600x900 and 1280x720 (the 720 case fits with 235 px to spare), and drives the
+three behaviours above plus a bare reload. `hideChrome()` still hides `#overlay`
+by id, photo mode still frees the cursor without raising the menu, and
+`tools/ship-gate.sh` exits 0.
+
 ## 2026-07-25 — the underpass left flank was passable
 
 Reported: *"at the underpass you can go LEFT and leave the play volume
