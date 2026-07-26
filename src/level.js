@@ -1403,7 +1403,13 @@ export function buildCourse(collision) {
   // Brass edging either side of the slot: same signal as before, now a real
   // balustrade rather than two planks. `detail: 1` on purpose — at full
   // baluster pitch an 18 m run reads as a picket fence, not a rail.
-  K.balustrade(L, 131, 0, -8.6, { length: 18, height: 1.5, thickness: 0.7, kind: 'brass', detail: 1 })
+  //
+  // The -Z run starts at the island's edge (x=123) rather than at the lintel,
+  // so the whole LEFT flank from the checkpoint through the slot is closed by
+  // something the player can read. It stops at x=149 on purpose: the apron
+  // beyond it is where the `low-7` branch dashes in over the void from
+  // z=-26, and a parapet there would delete an authored route to buy nothing.
+  K.balustrade(L, 123, 0, -8.6, { length: 26, height: 1.5, thickness: 0.7, kind: 'brass', detail: 1 })
   K.balustrade(L, 131, 0, 5.6, { length: 18, height: 1.5, thickness: 0.7, kind: 'brass', detail: 1 })
   K.vineCurtain(L, 126, -0.5, -9.4, { length: 20, drop: 6 })
   K.waterfall(L, 152, -0.45, 6.4, { height: 30, width: 2.4 })
