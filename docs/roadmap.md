@@ -546,3 +546,26 @@ the new timer treatment. *"the rest looks really great."*
       invariant still holds in both.
 - [ ] Themes come later, and the kit must stay parameterised so a theme is a
       data change.
+
+## Lite Mode (graphics settings)
+
+Ethan, 2026-07-26: *"do whatever you can with minimal cost to graphics and then
+add a Lite Mode for graphics in settings at a later date for the things that
+will impact graphics."*
+
+The split is deliberate and it is the right one: anything free ships silently
+and by default; anything that COSTS a visible thing becomes the player's choice
+rather than ours. `docs/perf.md` has the measurements that say which is which —
+the renderer is fill-bound, and the contact-shadow march is 40%+ of the frame.
+
+- [ ] Lite Mode UI in the start menu, beside ROUTE and RULES. Plumbing and
+      `docs/lite-mode.md` land first (separate lane); this item is the UI only.
+      It must say honestly what each level costs visually, not just promise
+      "better performance".
+- [ ] Decide the default. Today's look is the default and that is correct for a
+      desktop GPU, but a high-DPI laptop may want Lite chosen FOR it on first
+      boot — which needs a capability probe, not a guess.
+- [ ] `devicePixelRatio` cap (`src/main.js:51`, currently `min(dpr, 2)`) belongs
+      to Lite Mode, not to a silent change. On a 4K panel it is 4x the pixels
+      and the single largest lever available; it is also the one a player will
+      SEE, which is exactly why it is theirs to pull.
