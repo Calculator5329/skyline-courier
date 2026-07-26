@@ -109,9 +109,13 @@ export function buildVoidCourse(collision) {
     // in this course gets one, and nothing that is not a landing ever does.
     runeSlab(L, x, y, z, {
       sizeX: w, sizeZ: d, detail: 2, seed: hash(id),
-      // Bigger landings get a proportionally quieter rune, or the hero islands
-      // read as light sources rather than as floors.
-      runeIntensity: 2.4 * Math.min(1, 7 / Math.max(4, w)) + 1.1,
+      // QUIET. At 2.3 the inlay clipped to white and stopped being violet at
+      // all — it read as a strip light set into the floor rather than as a
+      // glyph carved in glowing stone, and it was the brightest thing in every
+      // frame. §6 wants the rune to SAY "you may stand here", which needs it
+      // legible, not incandescent. Bigger landings get a proportionally
+      // quieter one so the hero islands do not become light sources.
+      runeIntensity: 0.85 * Math.min(1, 7 / Math.max(4, w)) + 0.55,
     })
     const n = { id, x, y, z, w, d }
     nodes.set(id, n)
@@ -337,8 +341,23 @@ export function buildVoidCourse(collision) {
       // The sigil ring rides the wall face. §4.1 calls it the most memorable
       // element after the crystals, and it doubles as a landmark for reading
       // which way is on.
-      if (i % 4 === 0) {
-        sigilRing(L, wx, y + 6, wz, { radius: 7.5, axis, color: colors.sigil, detail: 2 })
+      // SEVERAL STOREYS ACROSS, and on most walls. art-direction-void.md §4.1
+      // calls the sigil ring "the most memorable element after the crystals"
+      // and notes the largest in the reference spans several storeys — ours
+      // were 7.5 m on a 46 m wall, which reads as a decal rather than as
+      // architecture. Ethan, on the current build: "continually iterating to
+      // look more like the reference screenshot."
+      //
+      // A big one low on the face where the player passes it, and on every
+      // third wall a second, smaller one high up, so the wall has a hierarchy
+      // rather than one centred badge.
+      sigilRing(L, wx, y + 9, wz, {
+        radius: 13 + (i % 3) * 2.5, axis, color: colors.sigil, detail: 2,
+      })
+      if (i % 3 === 1) {
+        sigilRing(L, wx, y + 27, wz, {
+          radius: 6.5, axis, color: colors.rune, detail: 1,
+        })
       }
     }
   }

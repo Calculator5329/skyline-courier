@@ -221,9 +221,12 @@ export const VOID_SHOTS = {
   // Low on the spiral, reading the next crossing. The readability test: in a
   // near-black level, can a player tell where to go next?
   midclimb: {
-    pos: [30.4, 103.5 + DECK, -51.5],
-    yaw: yawTo(-0.6, 0.8),
-    pitch: 0.18,
+    // Backed off the island centre and turned outward. Standing dead centre
+    // put the camera inside the hero crystal cluster, which sits just off the
+    // rim — the frame was 40% pink shard and told you nothing about the route.
+    pos: [26.0, 103.5 + DECK, -47.0],
+    yaw: yawTo(-0.8, 0.6),
+    pitch: 0.16,
     vel: [9, 0, 6],
     note: 'VOID: on hero-8, reading the next crossing',
   },
