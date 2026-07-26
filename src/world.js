@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { PALETTE } from './materials.js'
 import { SKY, SKY_GRADIENT_GLSL } from './render/skygrad.js'
 import { getTheme, themeSunDir } from './theme.js'
+import { voidBeamSites } from './fx/voidfx.js'
 
 /**
  * Sky, light, and atmosphere.
@@ -60,6 +61,26 @@ const SKY_FRAG = /* glsl */`
     float h = d.y;
     vec3 sunDir = normalize(uSunDir);
     float sun = max(dot(d, sunDir), 0.0);
+
+    // --- the void: no deck, no disc, no aureole -----------------------------
+    //
+    // An early return rather than a set of multipliers, because every effect
+    // below this line is a statement that there is a sky and a sun, and a void
+    // has neither (art-direction-void.md §3). The measured failure this fixes
+    // was specific and visible in the very first void capture: the cloud deck
+    // still rendered, lit, under a bright horizon band, so the theme's whole
+    // background was a golden-hour sky wearing a violet coat — which is the
+    // "dark version of the sunset level" §1 says is wrong, and it is where the
+    // uniform violet murk and the missing black point both came from.
+    //
+    // The branch is on a uniform, so it is coherent across every wavefront and
+    // costs nothing; it also skips five octaves of fbm per pixel over the whole
+    // lower half of the frame, which is why the void dome is CHEAPER than the
+    // skyline one rather than a tax on it.
+    if (scSkyVoid > 0.5) {
+      gl_FragColor = vec4(scSkyGradient(d, uZenith, uHorizon, uGround, uSunColor, sunDir), 1.0);
+      return;
+    }
 
     // The shared low-frequency gradient — the SAME function the aerial
     // perspective in render/patch.js uses as its inscatter colour. Everything
@@ -230,6 +251,11 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
         // the aerial perspective samples. Two files holding two copies of the
         // same sky is precisely how distant islands ended up terminating
         // against a colour the sky never reached.
+        // Declared by SKY_GRADIENT_GLSL, not here — see render/skygrad.js.
+        // The dome and the aerial perspective read the same flag from the same
+        // include, so there is no way to put one of them in void mode and
+        // leave the other painting clouds.
+        scSkyVoid: { value: theme.sky && theme.sky.voidMode ? 1 : 0 },
         uZenith: { value: new THREE.Color(SKYC.zenith) },
         uHorizon: { value: horizon },
         // "Ground" is the cloud deck, so it is BRIGHT. Everything below the
@@ -317,12 +343,42 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
   const COUNT = theme.motes.count
   const pos = new Float32Array(COUNT * 3)
   const seed = new Float32Array(COUNT)
+  /**
+   * Dust is only visible where there is light to catch.
+   *
+   * `art-direction-void.md` §4.5 asks for motes "denser near crystals and
+   * beams", and that is not decoration — a uniform dust field in a near-black
+   * scene is invisible everywhere except in front of an emissive, so an even
+   * spread spends 90% of its particle budget on nothing and still leaves the
+   * beams under-dressed. `theme.motes.cluster` is the fraction that gets bound
+   * to a light source instead.
+   *
+   * The sites come from fx/voidfx.js rather than being reinvented here: two
+   * files with two opinions about where the light in this world is would
+   * quietly put the dust beside the beams rather than in them.
+   */
+  const clusterFrac = theme.motes.cluster || 0
+  const sites = clusterFrac > 0 ? voidBeamSites() : []
   for (let i = 0; i < COUNT; i++) {
-    // Spread is per-theme: the skyline's motes hug the route, the void's fill
-    // a much taller column because the course climbs through them.
-    pos[i * 3] = -20 + Math.random() * theme.motes.spread[0]
-    pos[i * 3 + 1] = -6 + Math.random() * theme.motes.spread[1]
-    pos[i * 3 + 2] = -60 + Math.random() * theme.motes.spread[2]
+    if (sites.length && Math.random() < clusterFrac) {
+      const s = sites[(Math.random() * sites.length) | 0]
+      // A loose sleeve around the column, biased tight: r^2 concentrates the
+      // draw near the beam where the light actually is, and the long tail
+      // keeps it from reading as a solid tube.
+      const r = 2.0 + 26.0 * Math.random() * Math.random()
+      const a = Math.random() * Math.PI * 2
+      pos[i * 3] = s.x + Math.cos(a) * r
+      // Only the part of the column the player can plausibly see; the beams
+      // run from 100 m below the kill plane and dust down there is wasted.
+      pos[i * 3 + 1] = -12 + Math.random() * 110
+      pos[i * 3 + 2] = s.z + Math.sin(a) * r
+    } else {
+      // Spread is per-theme: the skyline's motes hug the route, the void's fill
+      // a much taller column because the course climbs through them.
+      pos[i * 3] = -20 + Math.random() * theme.motes.spread[0]
+      pos[i * 3 + 1] = -6 + Math.random() * theme.motes.spread[1]
+      pos[i * 3 + 2] = -60 + Math.random() * theme.motes.spread[2]
+    }
     seed[i] = Math.random() * Math.PI * 2
   }
   const moteGeo = new THREE.BufferGeometry()

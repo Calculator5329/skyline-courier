@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-07-25 — the Void gets a void: sky, atmosphere, exposure, energy beams
+
+The void theme rendered, and measured as uniform violet murk: `lum 77.8,
+p50 69.7, clip lo 0%` against `docs/art-direction-void.md` §2's `28-55 /
+22-45 / 2-8%`. Four separate causes, all found by measuring rather than by
+looking.
+
+- **`src/render/skygrad.js` — a void mode in the shared gradient.** The dome
+  was still painting a lit CLOUD DECK under a bright horizon band, so the
+  theme's background was a golden-hour sky wearing a violet coat. `scSkyVoid`
+  is declared inside the shared include, so the dome, the aerial perspective's
+  inscatter and `scene.fog` switch together and the single-evaluation property
+  the file exists for survives. `scVoidGradient` is a different shape, not the
+  old one with darker inputs: no deck, no disc, no aureole, and one smooth
+  monotone ramp over 130 degrees of dome so there is no h at which the
+  derivative spikes and therefore no horizon LINE (§3).
+- **`src/render/index.js` — the haze now gets the theme's sky.** `options.sky`
+  reached the IBL and the dome and *not* the aerial perspective, which kept
+  `skygrad.js`'s module defaults: a theme could repaint the whole background
+  and still have every distant surface fade into golden-hour cream. Also adds
+  `options.aerial`, the third per-theme overlay alongside `grade` and
+  `exposure`, which is what draws §5's three depth bands.
+- **`src/render/exposure.js` — `compensation`, `tapClamp` and `horizonBias`
+  are per-theme, and three of the four were being silently dropped.**
+  `src/theme.js` had been setting `compensation` and `horizonBias` since the
+  theme landed; `AutoExposure` read neither. That mattered more than it
+  sounds: auto-exposure places the metered average at one fixed display value
+  whatever the scene luminance is, so with `compensation` inert the only lever
+  anyone had was dimming the lights, and dimming the lights makes the meter
+  open up and hand back the same mid-grey frame. That is the whole mechanism
+  behind the murk.
+- **`src/theme.js` — the void's exposure is PINNED (`minEV == maxEV`).**
+  `tools/evprobe.mjs` (new) reads the metered EV out of the 1x1 adaptation
+  target: on the void course it came back between -2.35 and -4.34 depending
+  on the shot, which is two stops of disagreement about how bright the same
+  world is, driven by how much geometry happens to be in frame. There is no
+  sun here and no indoors, so the honest range of scene luminance is zero
+  stops and anything the meter does is measuring composition. `tapClamp` also
+  drops 8.0 -> 0.6: at 8.0 a beam swinging into frame is worth seven stops of
+  extra vote per texel and the image visibly stops down as you run past a
+  landmark. Measured drift over 90 frames is now 0.000 on all eleven shots.
+- **`src/fx/voidfx.js` (new) — §4.4's energy beams.** Twelve thin red/magenta
+  columns, instanced, one draw call, no colliders (volumetric light, like the
+  motes and the grapple line). Cores authored at 30-70 in linear light so they
+  clear the 0.78 bloom threshold after a two-stop-down exposure — the apparent
+  width is bloom, and widening the quad is the one change that would destroy
+  the effect. They billboard about the WORLD Y axis only, so a vertical
+  landmark stays vertical when the player pitches up, and they carry their own
+  extinction term because additive geometry never reaches the aerial
+  perspective and a set of landmarks immune to fog collapses §5's three bands
+  back into one.
+- **`src/world.js` — motes cluster on the beams.** §4.5 asks for dust "denser
+  near crystals and beams". In a near-black scene that is not decoration: dust
+  with no light on it is invisible, so an even spread spends most of its
+  budget on nothing. 55% of the void's motes are bound to a beam site, and the
+  sites come from `voidfx.js` rather than being reinvented.
+
+Measured, void, 1600x900, all eleven shots (before -> after, terrace):
+`lum 77.7 -> 33.7`, `p50 69.7 -> 25.5`, `p99 241.3 -> 245.3`, `p1 4.7 -> 1.3`,
+`clip lo 0% -> 3.7%`, `sat 0.59 -> 0.83`. Across the set: `p50` in §2's band
+on 9 of 11 shots (was 0), `lum` on 8 of 11 (was 0), `sat > 0.45` on 11 of 11,
+`p99 - p1 > 200` on 9 of 11. The shots still short are short of `p99` and
+`clip hi`, and both are the same gap: they contain no emissive. Crystals,
+sigil rings and rune inlays are §4.1-4.3 and are not in this change.
+
+`skyline` is byte-identical where it matters: `closeup` is `lum 110.6,
+sat 0.81, p1/p50/p99 19.9/116.6/185.3` before and after, draw calls unchanged,
+and `bash tools/ship-gate.sh` exits 0.
+
+`tools/shotset.mjs` now prints `dyn` (p99 - p1) beside `spread` (the 3x3
+region spread). §2 writes "spread (p99-p1)" and then quotes the region numbers
+next to it, which sets a >200 target against a statistic that would need a
+ninth of the frame to average pure white. Printing both is cheaper than
+arguing about which one a target meant.
+
 ## 2026-07-25 — the underpass left flank was passable
 
 Reported: *"at the underpass you can go LEFT and leave the play volume

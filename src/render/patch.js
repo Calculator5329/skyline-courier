@@ -49,7 +49,7 @@ import { SKY, SKY_GRADIENT_GLSL } from './skygrad.js'
  * a stale cached program cannot survive an edit to this file during a dev
  * session.
  */
-const PATCH_VERSION = 3
+const PATCH_VERSION = 4
 
 /** Materials that actually run three's lighting pipeline. */
 function isLit(m) {
@@ -522,6 +522,16 @@ export class MaterialPatcher {
        * the sky moved, and measured on the shot set it had drifted far enough
        * that distant islands came back cool blue-white against a warm tan sky.
        */
+      /**
+       * Void mode, shared with the dome. See render/skygrad.js.
+       *
+       * It lives in the SAME uniform block as the sky colours for the same
+       * reason they do: the aerial perspective's inscatter and the dome behind
+       * it must be one evaluation. A void whose haze still remembered a cloud
+       * deck would fade every distant ruin into a colour the background does
+       * not contain.
+       */
+      scSkyVoid: { value: 0 },
       scSkyZenith: { value: new THREE.Color(SKY.zenith) },
       scSkyHorizon: { value: new THREE.Color(SKY.horizon) },
       scSkyDeck: { value: new THREE.Color(SKY.deck) },
@@ -679,6 +689,7 @@ export class MaterialPatcher {
    * terminating against a colour the sky behind it does not reach.
    */
   setSkyColors(c) {
+    if (c.voidMode !== undefined) this.uniforms.scSkyVoid.value = c.voidMode ? 1 : 0
     if (c.zenith !== undefined) this.uniforms.scSkyZenith.value.set(c.zenith)
     if (c.horizon !== undefined) this.uniforms.scSkyHorizon.value.set(c.horizon)
     if (c.deck !== undefined) this.uniforms.scSkyDeck.value.set(c.deck)
