@@ -71,7 +71,12 @@ export class Music {
     this._pending = null
     this._mode = 'none'   // 'none' | 'menu' | 'gameplay' | 'finish'
     this._intensity = 0
-    this._volume = 1
+    // Music is a bed, not a foreground element. At 1.0 it competed with the
+    // footsteps, landings and grapple cues that actually carry information —
+    // and those are the sounds a player needs to hear to read their own
+    // movement. (Ethan, playtest: "music is a bit loud".) 0.38 leaves it
+    // clearly present under a run without masking the transients.
+    this._volume = 0.38
 
     this._sources = Object.create(null) // name -> AudioBufferSourceNode
     this._gains = Object.create(null)   // name -> GainNode

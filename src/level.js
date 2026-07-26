@@ -555,8 +555,37 @@ export class Level {
       b.col.push(t, t, t)
     }
 
-    if (index) for (let i = 0; i < index.count; i++) b.idx.push(base + index.getX(i))
-    else for (let i = 0; i < count; i++) b.idx.push(base + i)
+    // Guard against a mirrored placement flipping triangle winding.
+    //
+    // A negative-determinant matrix reverses the orientation of every triangle
+    // it transforms, and the surface materials are FrontSide, so those
+    // triangles would be backface-culled — present, lit, and invisible.
+    //
+    // HONEST NOTE: as of this writing NO placement in the level is actually
+    // mirrored, so this branch is currently dead code. It is kept because it
+    // is correct and costs one determinant, and because the moment someone
+    // hands a prefab left-to-right with a negative scale it stops being dead.
+    //
+    // It is NOT the cause of the invisible-surface bug. That bug is real —
+    // 543 of 605,966 triangles are wound inconsistently with their own vertex
+    // normals, and forcing DoubleSide recovers 13.4% of the frame — but the
+    // inconsistency is baked in at GENERATION time, not introduced here.
+    // See docs/roadmap.md.
+    const mirrored = matrix.determinant() < 0
+
+    if (index) {
+      if (mirrored) {
+        for (let i = 0; i < index.count; i += 3) {
+          b.idx.push(base + index.getX(i), base + index.getX(i + 2), base + index.getX(i + 1))
+        }
+      } else {
+        for (let i = 0; i < index.count; i++) b.idx.push(base + index.getX(i))
+      }
+    } else if (mirrored) {
+      for (let i = 0; i < count; i += 3) b.idx.push(base + i, base + i + 2, base + i + 1)
+    } else {
+      for (let i = 0; i < count; i++) b.idx.push(base + i)
+    }
     b.count += count
     // These geometries exist only to be copied into the batch; nothing ever
     // uploads them, so hand the buffers back at once rather than at load-end.

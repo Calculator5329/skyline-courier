@@ -422,6 +422,10 @@ function saveBest(t) {
 window.__game = {
   player, rig, run, level, camera, scene, renderer, input, keys, respawn, resetRun,
   tick, TUNING, MODES, getMode, setMode: applyMode,
+  // Exposed so render passes can be toggled from the console when bisecting a
+  // visual bug. Finding which pass owns an artifact by turning them off one at
+  // a time is far faster than reading four shaders.
+  pipeline,
   /** Advance `frames` fixed frames without waiting on rAF. */
   drive(frames, dt = 1 / 60) {
     for (let i = 0; i < frames; i++) tick(dt)
