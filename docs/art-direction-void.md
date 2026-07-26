@@ -1,0 +1,237 @@
+# Art direction — THEME 2: the Void
+
+The second theme. Read `docs/art-direction.md` first for the house rules; this
+document overrides its palette and light, not its principles.
+
+Written from Ethan's reference image, 2026-07-25. **The repo holds no image
+files** (CLAUDE.md rule 1), so this document IS the reference. Everything below
+is a description of that frame, and where a number appears it was read off the
+image rather than invented. An agent that cannot see the image can still hit it
+by hitting these numbers.
+
+Ethan's brief, verbatim on the parts that bind:
+
+> "a huge dark mythical void filled with floating ruins, glowing jagged
+> crystals, purple, blue, and red energy, fog, particles, and many platforms
+> rising high into the sky. The level should feel vertical, fast, mysterious,
+> futuristic, and slightly magical, with the player almost flying upward."
+
+---
+
+## 1. The one-sentence read
+
+**A near-black cathedral of carved ruins, lit entirely from within by violet
+crystal and red sigil-fire, receding upward through violet fog.**
+
+If a frame reads as "a dark version of the sunset level", it is wrong. The
+sunset theme is lit BY THE SKY and shaded by mass. The void theme is lit BY
+OBJECTS and shaped by darkness. That inversion is the whole brief.
+
+---
+
+## 2. Value structure — the thing most likely to be got wrong
+
+The reference is a LOW-KEY image with SMALL, VERY BRIGHT accents. Most of the
+frame sits in the bottom third of the value range; less than about 5% of it is
+bright, and that 5% is almost all emissive.
+
+The failure mode is a uniformly murky mid-grey frame — "dark" achieved by
+turning exposure down, which flattens everything and reads as fog soup. The
+correct image is a HIGH-CONTRAST one that happens to be mostly dark.
+
+Acceptance numbers for `tools/analyze.mjs`, per shot, on the void course:
+
+| metric | sunset (today) | void (target) | why |
+| --- | --- | --- | --- |
+| `lum` mean | 110–135 | **28–55** | mostly dark |
+| `p1` | 14–39 | **0–6** | real crushed blacks |
+| `p50` | 110–150 | **22–45** | the mass sits low |
+| `p99` | 180–232 | **> 215** | emissives punch |
+| `spread` (p99−p1) | 32–98 | **> 200** | the contrast is the look |
+| `clip lo` | 0–0.2% | **2–8%** | true black is present |
+| `clip hi` | 0–1% | **0.3–2.5%** | crystal cores blow, nothing else |
+| `sat` | 0.3–0.8 | **> 0.45** | violet everywhere, never grey |
+
+A frame that passes `lum` but fails `spread` is the murk failure. **Both must
+pass.** These belong in the gate, not in a reviewer's opinion.
+
+---
+
+## 3. Palette
+
+Colours read off the reference. Treat as anchors, not gospel — but do not drift
+toward blue-grey neutrality, which is where every "dark fantasy" scene dies.
+
+**Rock — the mass.** Near-black, cool, faintly violet. Roughly `#14101F` in
+shadow to `#2A2438` where lit. It is never a neutral grey: even the darkest
+rock keeps a violet cast, and that is what stops the frame reading as
+desaturated. Carved faces are a touch warmer where sigil-light lands on them.
+
+**Violet crystal — the signature.** `#8B5CF6` body rising to `#C4A6FF` at the
+edges and a near-white `#EDE4FF` core. Large shards are semi-translucent: they
+transmit light along their length so the tip glows brighter than the base.
+These are the biggest light sources in the frame.
+
+**Blue crystal — the secondary.** `#3B82F6` to `#7DD3FC`. Smaller, scattered,
+clustered on ruin edges and platform undersides. Reads as cooler and further
+away; use it for depth, not for hero moments.
+
+**Red / magenta energy — the punctuation.** `#FF2D55` through `#E11D48`. This
+is the rarest and most intense colour and it must stay rare. It appears as:
+vertical beams, glowing sigil rings on the great walls, and cracks in the rock.
+If red is everywhere, the image loses its focal points.
+
+**Fog.** Violet, `#4C3A7A` near, washing to `#6B5A9E` far. Distant structures
+lose contrast and gain violet — classic aerial perspective, but toward violet
+rather than toward sky-blue. This is what carries the sense of enormous depth.
+
+**There is no sun and no sky.** The background is fog and darkness. Anything
+that reads as a horizon line is wrong.
+
+---
+
+## 4. The elements, in priority order
+
+Build them in this order. Each one earns the next.
+
+### 4.1 The great walls (highest impact)
+
+Colossal carved structures framing left and right, running the full height of
+the frame and beyond it. Flat-ish faces divided into rectangular panels by deep
+recessed grooves, like a machined cliff. They are what makes the space read as
+built rather than as a rock field, and they are the wall-run surfaces.
+
+On their faces: **glowing sigil rings** — concentric circles with radial tick
+marks and a star or diamond at the centre, inlaid and glowing red. In the
+reference the largest is several storeys across. They are the single most
+memorable element after the crystals.
+
+### 4.2 Floating ruin platforms
+
+Dark stone slabs, roughly square, with a carved raised border and a **glowing
+rune inlay on the top face** — violet, geometric, a rosette or star knot. The
+top is flat and readable (it is a landing surface and must LOOK like one).
+
+The underside is the opposite: jagged broken rock, irregular, with drip-like
+spikes hanging beneath and small crystals embedded in the fracture. Nothing
+about the underside is flat.
+
+This is `drumPlatform`'s job in the sunset theme. Note that `drumPlatform` was
+hollow until commit `da98a78` — reuse the FIXED prefab, and keep the invariant
+it establishes: the drawn body must follow the collider's own outline.
+
+### 4.3 Crystal shards
+
+Two families, both **jagged and faceted, never smooth**:
+
+- **Hero shards** — huge, violet, translucent, erupting from rock at an angle
+  in clusters of three to seven at varied lengths and tilts. In the reference
+  one fills the entire left edge of the frame. Big enough to be architecture.
+- **Scatter shards** — small, blue or violet, in clusters on ruin edges, in
+  fractures, on platform undersides. These do the work of making the world feel
+  continuous rather than staged.
+
+Facets must be flat and sharp with hard normal breaks — the whole read depends
+on light snapping between faces. A smooth-shaded crystal looks like a jelly.
+
+### 4.4 Vertical energy beams
+
+Thin, intensely bright red/magenta columns running vertically through the void,
+tens of metres long, heavily bloomed. Long, straight, and very thin — the
+contrast between their thinness and their brightness is the effect.
+
+They are also a gift to gameplay: unmissable vertical landmarks in a course
+whose whole problem is that the player must read height.
+
+### 4.5 Fog, motes and drift
+
+Volumetric violet haze thickening with distance. Fine dust motes drifting
+slowly, catching light — denser near crystals and beams. Small debris drifting
+upward sells "the void has a current" and reinforces the upward pull.
+
+---
+
+## 5. Composition and camera
+
+The reference is shot looking **up and forward** into a receding vertical
+corridor: great walls left and right, platforms stepping away and upward toward
+a bright violet vanishing point.
+
+Rules that follow:
+
+- **Always frame a vertical.** Every hero vantage should have a beam, a shard,
+  or a wall edge running top to bottom.
+- **Look up, not down.** The sunset level's beauty shots look out and across.
+  These look UP. The vanishing point sits above the horizon of the frame.
+- **Silhouette against glow.** Dark mass reads only when backed by something
+  brighter. Every important edge needs a glow behind it — this is a composition
+  rule, not a lighting one, and it must be designed into the level layout.
+- **Depth in three bands.** Near mass nearly black and sharply lit; mid ruins
+  in violet fog; far structures washed almost to the fog colour. If everything
+  sits in one band the space collapses.
+
+---
+
+## 6. Gameplay reads
+
+The art brief and the movement brief agree here, which is lucky and should be
+exploited.
+
+- Great walls → **wall-run and wall-jump** surfaces. Their panel grooves give
+  the eye something to measure speed against, which the flat brass wall in the
+  sunset level does not.
+- Beams → **vertical landmarks** for reading height, and natural grapple
+  sightlines.
+- Rune-inlaid platform tops → **landing affordance**. Continue the sunset
+  level's language: a glowing rune means "you may stand here". Never put a rune
+  on a surface the player cannot land on. This is load-bearing and non-negotiable
+  — it is the only readability channel a dark level has.
+- Crystal clusters → **hazard or handhold**, pick one and be consistent.
+  Recommendation: never a hazard. Movement is sacred (CLAUDE.md rule 3) and the
+  brief asks for fast and fun, not punishing.
+- Fog → hides the bottom of the void, so a fall reads as bottomless without
+  needing to model a bottom.
+
+Spacing obeys `docs/course-design.md` exactly. **The traversal envelope does not
+change with the theme.** A jump that works in the sunset level works here, and
+one that does not is a bug in either theme.
+
+---
+
+## 7. Hard constraints
+
+1. **Zero external art assets** (CLAUDE.md rule 1). Every crystal, rune and
+   beam is generated geometry or a procedural canvas/shader texture. No image
+   files. The music exception does not extend to anything here.
+2. **Themes are a data change wherever possible** (`docs/scaling-plan.md`).
+   New PREFABS are legitimate — crystals and sigils genuinely do not exist yet
+   — but a new prefab must be theme-neutral in shape and take its colours from
+   the theme descriptor. Nothing gets a hardcoded violet.
+3. **Browser performance is a requirement, not a nice-to-have.** Instancing for
+   crystals and motes, LODs on ruins, and the existing draw-call budget. A dark
+   scene full of emissives is the classic way to blow a bloom budget — measure
+   `ms/f` in the shot table and keep it in the range the sunset level holds.
+4. **Auto-exposure must be reined in.** A near-black scene with tiny brilliant
+   emissives is precisely the case that makes an auto-exposure loop hunt: it
+   will try to lift the darkness and wash the whole theme out. Expect to clamp
+   or bias it per theme, and treat a drifting exposure as a bug.
+5. **Do not touch core movement** (Ethan, explicitly). The level adapts to the
+   movement system; the movement system does not adapt to the level.
+
+---
+
+## 8. How this gets judged
+
+By reading rendered PNGs from the actual gameplay camera, never by reading
+code — `docs/purpose.md`'s "compiling is not verification", applied to art.
+
+A shot passes when:
+
+1. The measured numbers in §2 are all in range.
+2. A reviewer looking at it cannot tell it apart from the reference in **value
+   structure, palette and composition** — not in literal content.
+3. Nothing in it reads as generic. The specific failure modes to hunt: uniform
+   murk with no black point; crystals that are smooth instead of faceted; red
+   used so often it stops being an accent; a visible horizon; platforms whose
+   landing surface is not obviously a landing surface; and fog thick enough to
+   hide the fact that nothing was built behind it.

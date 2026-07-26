@@ -141,9 +141,47 @@ window.addEventListener('keydown', (e) => {
     respawn()
     return
   }
+  if (e.code === 'KeyP') {
+    setPhotoMode(!photoMode)
+    e.preventDefault()
+    return
+  }
   const k = KEY_MAP[e.code]
   if (k) { keys.add(k); e.preventDefault() }
 })
+
+// --------------------------------------------------------------- photo mode
+//
+// Ethan, mid-playtest: "I wish I could take screenshots without going to menu
+// so I can give you better feedback."
+//
+// Escape was the only way to free the cursor, and freeing the cursor raises the
+// overlay straight over the exact frame he was trying to show me — so every bug
+// report arrived as a screenshot of the menu with the evidence blurred behind
+// it. That is a bug in the FEEDBACK LOOP, which makes it worth more than most
+// bugs in the game.
+//
+// P frees the cursor, freezes the simulation and hides the HUD, and leaves the
+// world on screen untouched. Click to go back to playing. Freezing matters as
+// much as the cursor does: it means a mid-air frame can be photographed, and
+// falling past the thing you wanted to report no longer loses it.
+let photoMode = false
+
+function setPhotoMode(on) {
+  photoMode = on
+  const h = document.getElementById('hud')
+  if (h) h.style.display = on ? 'none' : ''
+  if (on) {
+    // Drop held keys, or the freeze captures a stuck input and the player
+    // sprints off the moment the cursor comes back.
+    keys.clear()
+    input.jumpHeld = false
+    input.grappleHeld = false
+    document.exitPointerLock()
+  } else {
+    canvas.requestPointerLock()
+  }
+}
 
 window.addEventListener('keyup', (e) => {
   if (e.code === 'Space') { input.jumpHeld = false; return }
@@ -184,12 +222,17 @@ hud.overlay.addEventListener('click', (e) => {
     music.load()
   }
   music?.playMenu()
-  canvas.requestPointerLock()
+  // Clicking back in is also how you leave photo mode — reaching for P again
+  // when you have a free cursor and the world in front of you is not obvious.
+  if (photoMode) setPhotoMode(false)
+  else canvas.requestPointerLock()
 })
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === canvas
-  hud.setOverlay(!locked)
+  // Photo mode is the one way to be unlocked WITHOUT the overlay — that is the
+  // whole point of it.
+  hud.setOverlay(!locked && !photoMode)
   if (locked) {
     if (!run.finished) music?.playGameplay()
   } else {
@@ -341,7 +384,13 @@ function tick(dt) {
 
   readInput()
 
-  accumulator += dt
+  // Photo mode freezes the SIMULATION only. Everything downstream of it — the
+  // camera rig, the world, the render pipeline — keeps running below, so the
+  // frame stays live and lit rather than becoming a paused black screen, and
+  // the player simply stops moving. `accumulator` deliberately does not
+  // advance either: banking up time while frozen would fire a burst of catch-up
+  // sim steps the instant the cursor came back.
+  accumulator += photoMode ? 0 : dt
   let steps = 0
   while (accumulator >= FIXED_STEP && steps < 16) {
     player.update(FIXED_STEP, input, rig.yaw, rig.pitch)
