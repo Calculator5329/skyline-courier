@@ -205,6 +205,13 @@ Ordered by how much each one costs the frame, worst first.
 
 ### HUD and FX
 
+- [x] **The HUD is wrong for a dark level.** (2026-07-25) Ethan, playing the
+      void. The panel was fixed brass with a darkening scrim and a plate ramp
+      that bottoms out at `#8a6224` — every one of those decisions is tuned for
+      a blown-out golden sky, and over near-black violet it was the only warm
+      thing left in frame once the beacon, gates and lanterns were themed. The
+      panel now takes a theme alloy from `#hud`, the same `data-theme`
+      mechanism the menu already uses. See `docs/changelog.md`.
 - [ ] The reticle is a 5 px translucent dot (`index.html:35-45`) and is
       invisible against gold and against the specular blowout. Build it from a
       2 px dark outline plus a light core; grow the `.hot` state into a 3-arc

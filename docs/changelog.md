@@ -1,5 +1,78 @@
 # Changelog
 
+## 2026-07-25 — the HUD gets a second alloy
+
+Ethan, playing the void: **"HUD is wrong for a dark level."** He is right, and
+the reason is value rather than taste. Every contrast decision in the panel was
+tuned against a blown-out golden sky: a warm plate ramp bottoming out at
+`#8a6224`, a scrim that DARKENS, hairlines at .34 alpha, an engraved channel
+drawn as a near-black recess. All of those work by being the dark thing on a
+bright field, and each one inverts over near-black violet. It also left the
+panel as the only warm object in a frame whose beacon, gates and lanterns had
+all been themed the week before.
+
+- **`index.html` — the panel is milled from a theme alloy.** The nine colour
+  tokens the instrument rules already use (`--brass`, `--plate`, `--scrim`,
+  `--hair` and friends) are now *redeclared on `#hud`*, which is an ancestor of
+  every instrument. A theme therefore re-tones the whole panel from one block
+  without a single rule below being touched, and anything added to the HUD
+  later inherits the re-tone for free. `:root` keeps the originals for
+  everything outside the HUD. This extends the `data-theme` mechanism the start
+  menu already uses rather than inventing a second one — but the two token sets
+  stay separate, because a card over a live frame and an instrument in front of
+  one answer the contrast question differently.
+
+  The comment in `#overlay` claiming the HUD "must not change colour with the
+  theme" is retracted with it.
+
+- **The void alloy follows the world's own signal language.** The mid accent is
+  the lantern violet, the altimeter datum at y=0 is the checkpoint gate's cool
+  cyan and the sprint redline is the gate's hot magenta — all three lifted from
+  `theme.js` `accents`. The HUD now says "usable" and "hot" in the colours the
+  level says them in.
+
+  Three findings, all measured, all of which cost a pass to learn:
+
+  1. **A dark world does not want a pale panel.** The first version raised the
+     plate ramp toward white on that theory and photographed grey: the void's
+     background *is* violet, so a pale violet panel has neither value nor hue
+     separation from it. The verb, the captions and the nav chevron all
+     vanished. Brass reads over the skyline because it is SATURATED against a
+     desaturated tan haze — chroma is the property to carry over, not value.
+  2. **...but the ramp still may not descend.** A corrected version with a
+     `#6a48c0` trough photographed bitten, the right-hand digits swallowed by
+     their own dark band. Light AND chromatic at every stop is the answer.
+  3. **The scrim stays a darkener.** The brief expected it to be actively
+     wrong; measured, it is only half wrong. The void is not uniformly dark —
+     the mid-band haze is bright lavender across most of the upper frame, and
+     beams and crystal cores are authored at 30-70 emissive and pass right
+     behind the panel. What changed is that its ramp now dies at 44% instead of
+     72%, so on a genuinely black frame the instrument gets a pool of violet
+     light to sit in *without the lift reaching the edge of its own box and
+     drawing a rectangle*.
+
+  Everything the skyline draws as a dark recess — the speed channel, an unlit
+  checkpoint pip, a spent ability lamp — is redrawn as a faint lift, because an
+  empty gauge still has to read as an empty gauge.
+
+- **`tools/hud-shots.mjs` (new) — the panel's own shot set.** The HUD is the
+  one surface the capture harness can never photograph: `shotset.mjs` calls
+  `hideChrome()` first thing, and rightly so, since HUD pixels are saturated UI
+  colour that would poison every `analyze.mjs` number. This is `menu-shots.mjs`'s
+  pattern with `hideChrome(page, { hud: true })`, and it also fakes a run in
+  progress — `__SHOT__` parks `run.started = false`, and a panel at 0.00 with no
+  checkpoints and no compass exercises almost nothing.
+
+  It carries the regression check too. Two captures of the same build differ by
+  ~1.7e8 AE over the archipelago (drifting cloud, motes, the exposure meter),
+  which is an order of magnitude more noise than any HUD edit is signal — so
+  `hud-flat-*` hides the canvas, puts the panel on a flat field, and kills
+  transitions and `@keyframes`, which are wall-clock and not driven by the
+  harness's fixed ticks. That frame is DOM-only and exactly reproducible.
+  **`hud-flat-skyline` diffs to max=0 against main**: the shipped look is
+  untouched, which is the whole constraint. It also asserts that both ways of
+  hiding the panel — `hideChrome()` and photo mode — still work.
+
 ## 2026-07-25 — the void gets a background, and its beams get cut to six
 
 Two notes from Ethan with the build beside the reference image, answered
