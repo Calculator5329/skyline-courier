@@ -1,4 +1,14 @@
 import * as THREE from 'three'
+import { getTheme } from '../theme.js'
+
+/** One themed speed-FX colour, with the shipped value as the fallback. */
+function speedAccent(key, fallback) {
+  try {
+    const t = getTheme()
+    const v = t && t.accents && t.accents[key]
+    return v == null ? fallback : v
+  } catch { return fallback }
+}
 import { TUNING } from '../player.js'
 import { disposeMoteField, sharedMoteField } from './motes.js'
 
@@ -216,7 +226,12 @@ export class SpeedFX {
       uBurst: { value: 0 },
       uSlide: { value: 0 },
       uAspect: { value: 1 },
-      uTint: { value: new THREE.Color(0xfff0d4) },
+      // PER THEME. These are wind streaks torn off the air the player is
+      // moving through, so they are the same light as the haze — and in the
+      // void, warm cream streaks were reading as a second family of laser
+      // beams across a violet frame, which is exactly the thing the beam lane
+      // was cutting down.
+      uTint: { value: new THREE.Color(speedAccent('streakOverlay', 0xfff0d4)) },
       uCenter: { value: new THREE.Vector2(0, 0) },
     }
 
@@ -248,7 +263,7 @@ export class SpeedFX {
     this.streakMat = new THREE.MeshBasicMaterial({
       // Warm, not white. Everything in this world is lit by a low sun, and a
       // neutral streak reads as a UI element laid over the picture.
-      color: 0xffe4bc,
+      color: speedAccent('streak', 0xffe4bc),
       transparent: true,
       opacity: 0,
       depthWrite: false,

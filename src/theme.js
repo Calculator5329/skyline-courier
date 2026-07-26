@@ -103,6 +103,8 @@ const skyline = {
     gateHot: 0xffc266,
     gateCool: 0x9fd8c8,
     lantern: null,          // null = PALETTE.brass, the shipped value
+    streak: null,           // null = the shipped wind-streak cream
+    streakOverlay: null,
   },
 
   // Foliage belongs to a living world. A void has none, and this is the flag
@@ -503,6 +505,9 @@ const voidTheme = {
     rune: 0x8b5cf6,
     sigil: 0xff2d55,
     cool: 0x3b82f6,
+    // Cold and dim: wind streaks are the air, and this air is violet.
+    streak: 0x9d7dff,
+    streakOverlay: 0xb69cff,
   },
 
   foliage: false,
