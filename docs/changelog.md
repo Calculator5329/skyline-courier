@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-07-25 — the rest of the hollow islands
+
+Follow-up to `da98a78`, which fixed the drum body but not the reason the deck
+was narrow. Found by writing the measurement instead of looking: `tools/hollow.mjs`
+walks every `{hidden: true}` collider in the real course and reports how far its
+boundary is from the nearest drawn triangle.
+
+| prefab | site | before | after | reachable? |
+| --- | --- | ---: | ---: | --- |
+| `drumPlatform` moss cap | `kit.js` cap course | 4.55 m | 0.19 m | yes — the deck you stand on |
+| `drumPlatform` rim cornice | rim course | 4.18 m | 0.39 m | buried under the cap |
+| `drumPlatform` drum body | body course | 4.00 m | 0.18 m | yes — seen from below |
+| `observatoryDome` shell | dome courses | 0.95 m | 0.17 m | yes — you run up the dome |
+| `colonnade` cornice | entablature | 0.47 m edge / 0.36 m roof | 0 | yes — the roof you run along |
+| `drumPlatform` tiers | boulder tail | 4.06 m | 4.06 m | deferred, see roadmap |
+
+- **`discOutline` applied `squash` twice.** `discRects` already puts the squash
+  in `hz`; every caller then handed the same squash to `discOutline`, which
+  multiplied by it again. On the route decks (the terrace is 10.4 m across a
+  30 m span) the drawn cap, rim, drum and ivy were all a third of the deck's
+  real width in Z while the collider stayed full width — "between the main path
+  and the guardrail it's completely transparent", exactly.
+- **The inset is metres now, not a percentage.** A 0.99 global pull is 15 cm on
+  a 30 m terrace, and the cap's extra 0-2% jitter took it to 0.45 m of deck
+  drawn nowhere. `discOutline(rects, inset, chamfer)` insets per point.
+- **The corner chamfer is bounded** (`cornerChamfer`). At `hx * 0.07` it cut
+  1.26 m off the largest islands' corners; it is capped at 0.22 m.
+- **The moss cap's underside is closed.** It was open inside a 10-15 cm annulus
+  on the theory that the rim course covered it — but at detail 2 the rim is a
+  swept cornice, not a disc, so from underneath you looked at the back of the
+  crown and saw sky. `tools/backface.mjs` `underside`: 0.83% see-through -> 0%.
+- **`observatoryDome`'s shell is lofted, not revolved**, and its ribs follow the
+  union's radius at their own azimuth instead of a circle.
+- **`colonnade`'s cornice draws its core.** The slab was hidden and only its two
+  edge mouldings were drawn.
+
+Receipts: `node tools/winding.mjs` PASS, 0 flipped of 717894. `node
+tools/backface.mjs` 0% see-through on every shot except two pre-existing
+single-ray brass hits (`gaps` 0.35%, `chain` 0.23%), unchanged from before this
+work. `bash tools/ship-gate.sh` exit 0.
+
 ## 2026-07-25 — geometry unlock, vegetation, instrumentation, audio
 
 Shipped as `78603ac`. Four parallel workstreams; the commit message named only

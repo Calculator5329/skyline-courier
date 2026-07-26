@@ -570,13 +570,30 @@ function unionRadiusAt(rects, theta) {
  * actually has, and the convex corners can then be chamfered (always inward,
  * so always legal) to turn the 90-degree arrises over.
  *
- * `pull` is a global inward scale. Scaling a union of origin-centred rectangles
- * by k <= 1 gives a subset of itself — each rectangle scales into itself — so
- * the result is inside the collider by construction, whatever the facets are.
+ * `inset` is METRES, applied as a per-point radial scale k = 1 - inset/len.
+ * Any k <= 1 keeps the point inside the union (the union of origin-centred
+ * rectangles is star-shaped about the origin), so this is safe by the same
+ * argument a global scale was — but it no longer costs a fraction of the
+ * RADIUS. A global 0.99 pull is 1% of half-span, which is 3 cm on a 6 m drum
+ * and 15 cm on the 30 m terrace, and the moss cap's 0-2% jitter on top of it
+ * reached 0.45 m of deck that the player stands on and cannot see. An inset is
+ * a manufacturing clearance; it is the same two centimetres at every scale.
+ *
+ * NO `squash` PARAMETER, DELIBERATELY. `discRects` already puts the squash in
+ * `hz` — it is the collider's own half-extent, not a circular one — so this
+ * function taking a squash and multiplying by it again applied it TWICE. Every
+ * caller passed the same squash it had just given `discRects`, so on the route
+ * decks (`deck()` in level.js is where squash comes from; the terrace is
+ * 10.4 m across a 30 m span, squash 0.35) the drawn cap, rim, drum and ivy
+ * were all a THIRD of the deck's real width in Z while the collider stayed
+ * full width. Measured by `tools/hollow.mjs`: 4.55 m of turf missing from the
+ * side of a 16 m deck, which is the "between the main path and the guardrail
+ * it's completely transparent" Ethan reported and which da98a78 diagnosed only
+ * half of — the lathe was a circle AND it was squashed twice.
  *
  * @returns {Array<[number,number]>} points, with `.len` (radius per point) set.
  */
-function discOutline(rects, squash, pull, chamfer) {
+function discOutline(rects, inset, chamfer) {
   const n = rects.length
   // One quadrant, from the +X axis round to the +Z axis.
   const quad = [[rects[0].hx, 0]]
@@ -620,23 +637,52 @@ function discOutline(rects, squash, pull, chamfer) {
       out.push([p[0], p[1]])
     }
   }
-  for (const p of out) { p[0] *= pull; p[1] *= pull * squash }
+  for (const p of out) {
+    const len = Math.hypot(p[0], p[1]) || 1e-6
+    const k = Math.max(0.5, 1 - inset / len)
+    p[0] *= k; p[1] *= k
+  }
   return out
 }
 
-function mossCapGeometry(rects, squash, thickness, overhang, bevel, rand) {
-  // 1% of guaranteed inset, so the mat's outer face is inside the collider
-  // rather than on it, plus a per-island 0-2% so no two caps are the same size
-  // at the same radius.
-  const pull = 0.99 - rand() * 0.02
+/**
+ * How far to cut the union's convex corners off when drawing it.
+ *
+ * BOUNDED IN METRES, and that bound is the point. Cutting a corner with legs
+ * of length c leaves the collider's actual corner 0.707 c outside the drawn
+ * edge — a ledge you stand on with nothing under it. At `hx * 0.07` that was
+ * 1.26 m on the largest islands, measured by `tools/hollow.mjs`; the ceiling
+ * holds it under 0.16 m everywhere, which is the same order as the cap's own
+ * overhang and an order below anything a player can stand on.
+ *
+ * The floor still tracks `bevel`, because the chamfer's job on a small drum is
+ * to turn the union's 90-degree steps over by the SAME amount level.js turns
+ * the box arrises over — matching those two is what killed the corner gussets
+ * the art review found.
+ */
+function cornerChamfer(rects, bevel) {
+  return Math.min(0.22, Math.max(bevel * 2.6, rects[0].hx * 0.07))
+}
+
+function mossCapGeometry(rects, thickness, overhang, bevel, rand) {
+  // 2 cm of guaranteed clearance, so the mat's outer face is inside the
+  // collider rather than exactly on it, plus 0-4 cm per island so no two caps
+  // are the same size at the same radius.
+  //
+  // ABSOLUTE, not a percentage. This was `0.99 - rand() * 0.02` — up to 3% of
+  // the half-span — which is 4 cm on a 3 m drum but 0.45 m on the 30 m
+  // terrace, and that 0.45 m is deck the player walks on with nothing drawn
+  // under it. Variation in a silhouette should not be paid for in collision
+  // honesty; the facet jitter in `discShape` is where island-to-island
+  // variation belongs, and it varies the COLLIDER too.
+  const inset = 0.02 + rand() * 0.04
   // The chamfer that turns the outline's corners over. It is asked for large
   // and clamped by `discOutline` to 45% of the shorter of the two edges at
   // each corner, which is what turns the union's 90-degree steps into a
   // faceted, roughly octagonal rim instead of a jigsaw edge. The corner
   // gussets the review saw were the cap and the drum below it turning their
   // arrises over by different amounts; both are now driven by `bevel`.
-  const outline = discOutline(rects, squash, pull,
-    Math.max(bevel * 2.6, rects[0].hx * 0.07))
+  const outline = discOutline(rects, inset, cornerChamfer(rects, bevel))
   const M = outline.length
   const relief = Math.min(0.10, thickness * 0.42)
   const nSeed = ((rand() * 0xffffff) | 0) || 1
@@ -688,14 +734,28 @@ function mossCapGeometry(rects, squash, thickness, overhang, bevel, rand) {
       idx.push(a + k, b + k, b + k + 1, a + k, b + k + 1, a + k + 1)
     }
   }
-  // Close the crown with a fan. The underside stays open at the inner ring,
-  // which is the one hole in the mat and is covered by the rim course directly
-  // beneath it — capping it would spend triangles on a face no camera reaches.
+  // Close the crown with a fan.
   const centre = pos.length / 3
   pos.push(0, -relief * 0.5, 0)
   uv.push(0, 0)
   for (let i = 0; i < M; i++) {
     idx.push(centre, ((i + 1) % M) * RINGS, i * RINGS)
+  }
+  // AND CLOSE THE UNDERSIDE. This used to say the inner ring was "covered by
+  // the rim course directly beneath it — capping it would spend triangles on a
+  // face no camera reaches". Both halves of that are wrong at detail 2, which
+  // is the near band: the rim there is a swept CORNICE ~0.2 m wide at the very
+  // edge, not a disc, so the annulus between it and the drum below (0.9 R to
+  // R - overhang, over a metre on a big island) is open sky, and what the
+  // camera meets looking up through it is the BACK of the crown, which is
+  // culled. `tools/backface.mjs` caught it as the last see-through ray in the
+  // `underside` shot: moss at [48.3, 0, 1.9], 47 m out and straight overhead.
+  // M triangles per island, once.
+  const under = pos.length / 3
+  pos.push(0, -thickness - overhang * 0.35, 0)
+  uv.push(0, 0)
+  for (let i = 0; i < M; i++) {
+    idx.push(under, i * RINGS + 4, ((i + 1) % M) * RINGS + 4)
   }
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
@@ -1020,7 +1080,7 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     { hidden: curves }, shape)
   if (curves) {
     L.mesh(capKind,
-      mossCapGeometry(discRects(radius, facets, squash, shape), squash,
+      mossCapGeometry(discRects(radius, facets, squash, shape),
         capThickness, overhang, bevel, rand),
       place(x, y, z, _q.identity()),
       // Value jitter across islands, on top of level.js's own per-call tint
@@ -1061,20 +1121,19 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     // sharp V in the moulding at every re-entrant corner.
     //
     // The section stands PROUD of the path by `project` along the path normal,
-    // so the path is pulled in by that much (as a radial scale, since the
-    // outline is star-shaped about the centre) plus 2 cm, and the moulding's
-    // outer face lands just inside the collider rather than on it. A heavy
-    // chamfer on the outline's convex corners keeps the miter at those corners
-    // near 22 degrees, where a swept section still behaves.
+    // so the path is inset by that much plus 2 cm and the moulding's outer
+    // face lands just inside the collider rather than on it. A heavy chamfer
+    // on the outline's convex corners keeps the miter at those corners near
+    // 22 degrees, where a swept section still behaves.
+    //
+    // `discOutline`'s inset is metres now, so this is exactly `project + 2 cm`
+    // and no more. The old form solved for a global radial SCALE that moved
+    // the narrow axis in by that much, which then moved the long axis in by
+    // the same FRACTION — 0.6 m of missing moulding at the ends of a 30 m
+    // terrace, on the course's most-looked-at edge.
     const project = rimH * 0.5
     const rects = discRects(rimR, facets, squash, shape)
-    // The closest the union's boundary ever comes to the centre is the smaller
-    // of its two half-extents — the union contains the widest rectangle on each
-    // axis — so a radial scale of 1 - d/minDist moves every boundary point in
-    // by at least d.
-    const minDist = Math.max(0.3, Math.min(rects[0].hx, rects[rects.length - 1].hz))
-    const pullBack = Math.max(0.5, 1 - (project + 0.02) / minDist)
-    const outline = discOutline(rects, squash, pullBack, project * 2.2)
+    const outline = discOutline(rects, project + 0.02, project * 2.2)
     const path = outline.map((p) => [p[0], 0, p[1]])
     L.mesh(rimKind, extrudeAlong(corniceShape(project, rimH, 3), path, {
       closed: true, detail: detail >= 2 ? 2 : 1, pathSegments: path.length,
@@ -1102,8 +1161,7 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     // `radius * 0.9`, `discOutline` never leaves it, and every profile scale
     // below is <= 1.
     const rects = discRects(radius * 0.9, facets, squash, shape)
-    const outline = discOutline(rects, squash, 0.995,
-      Math.max(bevel * 2.6, rects[0].hx * 0.07))
+    const outline = discOutline(rects, 0.02, cornerChamfer(rects, bevel))
     L.mesh(kind, loftOutline(outline, [
       [0.88, -bodyDepth],
       [0.97, -bodyDepth * 0.72],
@@ -1246,7 +1304,7 @@ export function drumPlatform(L, x, y, z, opts = {}) {
     // read that matters most. Broken cover with gaps in it is also just what
     // ivy on a wall looks like.
     drapeOutline(L, x, y - capThickness, z,
-      discOutline(discRects(radius, facets, squash, shape), squash, 0.995, 0), {
+      discOutline(discRects(radius, facets, squash, shape), 0.02, 0), {
         drop: [0.7, 1.5 + radius * 0.1],
         pitch: opts.ghost ? 1.9 : 1.15,
         minRun: Math.max(0.9, radius * 0.12),
@@ -1550,9 +1608,18 @@ export function colonnade(L, x, y, z, opts = {}) {
     // no section". This is a swept cornice: fillet, cavetto, corona. Every
     // step in that profile is a horizontal shadow line by construction, and
     // the collider is the same box the slab always was.
-    n += S(ex, topY + 0.78, ez, fsx, 0.36, fsz, capKind, { hidden: curves })
+    // NOT `{hidden: true}`. The mouldings below are swept down the two long
+    // EDGES of this slab and nothing is drawn between them, so hiding the whole
+    // box left the middle of the cornice — a strip 2 * (halfW - proj) wide and
+    // the full length of the run — undrawn while it stayed solid: measured
+    // 0.36 m of colonnade roof that the player runs along above the highest
+    // thing they can see, plus 0.47 m of missing slab at each end of the run.
+    // `size` draws the CORE, exactly up to where the mouldings take over.
+    const corniceProj = curves ? radius * 0.5 : 0
+    n += S(ex, topY + 0.78, ez, fsx, 0.36, fsz, capKind,
+      curves ? { size: [fsx, 0.36, fsz - 2 * corniceProj] } : undefined)
     if (curves) {
-      const proj = radius * 0.5
+      const proj = corniceProj
       const halfW = fsz / 2
       for (const side of [-1, 1]) {
         // Section stands proud along +X of the path frame, which for a path
@@ -2017,18 +2084,35 @@ export function observatoryDome(L, x, y, z, opts = {}) {
       Math.max(1, facets - 1), 1, { hidden: !!shell })
     apex = y1
   }
+  const domeRects = discRects(domeR, Math.max(1, facets - 1), 1)
   if (shell) {
-    // The shell is revolved at 0.93 of the stepped courses' half-width across
-    // flats. That keeps it inside the collider everywhere except eight narrow
-    // slivers at the facet corners, which is the direction art-direction.md
-    // explicitly sanctions: "accept a small non-walkable overhang at the
-    // corners rather than the reverse".
+    // LOFTED ALONG THE COURSES' OWN OUTLINE, not revolved — the same
+    // correction `drumPlatform`'s body needed, for the same reason.
+    //
+    // This was a lathe at 0.93 of the stepped courses' half-width across
+    // flats, described as leaving "eight narrow slivers at the facet corners".
+    // Measured by `tools/hollow.mjs` those slivers are 0.95 m deep on the big
+    // dome: a player runs up the dome and stands the better part of a metre
+    // outside anything that is drawn. Sweeping the courses' own outline makes
+    // the drawn surface agree with the collider at every azimuth, and the only
+    // clearance left is the 2 cm inset.
+    //
+    // `cos(t * 0.94)` is exactly the radial scale each stepped course already
+    // uses, so the profile below IS the course stack — the loft interpolates
+    // between the steps instead of approximating them with a circle.
     const SEG = detail >= 2 ? 12 : 7
     for (let i = 0; i <= SEG; i++) {
       const t = (i / SEG) * (Math.PI / 2)
-      shell.push([domeR * Math.cos(t * 0.94) * 0.93, domeR * 0.86 * Math.sin(t)])
+      shell.push([Math.cos(t * 0.94), domeR * 0.86 * Math.sin(t)])
     }
-    L.mesh('terracotta', latheGeometry(shell, detail >= 2 ? 18 : 10),
+    // Shut the crown. `cos(0.94 * PI/2)` is 0.094, not 0, so the profile above
+    // ends on an open ring half a metre across with the finial's sky behind it.
+    shell.push([0, domeR * 0.86])
+    L.mesh('terracotta',
+      loftOutline(discOutline(domeRects, 0.02, cornerChamfer(domeRects, 0.045)), shell,
+        // The base sits on the cornice shelf, which is a solid drawn disc
+        // 16% wider than the dome. Nothing can see the underside.
+        { capBottom: false }),
       place(x, roofY + 0.44, z, _q.identity()))
     n += 1
   }
@@ -2039,8 +2123,13 @@ export function observatoryDome(L, x, y, z, opts = {}) {
     // A rib is a bent brass bar, and a bar bent over a dome has no flats in it
     // anywhere, so this is `sweepTube` along the dome's own meridian rather
     // than the staircase of little boxes it used to be. The path is sampled
-    // from the same profile the shell is revolved from, offset 6 cm out, so a
-    // rib sits ON the dome instead of cutting through it.
+    // from the same profile the shell is swept from, offset 6 cm out, so a rib
+    // sits ON the dome instead of cutting through it.
+    //
+    // The dome is a faceted union now, not a circle, so the offset has to be
+    // taken from the union's radius AT THE RIB'S OWN AZIMUTH. On a circle they
+    // are the same number; on the union they differ by up to 4%, which at this
+    // radius is a rib buried in the roof for half its length.
     const count = detail >= 2 ? 8 : 5
     for (let i = 0; i < count; i++) {
       const a = (2 * Math.PI * i) / count
@@ -2048,9 +2137,10 @@ export function observatoryDome(L, x, y, z, opts = {}) {
       if (L.mesh) {
         const pts = []
         const SEG = detail >= 2 ? 9 : 6
+        const rAz = unionRadiusAt(domeRects, a)
         for (let k = 0; k <= SEG; k++) {
           const t = (k / SEG) * (Math.PI / 2)
-          const rr = domeR * Math.cos(t * 0.94) * 0.93 + 0.06
+          const rr = rAz * Math.cos(t * 0.94) + 0.06
           pts.push([x + c * rr, roofY + 0.44 + domeR * 0.86 * Math.sin(t) + 0.05, z + s * rr])
         }
         L.mesh('brass', sweepTube(pts, 0.075, {

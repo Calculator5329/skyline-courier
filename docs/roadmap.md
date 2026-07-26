@@ -200,6 +200,28 @@ Ordered by how much each one costs the frame, worst first.
       variety is what makes an archipelago read, and at that range it is nearly
       free.
 
+### Hidden colliders that still overhang their mesh
+
+Audited numerically by `node tools/hollow.mjs`, which walks every hidden
+collider in the real course and measures how far its boundary is from the
+nearest drawn triangle. The big ones are fixed; these two are measured, judged
+minor, and left on purpose rather than missed.
+
+- [ ] `drumPlatform` boulder tiers (`kit.js`, the `disc(S, ..., tr, h, ...)`
+      inside the tier loop): the `blob()` drawn inside a tier reaches its
+      collider's across-flats radius only where the noise happens to peak, so
+      the tier collider stands up to **4.06 m** outside the drawn rock on 17 of
+      268 solid islands. It cannot be seen through — the collider is never
+      drawn — but it is an invisible ledge a falling player can land on. Fix by
+      sizing the tier collider from the blob's MEASURED silhouette rather than
+      from its worst-case bound, and re-run `tools/hollow.mjs`.
+- [ ] `archway` voussoir colliders are the AABB of a rotated wedge, so the
+      corners of each box stand outside the block: 0.16 m in plan, 1.11 m of
+      roofGap on the crown box. Deliberate (the alternative is a staircase
+      collider on a ledge players mantle), but it is the last entry over 25 cm
+      on a SOLID surface and it should be either narrowed or written into
+      `docs/geometry-unlock.md` as a sanctioned exception.
+
 ## Next — feel and content
 
 - [ ] Hands-on playtest by Ethan — the acceptance gate for movement feel.
