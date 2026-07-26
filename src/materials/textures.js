@@ -290,6 +290,115 @@ function dome(hctx, x, y, r, peak, base = HEIGHT_MID) {
   })
 }
 
+/**
+ * A TILING FRACTURE FIELD — the structural primitive the void's rock is built
+ * from, and the counterpart to `dome()` for the archipelago's weathered stone.
+ *
+ * `docs/scaling-plan.md` is explicit that a structurally distinct theme needs
+ * the painters parameterised by STRUCTURE and not only by hue, and this is
+ * where that cashes out. The sunset materials are made of domes and courses:
+ * rounded cobbles, bevelled ashlar, lapped tiles — every one of them a SMOOTH
+ * form with a soft shoulder, because they are weathered or dressed. Rotating
+ * that to violet gives sunlit limestone in a purple room, which is exactly the
+ * failure `docs/art-direction-void.md` §8 warns about.
+ *
+ * Riven rock is the opposite construction: flat facets meeting at HARD creases,
+ * each facet at its own level and its own tilt, so light snaps between faces
+ * rather than rolling across them. §4.3 asks for that in so many words — "facets
+ * must be flat and sharp with hard normal breaks... a smooth-shaded crystal
+ * looks like a jelly" — and the rock the crystals erupt from has to obey the
+ * same geometry or the two read as different worlds.
+ *
+ * So: a jittered-lattice Worley cell, returning
+ *   `d1`   distance to the nearest seed,
+ *   `edge` d2 - d1, i.e. how close this texel is to a cell BOUNDARY — near zero
+ *          along the fracture, which is what a crease is cut from,
+ *   `id`   a stable 0..1 per cell, so a facet can have its own level, tilt,
+ *          colour and polish, and keep them across the tile wrap,
+ *   `gx/gy` the offset from the facet's own seed, which the caller dots with a
+ *          per-cell gradient to make the facet a tilted PLANE rather than a
+ *          plateau. A plateau field is a mosaic; a tilted-plane field is rock.
+ *
+ * Only the 3x3 neighbouring cells are tested, and the lattice index wraps, so
+ * the field tiles exactly and costs nine distance tests per texel rather than
+ * one per seed.
+ */
+function fracture(rand, cells) {
+  const n = cells * cells
+  const sx = new Float32Array(n), sy = new Float32Array(n)
+  const id = new Float32Array(n)
+  const tx = new Float32Array(n), ty = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    /**
+     * 0.06..0.94, WIDENED from the 0.18..0.82 this started at.
+     *
+     * The narrow range was there to stop sliver facets, and it does — but it
+     * also holds every seed near the middle of its own cell, so the cells come
+     * out nearly uniform in size and the field reads as a regular DIAMOND
+     * WEAVE. Rendered on a 12 m slab that looked like woven cloth, which is a
+     * different wrong material from the one this painter replaced but is still
+     * a wrong material. Cell size has to vary as much as cell shape does.
+     */
+    sx[i] = 0.06 + rand() * 0.88
+    sy[i] = 0.06 + rand() * 0.88
+    id[i] = rand()
+    // Per-facet tilt, in height units per texel. Signed, so half the faces
+    // catch light and half fall away from it.
+    tx[i] = (rand() - 0.5) * 2
+    ty[i] = (rand() - 0.5) * 2
+  }
+  const step = SIZE / cells
+  return (x, y) => {
+    const gx = Math.floor(x / step), gy = Math.floor(y / step)
+    let d1 = 1e9, d2 = 1e9, best = 0, bdx = 0, bdy = 0
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const cx = (((gx + ox) % cells) + cells) % cells
+        const cy = (((gy + oy) % cells) + cells) % cells
+        const i = cy * cells + cx
+        const px = (gx + ox + sx[i]) * step
+        const py = (gy + oy + sy[i]) * step
+        const dx = x - px, dy = y - py
+        const d = Math.sqrt(dx * dx + dy * dy)
+        if (d < d1) { d2 = d1; d1 = d; best = i; bdx = dx; bdy = dy }
+        else if (d < d2) { d2 = d }
+      }
+    }
+    return {
+      d1, edge: d2 - d1, id: id[best],
+      // The facet's own plane, evaluated at this texel: gradient dot offset.
+      tilt: (tx[best] * bdx + ty[best] * bdy) / step,
+    }
+  }
+}
+
+/**
+ * Write a whole canvas from a per-texel function, replacing what is there.
+ *
+ * The archipelago's painters build form by stacking canvas draw calls, which is
+ * right when the form is a few dozen domes and rectangles. The void's rock is a
+ * per-texel field — every texel belongs to a facet and has to know which — so
+ * evaluating it once into an ImageData is both faster and the only way the
+ * albedo, height and roughness can agree about where a fracture is.
+ *
+ * `fill(x, y)` returns [r, g, b].
+ */
+function paintField(ctx, fill) {
+  const img = ctx.createImageData(SIZE, SIZE)
+  const d = img.data
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const px = fill(x, y)
+      const j = (y * SIZE + x) * 4
+      d[j] = Math.max(0, Math.min(255, px[0] | 0))
+      d[j + 1] = Math.max(0, Math.min(255, px[1] | 0))
+      d[j + 2] = Math.max(0, Math.min(255, px[2] | 0))
+      d[j + 3] = 255
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+}
+
 // ---------------------------------------------------------------- painters
 
 /**
@@ -375,6 +484,26 @@ const COURSE_TABLE = [
   // Standard ashlar again, offset and cut differently from the first.
   { height: 0.28, blocks: 4, joint: 4.6, bevel: 7.5, offset: 0.81 },
 ]
+
+/**
+ * THE VOID'S TWO REFLECTANCES, measured against the rendered frame.
+ *
+ * Kept side by side and at module scope because the ONE thing that has to stay
+ * true of them is their relationship: `docs/art-direction-void.md` §3 wants the
+ * carved faces "a touch warmer" than the raw rock and everything else identical,
+ * so that a wall and the mass it was cut from read as one substance worked two
+ * ways. Written 40 lines apart inside two painters, that is a relationship
+ * nobody can check; written here it is one line of arithmetic.
+ *
+ * `VOID_CARVED` is 21% lighter and carries 1.05x the red at the same blue, which
+ * is the whole of "a touch warmer where sigil-light lands on them".
+ *
+ * See `voidrock`'s header for why these are far lighter than §3's quoted hexes:
+ * §3 quotes an APPEARANCE read off the reference image, and these are the
+ * reflectances that render to it under a theme with no sun.
+ */
+const VOID_ROCK = [86, 76, 104]
+const VOID_CARVED = [109, 92, 126]
 
 const PAINTERS = {
   /**
@@ -1294,6 +1423,417 @@ const PAINTERS = {
       a.moveTo(x, 0)
       a.bezierCurveTo(x + 20, SIZE * 0.33, x - 20, SIZE * 0.66, x + (rand() - 0.5) * 30, SIZE)
       a.stroke()
+    }
+  },
+
+  /**
+   * THE VOID'S ROCK. Near-black, cool, faintly violet — and riven, not
+   * weathered.
+   *
+   * This exists because `stone` above was shared between the two themes, so the
+   * void's mass photographed as the sunset level's pale grey-green limestone
+   * with a violet light on it. Ethan, having played it: the rock "is nowhere
+   * close to the reference image".
+   *
+   * §3 GIVES AN APPEARANCE, NOT AN ALBEDO, and conflating the two is how this
+   * painter got calibrated twice.
+   *
+   * "`#14101F` in shadow to `#2A2438` where lit" is a colour READ OFF THE
+   * REFERENCE IMAGE — the document says so in its own header — so it describes
+   * a rendered pixel, not the reflectance of the rock. Painted as an albedo it
+   * is invisible: measured, a `#1E1830` base under this theme's own lights
+   * renders the mass at rgb(1.0, 0.9, 7.1), i.e. black. That is because the
+   * void's key runs at an eighth of the skyline's and there is no sun; a
+   * reflectance that looks near-black under a golden hour looks like nothing
+   * at all under a violet fill at 0.38.
+   *
+   * So BASE is a reflectance chosen to RENDER at §3's numbers, and it was
+   * measured rather than picked. rgb(86,76,104) puts a shaded rock face at
+   * rgb(25.4, 8.3, 47.2) on `ascent.png` — hue 266.4 against §3's 268 for
+   * `#14101F`, at a value between its shadow and its lit end. Brass makes the
+   * same argument one file up ("this is not the colour real brass is, it is the
+   * colour an F0 has to be"), and for the same reason: what is authored is the
+   * input to a light transport, and only the output is comparable to a
+   * reference.
+   *
+   * What survives from §3 unchanged is the RATIO, which is the part that is
+   * actually binding: blue-dominant, red second, green lowest. "Even the
+   * darkest rock keeps a violet cast, and that is what stops the frame reading
+   * as desaturated" — a neutral grey under a violet light is NOT the same
+   * image, because the grade multiplies saturation by 1.46 and that amplifies a
+   * violet base and has nothing to amplify on a neutral one.
+   *
+   * MEASURED AND NOT FIXABLE HERE: green. Raising the base's green channel from
+   * 76 to 120 — a 58% lift — moved the rendered green from 8.3 to 8.6. The
+   * void's lights carry almost no green and the grade's shadow tint removes
+   * what is left, so the rock renders at saturation ~0.80 against §3's ~0.48
+   * whatever this painter does. That is a light-and-grade number, not a surface
+   * one. The base below is therefore left as an honest violet rather than
+   * pushed green-dominant to chase an output the lighting will not deliver.
+   *
+   * The STRUCTURE is the other half, and it is the half a hue rotation cannot
+   * buy. `stone` is 46 domes and 26 crevices: rounded cobbles, soft shoulders,
+   * mineral streaks running down a face — the vocabulary of rock that has sat in
+   * weather for a long time. This rock has not. It is fractured mass floating in
+   * a void, so it is built from `fracture()`: flat facets at their own levels
+   * and their own tilts, meeting along hard creases, with the fine octave
+   * chipping the big faces into smaller ones. There is no dome in it anywhere.
+   */
+  voidrock(a, h, m, rand) {
+    // 0.60 m facets and 0.22 m chips, at level.js's 0.42 repeats/metre. The
+    // coarse octave is the one that survives to platform scale; the fine one is
+    // what the player sees standing on it.
+    const coarse = fracture(rand, 4)
+    const fine = fracture(rand, 11)
+    // ~10 cm grit, so the flat faces are not literally flat in albedo.
+    const grit = coherent(rand, 24)
+
+    const N = SIZE * SIZE
+    const lvl = new Float32Array(N)     // facet height, roughly -1..1
+    const crease = new Float32Array(N)  // 0 open face .. 1 deep in a fracture
+    const fresh = new Float32Array(N)   // 0 dusted .. 1 clean split face
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        const i = y * SIZE + x
+        const c = coarse(x, y)
+        const f = fine(x, y)
+        // Each facet is a PLANE: its own base level plus its own gradient. The
+        // fine octave rides on top at 55%, so a chip sits on the big face it
+        // broke off rather than replacing it.
+        lvl[i] = (c.id - 0.5) * 1.55 + c.tilt * 0.60
+               + ((f.id - 0.5) * 0.55 + f.tilt * 0.30) * 0.55
+        /**
+         * THE CREASE IS THE WHOLE POINT, and it is deliberately SHARP.
+         *
+         * A 5.5-texel ramp is 2.5 cm; the fine octave's is 1.4 cm. Widen either
+         * and the fracture becomes a valley, the normal map rolls through it,
+         * and the material goes straight back to reading as weathered — which
+         * is `stone`, which is the thing this painter exists not to be.
+         */
+        crease[i] = Math.max(
+          1 - smoothstep(0, 5.5, c.edge),
+          (1 - smoothstep(0, 3.0, f.edge)) * 0.62
+        )
+        // A face is "fresh" if its facet drew a high id and it is not itself a
+        // fracture line. Fresh faces are glassier; that is the only value
+        // variation a near-black material can afford to carry in specular.
+        fresh[i] = smoothstep(0.52, 0.94, c.id) * (1 - crease[i])
+      }
+    }
+
+    // --- height: facets and creases, no domes -----------------------------
+    paintField(h, (x, y) => {
+      const i = y * SIZE + x
+      const v = HEIGHT_MID + lvl[i] * 42 - crease[i] * 66
+      return [v, v, v]
+    })
+
+    // --- albedo -----------------------------------------------------------
+    paintField(a, (x, y) => {
+      const i = y * SIZE + x
+      // 0.74..1.42, so a facet crown and a facet in shadow differ by nearly a
+      // stop before any light touches them. That per-facet spread is what
+      // keeps a near-black material from reading as one flat card.
+      const v = (1 + lvl[i] * 0.30) * (0.92 + grit(x, y) * 0.16)
+      // A fracture is a shadowed slot AND freshly exposed mineral, so it goes
+      // down in value and further toward blue rather than toward grey.
+      const c = crease[i]
+      const k = v * (1 - 0.42 * c)
+      return [VOID_ROCK[0] * k, VOID_ROCK[1] * k * (1 - 0.10 * c), VOID_ROCK[2] * k * (1 + 0.14 * c)]
+    })
+
+    // --- roughness / metalness --------------------------------------------
+    paintField(m, (x, y) => {
+      const i = y * SIZE + x
+      const rough = 0.94 - 0.32 * fresh[i] + 0.04 * crease[i]
+      return [0, Math.max(0, Math.min(1, rough)) * 255, 0]
+    })
+
+    /**
+     * --- mineral veins ----------------------------------------------------
+     *
+     * A third fracture octave at a scale neither of the others uses, kept ONLY
+     * where its cell boundary is, so the veins run along a fault system of
+     * their own and cross the facets rather than tracing them. This is the
+     * material's one lighter note, and it is a substance change (crystallised
+     * mineral in a healed fracture), not a drawn highlight — the albedo rule at
+     * the top of this file binds here exactly as it does on brass.
+     *
+     * Capped low. §2 wants under 5% of the frame bright and that 5% emissive;
+     * a rock covered in pale seams spends that budget on rock.
+     */
+    const vein = fracture(rand, 7)
+    const veinPatch = coherent(rand, 5)
+    overlayField(a, (i, x, y) => {
+      const vf = vein(x, y)
+      let k = 1 - smoothstep(0, 3.4, vf.edge)
+      // Patchy: a fault system is local, and a tile veined edge to edge reads
+      // as crazing on a teacup.
+      k *= Math.max(0, veinPatch(x, y) - 0.46) * 2.6
+      if (k <= 0.02) return null
+      // 1.8x the rock's own reflectance and pushed further toward blue: a
+      // healed mineral seam is the one thing in the mass that is lighter than
+      // the mass, and it has to stay clearly under the emissive budget — §2
+      // allows under 5% of the frame bright and wants that 5% to be crystal.
+      return [156, 132, 210, Math.min(0.42, k) * 255]
+    })
+    // The vein stands slightly proud — healed mineral is harder than the rock
+    // around it and weathers out as a ridge — and it is smoother than the mass.
+    overlayField(m, (i, x, y) => {
+      const vf = vein(x, y)
+      let k = 1 - smoothstep(0, 3.4, vf.edge)
+      k *= Math.max(0, veinPatch(x, y) - 0.46) * 2.6
+      if (k <= 0.02) return null
+      return [0, 0.46 * 255, 0, Math.min(0.75, k) * 255]
+    })
+
+    /**
+     * --- embedded micro-crystal -------------------------------------------
+     *
+     * §4.3's scatter shards, at the scale where they are a texture rather than
+     * geometry: "small, blue or violet, in clusters on ruin edges, in
+     * fractures, on platform undersides". Drawn on all three channels at the
+     * same coordinates, because a crystal grain is a different substance (paler
+     * violet or blue), a different form (proud, tiny) and a different polish
+     * (near-glass) — writing only albedo would be the stencil failure this
+     * module exists to have stopped making.
+     */
+    for (let i = 0; i < 220; i++) {
+      const x = rand() * SIZE
+      const y = rand() * SIZE
+      const r = 0.9 + rand() * 2.4
+      const blue = rand() < 0.42
+      // §3's two crystal families at grain scale: blue `#3B82F6` and violet
+      // `#8B5CF6`, both taken well down in value — a grain catches light
+      // because it is polished (see the ORM write below), not because it is
+      // painted bright.
+      a.fillStyle = blue ? 'rgba(96,140,230,.70)' : 'rgba(160,120,250,.70)'
+      a.beginPath()
+      a.arc(x, y, r, 0, Math.PI * 2)
+      a.fill()
+      m.fillStyle = mg(0.16, 0.0, 0.8)
+      m.beginPath()
+      m.arc(x, y, r, 0, Math.PI * 2)
+      m.fill()
+      // Facets, not domes: a 4-sided pyramid at this size is two triangles in
+      // the height field and it keeps the hard-normal-break rule of §4.3.
+      h.fillStyle = hg(HEIGHT_MID + 34)
+      h.beginPath()
+      h.moveTo(x, y - r * 1.6)
+      h.lineTo(x + r, y)
+      h.lineTo(x, y + r * 1.6)
+      h.lineTo(x - r, y)
+      h.closePath()
+      h.fill()
+    }
+  },
+
+  /**
+   * THE CARVED FACE — `docs/art-direction-void.md` §4.1's great walls, and the
+   * §4.2 platform borders.
+   *
+   * "Flat-ish faces divided into rectangular panels by deep recessed grooves,
+   * like a machined cliff. They are what makes the space read as BUILT rather
+   * than as a rock field."
+   *
+   * The distinction from `porcelain` is structural and it is the reason this is
+   * a painter rather than a palette entry. Ashlar is an assembly of separate
+   * blocks: mortar joints, chamfered arrises that catch a low sun, per-block
+   * colour from different parts of the bed, settlement cracks that wander
+   * across the grid. This is the opposite claim — ONE mass with material
+   * removed from it. So there are no joints and no blocks; there are grooves
+   * cut into a continuous face, square-shouldered rather than bevelled, and an
+   * incised border inside each panel. Nothing here is laid, and nothing here
+   * has weathered.
+   */
+  voidcarved(a, h, m, rand) {
+    // §3: "carved faces are a touch warmer where sigil-light lands on them".
+    // The relationship to the raw rock is the load-bearing part and it lives at
+    // module scope — see VOID_CARVED — rather than as two literals nobody can
+    // hold side by side.
+    a.fillStyle = `rgb(${VOID_CARVED[0]},${VOID_CARVED[1]},${VOID_CARVED[2]})`
+    a.fillRect(0, 0, SIZE, SIZE)
+    // Groove floor is the base plane and the panels stand OUT of it, which is
+    // the honest way round for a face that had material removed: the deepest
+    // thing in the tile is the thing that was cut.
+    h.fillStyle = hg(64)
+    h.fillRect(0, 0, SIZE, SIZE)
+    m.fillStyle = mg(0.90, 0.0)
+    m.fillRect(0, 0, SIZE, SIZE)
+
+    /**
+     * THE PANEL TABLE — the same idea as COURSE_TABLE and deliberately so, but
+     * describing a different act of building.
+     *
+     *   height  fraction of the 2.38 m tile; must sum to 1
+     *   panels  panels across the row
+     *   groove  half-width of the recessed channel, in texels (4.6 mm each)
+     *   inset   how far the incised inner border sits inside the panel edge
+     *   offset  where the row's first vertical groove sits, so no two rows
+     *           share a groove line and the wall does not read as a grid
+     *
+     * ONE PANEL, ON A GRID, and getting here took two corrections that are
+     * worth recording because both produced brickwork.
+     *
+     * Pass one ran 2-3 panels across three rows: units 0.8-1.2 m on a side,
+     * which rendered as unmistakable brick. Pass two went to one panel per row
+     * over two rows — 2.38 m by 1.3 m, genuinely large — and it STILL rendered
+     * as brick, because size was never the whole tell. The `offset` column was
+     * staggering each row against the one above it, and a staggered joint IS a
+     * running bond; that is what the eye is reading, at any scale.
+     *
+     * So the offsets are now identical and the grooves LINE UP into a
+     * continuous cross. A regular aligned grid is what §4.1 describes — "flat-
+     * ish faces divided into rectangular panels by deep recessed grooves, like
+     * a machined cliff" — and it is the opposite of masonry for a structural
+     * reason: bonded courses exist so that separate units interlock, and a face
+     * cut from one mass has nothing to interlock.
+     *
+     * One 2.38 m panel per tile is also the largest a tiling texture can state.
+     * §4.1's "several storeys across" is geometry's job, not this file's.
+     */
+    const PANEL_TABLE = [
+      { height: 1.0, panels: 1, groove: 14, inset: 42, offset: 0.5 },
+    ]
+
+    let ry = 0
+    for (const row of PANEL_TABLE) {
+      const rh = SIZE * row.height
+      const pw = SIZE / row.panels
+      for (let p = -1; p <= row.panels; p++) {
+        const x0 = p * pw - SIZE * row.offset + row.groove
+        const y0 = ry + row.groove
+        const w = pw - row.groove * 2
+        const hh = rh - row.groove * 2
+        if (w <= 4 || hh <= 4) continue
+
+        // Machined faces are cut to one depth: +/-4 in 176, against ashlar's
+        // +/-11 in 168. A quarried block is set by hand; a cut face is not.
+        const face = 176 + (rand() - 0.5) * 8
+        // A few panels are cut back into a second, deeper register — that is
+        // what stops a wall of identical panels reading as wallpaper, and it is
+        // the machined equivalent of ashlar's one-block-in-eleven replacement.
+        const sunk = rand() < 0.22
+        const top = sunk ? face - 26 : face
+        const warm = rand() < 0.30 ? 1.10 : 1.0
+        const v = (0.93 + rand() * 0.14) * (sunk ? 0.86 : 1.0)
+
+        wrapped(h, () => {
+          h.fillStyle = hg(top)
+          h.fillRect(x0, y0, w, hh)
+          /**
+           * A 2.5-texel (1.2 cm) chamfer, against porcelain's 7-9.5.
+           *
+           * This is the single number that decides whether the face reads as
+           * machined or as masonry. A wide chamfer is a mason's arris: it is
+           * there so a hand-cut edge does not spall, and it catches a low sun
+           * in a soft line. A cut face has a near-square shoulder, so the
+           * normal breaks over about a centimetre and the groove edge reads as
+           * a hard black line instead of a lit bevel.
+           */
+          const ch = 2.5
+          const ramp = (gx0, gy0, gx1, gy1, rx, rry, rw, rhh) => {
+            const g = h.createLinearGradient(gx0, gy0, gx1, gy1)
+            g.addColorStop(0, hg(64))
+            g.addColorStop(1, hg(top))
+            h.fillStyle = g
+            h.fillRect(rx, rry, rw, rhh)
+          }
+          ramp(x0, 0, x0 + ch, 0, x0, y0, ch, hh)
+          ramp(x0 + w, 0, x0 + w - ch, 0, x0 + w - ch, y0, ch, hh)
+          ramp(0, y0, 0, y0 + ch, x0, y0, w, ch)
+          ramp(0, y0 + hh, 0, y0 + hh - ch, x0, y0 + hh - ch, w, ch)
+
+          // The incised inner border: a fine line cut INTO the face, well
+          // inside its edge. §4.2's "carved raised border", written as the
+          // groove that leaves one rather than as a drawn frame.
+          h.strokeStyle = hg(top - 46)
+          h.lineWidth = 2.2
+          h.strokeRect(x0 + row.inset, y0 + row.inset, w - row.inset * 2, hh - row.inset * 2)
+        })
+
+        wrapped(a, () => {
+          a.fillStyle = `rgb(${(VOID_CARVED[0] * v * warm) | 0},${(VOID_CARVED[1] * v) | 0},${(VOID_CARVED[2] * v * (2 - warm)) | 0})`
+          a.fillRect(x0, y0, w, hh)
+        })
+        wrapped(m, () => {
+          // A cut face is markedly smoother than the groove floor it stands
+          // out of, which is where dust collects and never gets touched.
+          m.fillStyle = mg(0.58 + rand() * 0.16, 0.0)
+          m.fillRect(x0, y0, w, hh)
+        })
+
+        /**
+         * INDEX TICKS along the panel's head. Short cuts at an even pitch, in
+         * HEIGHT only. This is the machined counterpart to porcelain's chisel
+         * tooling: tooling is irregular because a hand made it, and these are
+         * regular because a machine did. It is also the cue §6 leans on — "their
+         * panel grooves give the eye something to measure speed against", which
+         * needs a REGULAR pitch to be a measure at all.
+         */
+        const ticks = 3 + ((rand() * 3) | 0)
+        const pitch = w / ticks
+        wrapped(h, () => {
+          h.fillStyle = hg(top - 34)
+          for (let t = 0; t < ticks; t++) {
+            h.fillRect(x0 + (t + 0.5) * pitch - 0.9, y0 + row.inset * 0.34, 1.8, row.inset * 0.42)
+          }
+        })
+      }
+      ry += rh
+    }
+
+    /**
+     * --- dust in the grooves ----------------------------------------------
+     *
+     * Driven by the cavity of the height field just painted, exactly as brass's
+     * verdigris is, and for the same reason: what collects in a recess collects
+     * because it is a recess, so the mask has to BE the geometry. What settles
+     * here is not corrosion — nothing in a void is wet — it is the violet mote
+     * dust of §4.5, which is the one thing in this world that is everywhere.
+     *
+     * Radius 13 texels (~6 cm) matches the groove half-widths above, so a
+     * groove floor reads as a full pocket and a panel face reads as open.
+     */
+    const cav = cavityField(h, 13, 3.4)
+    const dust = coherent(rand, 7)
+    overlayField(a, (i, x, y) => {
+      const k = cav[i] * (0.45 + 0.85 * dust(x, y))
+      if (k <= 0.02) return null
+      return [88, 74, 134, Math.min(0.38, k) * 255]
+    })
+    overlayField(m, (i, x, y) => {
+      const k = cav[i] * (0.45 + 0.85 * dust(x, y))
+      if (k <= 0.02) return null
+      // Dust is matte, and a matte slot beside a cut face is most of what makes
+      // the groove read as deep rather than as a painted line.
+      return [0, 0.97 * 255, 0, Math.min(0.85, k * 1.4) * 255]
+    })
+
+    // Fracture damage: the wall is a ruin, so a few panels have lost a corner
+    // and show the raw rock underneath — cooler, darker, and not flat.
+    for (let i = 0; i < 16; i++) {
+      const x = rand() * SIZE
+      const y = rand() * SIZE
+      const r = 5 + rand() * 16
+      const pts = 5 + ((rand() * 3) | 0)
+      const path = []
+      for (let k = 0; k < pts; k++) {
+        const ang = (k / pts) * Math.PI * 2
+        const rr = r * (0.55 + rand() * 0.7)
+        path.push([x + Math.cos(ang) * rr, y + Math.sin(ang) * rr])
+      }
+      const poly = (ctx, style) => wrapped(ctx, () => {
+        ctx.fillStyle = style
+        ctx.beginPath()
+        ctx.moveTo(path[0][0], path[0][1])
+        for (let k = 1; k < path.length; k++) ctx.lineTo(path[k][0], path[k][1])
+        ctx.closePath()
+        ctx.fill()
+      })
+      poly(h, hg(112))
+      poly(a, `rgba(${VOID_ROCK[0]},${VOID_ROCK[1]},${VOID_ROCK[2]},.78)`)
+      poly(m, mg(0.93, 0, 0.8))
     }
   },
 }

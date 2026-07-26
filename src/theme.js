@@ -356,9 +356,103 @@ const voidTheme = {
     tapClamp: 0.6,
   },
 
+  /**
+   * THE SURFACE HALF OF THE THEME.
+   *
+   * This block was the missing half of the descriptor and it is why the void
+   * measured dark and still read wrong. `PALETTE.stone` and the `stone` painter
+   * were SHARED with the sunset level, so the void's mass was the archipelago's
+   * cool grey-green limestone with a violet light on it — Ethan, after playing
+   * it: the rock "is nowhere close to the reference image". Every number in §2
+   * can pass while that is true, because §2 only says the LIGHTING is right;
+   * §0 warns about exactly that reading.
+   *
+   * Three consumers, all of which existed before this block did:
+   *
+   *   kinds  → `materials.js` `resolveKind`. Every `L.solid(..., 'stone')` in
+   *            the void course becomes `voidrock` without one line changing in
+   *            `voidkit.js`, `levels/void.js` or `kit.js`.
+   *   macro  → `materials/shader.js` `setMacroColors`. The five sky-derived
+   *            colours every lit texel passes through.
+   *   shade  → `voidkit.js`'s `emit()`, which already reads it and has been
+   *            waiting for someone to set it.
+   */
   surfaces: {
-    built: { capKind: 'stone', rimKind: 'stone', kind: 'stone', boulderKind: 'stone' },
-    wild: { capKind: 'stone', rimKind: 'stone', kind: 'stone', boulderKind: 'stone' },
+    /**
+     * The alias map. `stone` is the one that is load-bearing today — it is what
+     * `voidkit.js` defaults every emitter to and what `levels/void.js` passes
+     * for its placeholder slabs, so it is the entire visible mass of the level.
+     *
+     * The other four are the same decision made in advance rather than four
+     * more hardcoded fallbacks: the moment a prefab asks for a dressed face
+     * (`porcelain`), an accent (`terracotta`), a metal (`brass`) or planting
+     * (`moss`), it gets the void's carved stone instead of the archipelago's
+     * sandstone, roof tile, gold or turf. §7.2: "a new prefab must be
+     * theme-neutral in shape and take its colours from the theme descriptor" —
+     * this is how a prefab written for the sunset level obeys that rule in the
+     * void without knowing the void exists.
+     */
+    kinds: {
+      stone: 'voidrock',
+      porcelain: 'voidcarved',
+      terracotta: 'voidcarved',
+      brass: 'voidcarved',
+      moss: 'voidrock',
+    },
+
+    /**
+     * The five shared colours, re-derived for a world with no sun.
+     *
+     * Each is a linear multiplier on albedo (or, for `patina`, a substance
+     * colour), and each answers the same question the skyline answers with the
+     * golden hour: what does this part of the surface actually SEE?
+     */
+    macro: {
+      // A pocket sees the violet dome and nothing else, so it goes dark AND
+      // further toward violet. The skyline's (0.52, 0.68, 0.64) is the cool
+      // GREEN zenith of skyenv.js — under the void that paints a green line
+      // into every fracture in the level, which is the one hue §3 has no room
+      // for.
+      cavity: [0.42, 0.34, 0.60],
+      // The sun-away hemisphere. There is no sun, so this is really "the side
+      // the ambient fill does not reach", and in a violet fog that side goes
+      // blue-violet rather than green-cyan.
+      shade: [0.78, 0.62, 1.05],
+      // An UP face. Kept near unity in luma for the reason the skyline's block
+      // gives at length — a chromatic correction that changes the frame's
+      // energy is an exposure change in disguise, and this theme's exposure is
+      // pinned precisely so that cannot happen. Inert today (both void surfaces
+      // run `upWarm: 0`), and set correctly anyway so it stays a rotation and
+      // not a surprise if a later surface wants it.
+      skyWarm: [0.94, 0.86, 1.14],
+      // What a polished face mirrors back. There is no cloud sea, so this is
+      // the violet haze itself rather than a bright warm band. Also inert
+      // today: both void surfaces run `glint: 0`, because §3 says anything that
+      // reads as a horizon line is wrong and a glint sweep IS a horizon.
+      horizon: [0.62, 0.44, 1.10],
+      // Copper carbonate. Nothing in the void is wet and no surface here asks
+      // for a patina; left at the shipped value rather than invented.
+      patina: 0x4e8f7a,
+    },
+
+    /**
+     * The flat vertex-tint multiplier `voidkit.js` applies to every box and
+     * mesh it emits. 1.0 — and that is the point.
+     *
+     * voidkit added the hook because the shared `stone` albedo was too pale for
+     * the void and turning it down was the only lever a prefab kit had. With
+     * the albedo itself now correct, using it would be darkening a material
+     * that is already at its authored value, and a vertex tint cannot add the
+     * violet cast §3 actually asks for — it can only take value away, which is
+     * the murk failure of §2 arriving through a different door.
+     *
+     * Kept, named and explicitly 1.0 so the next reader can see the decision
+     * rather than the absence of one.
+     */
+    shade: 1.0,
+
+    built: { capKind: 'porcelain', rimKind: 'porcelain', kind: 'stone', boulderKind: 'stone' },
+    wild: { capKind: 'porcelain', rimKind: 'porcelain', kind: 'stone', boulderKind: 'stone' },
   },
 
   foliage: false,

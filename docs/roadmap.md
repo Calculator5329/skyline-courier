@@ -227,12 +227,35 @@ Ordered by how much each one costs the frame, worst first.
 Found while building and photographing the void ruin prefabs (see
 `docs/changelog.md`, 2026-07-25). None of these are in the voidkit lane.
 
-- [ ] **The void's rock is not dark.** `PALETTE.stone` is the sunset level's
-      cool grey-green and both themes share it, so the great walls photograph
-      as pale limestone against `art-direction-void.md` §3's near-black
-      `#14101F`–`#2A2438`. `voidkit.js` already reads a `theme.surfaces.shade`
-      multiplier and applies it to every box and mesh it emits; nothing sets it
-      yet. Set it in the void descriptor, or repoint the albedo per theme.
+- [x] **The void's rock is not dark.** (2026-07-25) Repointed per theme rather
+      than shaded down: `theme.surfaces.kinds` is a per-theme alias map read by
+      `materials.js` `resolveKind`, and the void maps `stone` → the new
+      `voidrock` painter — near-black violet riven rock, built from a fracture
+      field rather than from `stone`'s domes. `surfaces.shade` is set to an
+      explicit 1.0: a vertex tint can only remove value, and §3 asks for a
+      violet cast, not a darker grey. See `docs/changelog.md`.
+- [ ] **A hardcoded warm rim is what actually lights the void's rock.**
+      `scHazeSun` in `render/patch.js` is `0xfff0d2 * 1.5` — the golden hour's
+      haze — and it is added to every surface as a Fresnel rim, at the void's
+      doubled `aerial.rim` of 0.32. Measured on `ascent.png`: with the rim on,
+      a lit rock face is rgb(104,69,61), hue 10 — tan. With `rim: 0` the same
+      face is rgb(1.0,0.9,7.1), i.e. the rim is supplying essentially ALL of
+      the light on the mass, and supplying it warm. The surface lane has taken
+      the albedo as far as it goes (shaded faces now land at hue 266 against
+      §3's 268); the lit faces cannot be fixed from `materials/*`. `scHazeSun`
+      needs to become theme data alongside `setAmbientUpColor` /
+      `setAmbientDownColor`, which are already seams and are also still on
+      their golden-hour literals (`0x8fd8c4` / `0xffcf96`).
+- [ ] **The void's IBL is still the golden-hour dome.** `render/skyenv.js` has
+      no void mode: its peach horizon (`0xffcfa0`), gold aureole and sunlit
+      cloud deck (`0xffd7a8`) are what `scene.environment` holds under
+      `?theme=void`. `render/index.js` already passes `options.sky` and the
+      class already has `setColors`/`setGains`; the void descriptor's `sky`
+      block does not reach it. Measured as second-order for now rather than as
+      a cause: dropping both void surfaces' `envMapIntensity` from 0.85 to 0.12
+      produced a bit-identical frame, so the warm dome is not what is currently
+      lighting the rock. It becomes the largest remaining ambient term the
+      moment the rim above is fixed.
 - [ ] **The void still draws a cloud sea and a warm horizon band.**
       `world.js`'s cloud deck renders under the void theme, giving exactly the
       readable horizon line §3 says is wrong ("there is no sun and no sky").

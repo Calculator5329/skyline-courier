@@ -1,6 +1,7 @@
 import * as THREE from 'three'
-import { extendSurfaceMaterial, setGroundLevels } from './materials/shader.js'
+import { extendSurfaceMaterial, setGroundLevels, setMacroColors } from './materials/shader.js'
 import { surfaceTextures } from './materials/textures.js'
+import { getTheme } from './theme.js'
 
 /**
  * Every surface in the game is generated here. No image files, ever.
@@ -100,6 +101,36 @@ export const PALETTE = {
   // Golden-hour haze rather than a clear blue zenith.
   sky: 0xe9b57a,
   ink: 0x2b2622,
+
+  /**
+   * THE VOID'S MASS. `docs/art-direction-void.md` §3: near-black, cool, faintly
+   * violet, "#14101F in shadow to #2A2438 where lit".
+   *
+   * THIS HEX IS NOT THAT HEX, AND THAT IS THE POINT. §3 quotes colours read off
+   * the reference IMAGE, so they are rendered pixels; this is a reflectance,
+   * and the void's key runs at an eighth of the skyline's with no sun behind
+   * it. Painted at §3's own value the rock measured rgb(1.0, 0.9, 7.1) on the
+   * `ascent` shot — black, not near-black. 0x564c68 is what renders TO §3: a
+   * shaded face lands at rgb(25.4, 8.3, 47.2), hue 266.4 against §3's 268.
+   * `materials/textures.js` `voidrock` carries the measurement.
+   *
+   * What is taken from §3 unchanged is the RATIO. rgb(86,76,104) is
+   * blue-dominant, red second, green lowest — hue 268. "Even the darkest rock
+   * keeps a violet cast, and that is what stops the frame reading as
+   * desaturated": the grade multiplies saturation by 1.46, which amplifies a
+   * violet base and has nothing to amplify on a neutral one. A grey rock under
+   * a violet light measures dark and reads as grey, which is the failure §8
+   * names first.
+   */
+  voidrock: 0x564c68,
+  /**
+   * The carved and machined faces — §4.1's great walls, §4.2's platform
+   * borders. 21% lighter than the raw rock and carrying 1.05x its red at the
+   * same blue, which is §3's "carved faces are a touch warmer where sigil-light
+   * lands on them" and nothing more: they are one substance worked two ways,
+   * not two materials.
+   */
+  voidcarved: 0x6d5c7e,
 }
 
 /**
@@ -439,11 +470,176 @@ const SURFACE = {
      */
     upWarm: 0.70,
   },
+
+  /**
+   * THE VOID'S ROCK.
+   *
+   * Read as a list of things TURNED OFF, because that is most of what makes it
+   * a different world rather than a repaint. `wedge` (moss creeping out of a
+   * junction), `glint` (the cloud-sea horizon band) and `upWarm` (the warm
+   * horizon ring biasing an up-face) are all zero here, and each one of them is
+   * a statement about the golden-hour sky that is simply false in a void — §1:
+   * "the sunset theme is lit BY THE SKY and shaded by mass; the void theme is
+   * lit BY OBJECTS and shaped by darkness".
+   *
+   * `upWarm` is the one that was actually doing the damage. `stone` runs it at
+   * 0.70, the highest in the set, so every up-facing rock in the void course
+   * took a warm-horizon correction authored for a sun at 9.8 degrees — which is
+   * precisely why the first void captures show sandy-tan platform decks. There
+   * is no horizon here to be corrected toward.
+   */
+  voidrock: {
+    // Under 1, and this is the only material in the set that goes there. The
+    // IBL in void mode is the violet dome from render/skygrad.js, and it is the
+    // BRIGHTEST thing touching unlit rock; at porcelain's 1.30 the mass lifts
+    // off its black point and §2's p1 target of 0-6 is unreachable.
+    envMapIntensity: 0.85,
+    // The deepest relief in the game: 13 cm from a facet crown into a fracture.
+    // Riven rock has real depth where dressed stone has millimetres, and this is
+    // the term that makes a near-black surface show any form at all.
+    depth: 0.13,
+    cavityRadius: 16,
+    cavityGain: 3.2,
+    relief: 1.15,
+    reliefAlbedo: 0.20,
+    // Kept: the fracture field is stochastic, with nothing registered to
+    // misalign. Same reasoning as `stone` and `moss`.
+    detile: 0.9,
+    macroAlbedo: 0.34,
+    macroRough: 0.14,
+    // The lowest hue drift in the set. Every other material can afford to
+    // wander a few degrees; this one cannot, because the whole read depends on
+    // it staying violet and a drift toward neutral is the failure mode.
+    macroHue: 0.12,
+    bigAlbedo: 0.16,
+    // Nothing grows in the void. `foliage: false` in the theme says so for the
+    // prefabs; this says it for the surfaces.
+    wedge: 0,
+    // Violet mote dust settling on the up faces, not sun-bleach. Weak: this is
+    // the surface §2 measures, and a pale film on it is the murk failure.
+    topDust: 0.16,
+    topColor: 0x6a5a90,
+    topRough: 0.10,
+    // A trace. There is no sun, but the theme's key is a raked violet fill and
+    // §5 wants dark mass separated from dark fog by a rim.
+    sunLobe: 0.10,
+    // The strongest in the set. In a world lit by objects, the difference
+    // between a face and a fracture is nearly all the shape information there
+    // is, and the cavity tint is what carries it.
+    cavity: 0.85,
+    // Off. The horizon glint mirrors back the bright band where the cloud sea
+    // meets the sky, and §3 is explicit: "there is no sun and no sky. Anything
+    // that reads as a horizon line is wrong."
+    glint: 0,
+    specAo: 0.70,
+    shadeTint: 0.70,
+    upWarm: 0,
+  },
+
+  /**
+   * The carved faces. Everything `voidrock` turns off stays off; what changes
+   * is that this surface was WORKED, so it is shallower, smoother, and it keeps
+   * its registered detail.
+   */
+  voidcarved: {
+    envMapIntensity: 0.85,
+    // 5 cm: the depth of a cut groove, against 13 cm of natural fracture. That
+    // ratio is most of what separates "machined cliff" from "rock face" at
+    // platform distance, where the tile itself has mipped away.
+    depth: 0.05,
+    cavityRadius: 12,
+    cavityGain: 3.0,
+    // Half of voidrock's. A cut face is flat by definition — that is what
+    // makes it read as built — so the macro relief that gives raw rock its
+    // swales would be undoing the work.
+    relief: 0.55,
+    reliefAlbedo: 0.10,
+    // OFF. The panel grid, the incised borders and the index ticks are all
+    // registered detail, and a second rotated albedo sample would print a
+    // groove across the middle of a panel. Same reversal as porcelain's.
+    detile: 0,
+    macroAlbedo: 0.26,
+    macroRough: 0.18,
+    macroHue: 0.12,
+    bigAlbedo: 0.12,
+    wedge: 0,
+    topDust: 0.20,
+    topColor: 0x7a6aa4,
+    topRough: 0.10,
+    // More than the rock: a cut face is smoother and takes a rim where a
+    // fractured one scatters. This is what makes a wall edge read against fog.
+    sunLobe: 0.24,
+    cavity: 0.80,
+    glint: 0,
+    specAo: 0.65,
+    shadeTint: 0.66,
+    upWarm: 0,
+  },
 }
 
 const _cache = new Map()
 
+/**
+ * THE SURFACE HALF OF A THEME, and the seam this file gained.
+ *
+ * `src/theme.js` already owned the LIGHT half — sun, fog, grade, exposure — and
+ * said honestly in its own header that the surface half "is structural and
+ * still lives in materials/textures.js". This is that half, and it is
+ * deliberately the SAME seam `src/voidkit.js` already reads from: one
+ * `theme.surfaces` block, consumed at build time, with a fallback that leaves
+ * the caller's own value alone. voidkit takes `surfaces.shade` off it; this
+ * takes `surfaces.kinds` and `surfaces.macro`.
+ *
+ *   kinds — a per-theme ALIAS MAP from the kind a prefab asked for to the kind
+ *           this theme actually paints. `{ stone: 'voidrock' }` means every
+ *           `L.solid(..., 'stone')` in the void course comes out as near-black
+ *           violet rock, with no change in any kit, level or prefab.
+ *   macro — the five environment-derived colours in materials/shader.js. See
+ *           `setMacroColors` there.
+ *
+ * WHY AN ALIAS RATHER THAN A SECOND KIND NAME EVERYWHERE. `level.js` batches
+ * geometry by kind and `voidkit.js` defaults every emitter to `'stone'`, so the
+ * alternative was for every prefab to learn the theme's vocabulary — which is
+ * the "48 hardcoded colours" problem again, one level up. Aliasing at the point
+ * the material is built leaves batching, coverage and the draw-call budget
+ * bit-identical: the batch key is still the kind the caller named, and only the
+ * material hung on it changes.
+ *
+ * It is also general rather than a special case for one colour. A future ice or
+ * industrial theme adds painters and one `kinds` block, and nothing else in the
+ * project has to know it exists.
+ */
+function themeSurfaces() {
+  try {
+    const t = getTheme()
+    return (t && t.surfaces) || {}
+  } catch { return {} }   // no boot (harness/node)
+}
+
+/** The kind this theme paints for the kind a caller asked for. */
+export function resolveKind(kind) {
+  const kinds = themeSurfaces().kinds
+  return (kinds && kinds[kind]) || kind
+}
+
+/**
+ * Push the theme's shared macro colours into the shader.
+ *
+ * Idempotent and lazy: the theme is chosen once at boot (see `selectTheme`) and
+ * every material is built after that, so doing it on the first material build
+ * needs no new call site in `main.js` — which matters, because a theme seam
+ * that only works if someone remembers to call it is not a seam.
+ */
+let _macroApplied = false
+export function applyThemeSurfaces() {
+  if (_macroApplied) return
+  _macroApplied = true
+  setMacroColors(themeSurfaces().macro || {})
+}
+
 export function surfaceMaterial(kind) {
+  applyThemeSurfaces()
+  kind = resolveKind(kind)
   if (_cache.has(kind)) return _cache.get(kind)
 
   const s = SURFACE[kind]
