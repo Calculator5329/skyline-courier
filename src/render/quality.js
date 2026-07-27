@@ -278,7 +278,26 @@ export const LOOK_LEVELS = {
 // I kind of like that and I want to compare") — not for it to replace the
 // shipped look. This constant's own contract, two lines down, already said the
 // default must equal today's look.
-export const DEFAULT_LOOK = 'modern'
+/**
+ * LEGACY IS THE DEFAULT. This has now been flipped twice and reverted once, so
+ * the reasoning is written here rather than left to a commit message.
+ *
+ * Ethan first asked for a mode to COMPARE against: "add a mode to switch to
+ * that cuz I kind of like that and I want to compare". `modern` was correctly
+ * the default under that instruction, and a lane correctly restored it when it
+ * had been flipped without that context.
+ *
+ * He then compared, and decided: "I say we make legacy the default mode and
+ * only have the enhanced as a option in settings (enhanced=current). we can
+ * make the lighting a bit better for legacy, but keep everything else the same.
+ * then save info on the type of graphics legacy skyline has, thats the perfect
+ * balance of graphics where it looks good enough and we can iterate well."
+ *
+ * The later instruction supersedes the earlier one. If you are reading this
+ * because the default looks like a downgrade — it is deliberate, the argument
+ * is in docs/taste.md, and `modern` is one setting away with nothing deleted.
+ */
+export const DEFAULT_LOOK = 'legacy'
 
 export const LOOK_NAMES = Object.keys(LOOK_LEVELS)
 
