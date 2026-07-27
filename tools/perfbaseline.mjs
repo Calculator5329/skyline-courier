@@ -34,6 +34,7 @@ import {
   DEFAULTS, GPU_ARGS, REPO, buildDist, glRenderer, hideChrome, launchBrowser, num,
   parseArgs, pumpShot,
 } from './harness.mjs'
+import { measurePumpedFrames, summarizeFrameTimes } from './hitch.mjs'
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -144,15 +145,17 @@ async function openFromDist(browser, url, width, height, live = false) {
 }
 
 function distribution(values) {
-  const sorted = values.slice().sort((a, b) => a - b)
-  const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]
-  const r = (v) => +v.toFixed(3)
+  const summary = summarizeFrameTimes(values)
   return {
-    mean: r(sorted.reduce((sum, value) => sum + value, 0) / sorted.length),
-    p50: r(at(0.5)),
-    p95: r(at(0.95)),
-    p99: r(at(0.99)),
-    max: r(sorted[sorted.length - 1]),
+    mean: summary.meanMs,
+    p50: summary.p50Ms,
+    p95: summary.p95Ms,
+    p99: summary.p99Ms,
+    max: summary.maxMs,
+    onePctLowFps: summary.onePctLowFps,
+    stddevMs: summary.stddevMs,
+    hitchCount: summary.hitchCount,
+    worstHitchMs: summary.worstHitchMs,
   }
 }
 
@@ -197,10 +200,11 @@ async function captureLiveFrame(browser, width, height, frames) {
 
 function reportLive(rows) {
   console.log('\nlive rAF audit — running forward+sprint; completed time includes an audit-only GPU sync')
-  console.log('| native size | rAF interval p50/p95/p99 | completed p50/p95/p99/max | 240 Hz headroom at p95 | JS heap range |')
-  console.log('| --- | --- | --- | ---: | ---: |')
+  console.log('| native size | rAF interval p50/p95/p99 | completed mean/p99 | 1% low | σ ms | hitches / worst | 240 Hz headroom at p95 | JS heap range |')
+  console.log('| --- | --- | --- | ---: | ---: | --- | ---: | ---: |')
   for (const row of rows) {
-    console.log(`| ${row.width}x${row.height} | ${row.interval.p50}/${row.interval.p95}/${row.interval.p99} | ${row.completed.p50}/${row.completed.p95}/${row.completed.p99}/${row.completed.max} | ${row.headroom240P95} ms | ${row.heapRangeBytes ?? 'unavailable'} |`)
+    const worst = row.completed.worstHitchMs ? `${row.completed.worstHitchMs} ms` : '—'
+    console.log(`| ${row.width}x${row.height} | ${row.interval.p50}/${row.interval.p95}/${row.interval.p99} | ${row.completed.mean}/${row.completed.p99} | ${row.completed.onePctLowFps} fps | ${row.completed.stddevMs} | ${row.completed.hitchCount} / ${worst} | ${row.headroom240P95} ms | ${row.heapRangeBytes ?? 'unavailable'} |`)
     for (const error of row.errors) console.log(`  ${row.width}x${row.height}: ${error}`)
   }
   console.log('')
@@ -271,6 +275,10 @@ async function captureTheme(browser, theme, args, optimized, quality = 'high') {
         dt: DEFAULTS.dt,
         syncFrames: args.syncFrames,
       })
+      const measuredFrames = await measurePumpedFrames(page, shot, {
+        frames: args.syncFrames,
+        dt: DEFAULTS.dt,
+      })
       const image = analyzeBuffer(await page.screenshot({ type: 'png' }))
       const measured = visual(image)
       const shotErrors = errors.slice(before)
@@ -281,7 +289,8 @@ async function captureTheme(browser, theme, args, optimized, quality = 'high') {
         clip: `${image.clipped.highPct}/${image.clipped.lowPct}`,
         draws: render.drawCalls,
         tris: render.triangles,
-        frameMs: render.frameMs,
+        frameMs: measuredFrames.consistency.meanMs,
+        consistency: measuredFrames.consistency,
         cpuMs: render.cpuMsPerFrame,
         pass: !image.uniform && shotErrors.length === 0,
         errors: shotErrors,
@@ -400,24 +409,37 @@ async function captureQualitySize(browser, width, height, args, options) {
             dt: DEFAULTS.dt,
             syncFrames: args.syncFrames,
           })
-          samples[quality][shot].push(measured.frameMs)
+          const frames = await measurePumpedFrames(page, shot, {
+            frames: args.syncFrames,
+            dt: DEFAULTS.dt,
+          })
+          samples[quality][shot].push(frames)
         }
       }
     }
 
     const rows = QUALITY_NAMES.map((quality) => {
-      const shots = options.names.map((shot) => ({
-        shot,
-        samples: samples[quality][shot],
-        // Scheduler noise is one-sided. This matches perfprobe's established
-        // minimum-of-interleaved-repeats hygiene.
-        frameMs: Math.min(...samples[quality][shot]),
-      }))
+      const shots = options.names.map((shot) => {
+        const repeats = samples[quality][shot]
+        // Scheduler noise is one-sided. Select the complete repeat with the
+        // lowest mean, preserving its tail instead of independently cherry-
+        // picking each percentile.
+        const selected = repeats.reduce((best, candidate) =>
+          candidate.consistency.meanMs < best.consistency.meanMs ? candidate : best)
+        return {
+          shot,
+          samples: repeats.map((sample) => sample.consistency),
+          frameMs: selected.consistency.meanMs,
+          consistency: selected.consistency,
+          times: selected.times,
+        }
+      })
+      const consistency = summarizeFrameTimes(shots.flatMap((shot) => shot.times))
       return {
         quality,
         shots,
-        meanMs: +(shots.reduce((sum, shot) => sum + shot.frameMs, 0) / shots.length)
-          .toFixed(3),
+        consistency,
+        meanMs: consistency.meanMs,
         maxMs: Math.max(...shots.map((shot) => shot.frameMs)),
       }
     })
@@ -432,6 +454,10 @@ async function captureQualitySize(browser, width, height, args, options) {
           dt: DEFAULTS.dt,
           syncFrames: args.syncFrames,
         })
+        const measuredFrames = await measurePumpedFrames(page, options.screenshotShot, {
+          frames: args.syncFrames,
+          dt: DEFAULTS.dt,
+        })
         const path = join(options.screenshotOut, `${quality}.png`)
         const png = await page.screenshot({ path, type: 'png' })
         screenshots.push({
@@ -439,6 +465,7 @@ async function captureQualitySize(browser, width, height, args, options) {
           shot: options.screenshotShot,
           path,
           visual: visual(analyzeBuffer(png)),
+          consistency: measuredFrames.consistency,
         })
       }
     }
@@ -457,30 +484,44 @@ async function captureQualitySize(browser, width, height, args, options) {
 
 function reportQualityLevels(results, options) {
   console.log(`\nquality levels — ${options.names.join(', ')}; minimum of ${options.repeats} interleaved repeats per shot`)
-  console.log('| level | 1600x900 mean ms/f | 2560x1440 mean ms/f | 1440p / 240 Hz |')
-  console.log('| --- | ---: | ---: | --- |')
+  console.log('| level | size | mean ms | p99 ms | 1% low | σ ms | hitches | worst hitch | consistency |')
+  console.log('| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |')
   const bySize = (quality, width) => results
     .find((result) => result.width === width).rows
     .find((row) => row.quality === quality)
   for (const quality of QUALITY_NAMES) {
     const small = bySize(quality, 1600)
     const large = bySize(quality, 2560)
-    const verdict = large.maxMs <= 1000 / 240
-      ? 'reaches 240 Hz in every shot'
-      : `misses 240 Hz (worst ${large.maxMs} ms)`
-    console.log(`| ${quality} | ${small.meanMs} | ${large.meanMs} | ${verdict} |`)
+    for (const [label, row] of [['1600x900', small], ['2560x1440', large]]) {
+      const c = row.consistency
+      let verdict
+      if (c.hitchCount) {
+        verdict = `STUTTERS (${c.hitchCount} > ${c.hitchThresholdMs} ms)`
+      } else if (c.p99Ms <= 1000 / 240) {
+        verdict = 'consistent at 240 Hz'
+      } else {
+        verdict = `not consistent at 240 Hz (p99 ${c.p99Ms} ms)`
+      }
+      console.log(`| ${quality} | ${label} | ${c.meanMs} | ${c.p99Ms} | ${c.onePctLowFps} fps | ${c.stddevMs} | ${c.hitchCount} | ${c.worstHitchMs || '—'} | ${verdict} |`)
+    }
   }
   for (const result of results) {
     console.log(`\n${result.width}x${result.height} — ${result.gl.renderer}`)
     for (const row of result.rows) {
-      console.log(`  ${row.quality}: ${row.shots.map((shot) => `${shot.shot}=${shot.frameMs}`).join(', ')}`)
+      console.log(`  ${row.quality}: ${row.shots.map((shot) => {
+        const c = shot.consistency
+        return `${shot.shot}=${c.meanMs} mean/${c.p99Ms} p99/${c.hitchCount} hitch`
+      }).join(', ')}`)
     }
     for (const error of result.errors) console.log(`  error: ${error}`)
   }
   const screenshots = results.flatMap((result) => result.screenshots)
   if (screenshots.length) {
     console.log(`\nsame-shot captures (${options.screenshotShot}):`)
-    for (const shot of screenshots) console.log(`  ${shot.quality}: ${shot.path}`)
+    for (const shot of screenshots) {
+      const c = shot.consistency
+      console.log(`  ${shot.quality}: ${shot.path} (${c.meanMs} mean, ${c.p99Ms} p99, ${c.hitchCount} hitches)`)
+    }
   }
   console.log('')
 }
@@ -537,12 +578,14 @@ function report(results, calibration) {
   console.log(`visual tolerance: ±${calibration.tolerance} luma units per lum/p1/p50/p99`)
   for (const result of results) {
     console.log(`\n${result.theme} — ${result.gl.renderer}`)
-    console.log('| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | CPU ms/f | synced ms/f | visual |')
-    console.log('| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | --- |')
+    console.log('| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | CPU ms/f | synced mean/p99 ms | 1% low fps | σ ms | hitches / worst | visual |')
+    console.log('| --- | ---: | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- | --- |')
     for (const r of result.rows) {
       const a = r.before
       const b = r.after
-      console.log(`| ${r.shot} | ${a.visual.lum} -> ${b.visual.lum} | ${a.visual.p1}/${a.visual.p50}/${a.visual.p99} -> ${b.visual.p1}/${b.visual.p50}/${b.visual.p99} | ${a.clip}% -> ${b.clip}% | ${a.draws} -> ${b.draws} | ${a.tris} -> ${b.tris} | ${a.cpuMs} -> ${b.cpuMs} | ${a.frameMs} -> ${b.frameMs} | ${r.pass ? 'PASS' : 'FAIL'} |`)
+      const aw = a.consistency.worstHitchMs || '—'
+      const bw = b.consistency.worstHitchMs || '—'
+      console.log(`| ${r.shot} | ${a.visual.lum} -> ${b.visual.lum} | ${a.visual.p1}/${a.visual.p50}/${a.visual.p99} -> ${b.visual.p1}/${b.visual.p50}/${b.visual.p99} | ${a.clip}% -> ${b.clip}% | ${a.draws} -> ${b.draws} | ${a.tris} -> ${b.tris} | ${a.cpuMs} -> ${b.cpuMs} | ${a.consistency.meanMs}/${a.consistency.p99Ms} -> ${b.consistency.meanMs}/${b.consistency.p99Ms} | ${a.consistency.onePctLowFps} -> ${b.consistency.onePctLowFps} | ${a.consistency.stddevMs} -> ${b.consistency.stddevMs} | ${a.consistency.hitchCount}/${aw} -> ${b.consistency.hitchCount}/${bw} | ${r.pass ? 'PASS' : 'FAIL'} |`)
       for (const error of [...a.errors, ...b.errors]) console.log(`  ${r.shot}: ${error}`)
     }
   }
