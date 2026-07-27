@@ -6,8 +6,11 @@
  * actual play. The harness re-applies the pose on every pumped frame, so a
  * mid-air shot stays mid-air instead of falling for a second and a half.
  *
- * Coordinates are read off `src/level.js`, not invented. The course runs along
- * +X from the terrace at x=4 to the tower at x=222. Useful facts from there:
+ * Coordinates are read off `src/level.js`, not invented. The TAUGHT SPINE runs
+ * along +X from the terrace at x=4 to the tower at x=222 — those coordinates are
+ * frozen and every shot below except `reach` sits on them. Past the tower the
+ * course now extends (Act two, x 244..380, up to y=40) with grapple-mandatory
+ * crossings; `reach` is the one shot that lives out there. Useful facts:
  *   - `position` is FEET (see collision.js resolve()); the eye sits
  *     `standHeight - eyeDrop` = 1.53 m above it.
  *   - Every section's deck is declared as `solid(cx, -0.5, cz, w, 1, d)`, so
@@ -110,6 +113,21 @@ export const SHOTS = {
     pitch: 0.08,
     vel: [8, 0, 0],
     note: 'the finish — brass arch on a moss deck at the top of the ascent',
+  },
+
+  // ACT TWO. On far-1 (deck top y=8.4, centred x=244) at the lip of the first
+  // grapple crossing, looking east across 23 m of void at the anchor lantern on
+  // far-2's rim (flame at 275, 12.4, 0) and the brass wall climbing beyond it.
+  // This is the shot that has to prove the extension is real geometry and that
+  // the grapple crossing reads: a gap no jump clears, a lit anchor across it,
+  // and a landing island past that. Feet 2 cm above the deck, pitch just below
+  // level so the void opens under the anchor without the deck eating the frame.
+  reach: {
+    pos: [248, 8.4 + DECK, 0],
+    yaw: EAST,
+    pitch: -0.05,
+    vel: [12, 0, 0],
+    note: 'ACT TWO: the first grapple reach — 23 m of void, the anchor across it',
   },
 
   // High and off the route, looking back across the archipelago roughly into
