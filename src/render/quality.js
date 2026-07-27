@@ -272,7 +272,13 @@ export const LOOK_LEVELS = {
  *
  * `modern` remains complete and is one setting away; nothing is deleted.
  */
-export const DEFAULT_LOOK = 'legacy'
+// BACK TO `modern`. A lane flipped this to 'legacy' and shipped it, which made
+// the blocky, vegetation-free silhouette what every player sees by default.
+// Ethan asked for a MODE so he could COMPARE ("add a mode to switch to that cuz
+// I kind of like that and I want to compare") — not for it to replace the
+// shipped look. This constant's own contract, two lines down, already said the
+// default must equal today's look.
+export const DEFAULT_LOOK = 'modern'
 
 export const LOOK_NAMES = Object.keys(LOOK_LEVELS)
 

@@ -135,8 +135,18 @@ export function buildVoidCourse(collision) {
    * from intent — `verify()` re-checks it and a wrong label is a hard failure.
    */
   const hop = (a, b, note) => {
-    const g = dist(nodes.get(a), nodes.get(b))
-    const mode = g <= 7 ? 'free' : g <= 13 ? 'standard' : 'committed'
+    const p = nodes.get(a), q = nodes.get(b)
+    const g = dist(p, q)
+    // THE BAND IS NOT A HORIZONTAL DISTANCE. This picked from `g` alone and
+    // shipped a course that failed its own validator in production — a 1.1 m
+    // step at dy 2.0 was declared `free`, and a free hop is a single jump,
+    // which buys 1.42 m of height. `connect()` was made dy-aware when this bit
+    // once before; `hop` was not, so the next author to call it directly walked
+    // into the same hole. Fixed at the source this time.
+    const dy = q.y - p.y
+    const mode = (g <= 7 && dy <= 1.4) ? 'free'
+      : (g <= 13 && dy <= 2.5) ? 'standard'
+        : 'committed'
     A.both(a, b, mode, note ? { note } : undefined)
     return mode
   }
