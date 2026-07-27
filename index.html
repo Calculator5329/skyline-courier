@@ -1245,34 +1245,101 @@
   .board .rank { width: 8px; text-align: right; opacity: .6; }
   .board .rparcels { opacity: .7; }
 
-  /* --- the records screen ------------------------------------------------
+  /* --- panel tabs: PLAY / RECORDS / SETTINGS ------------------------------
    *
-   * Same plate as #menu — same width, border, brackets and gradient — because
-   * it is the same panel showing a different face, exactly like #loadnote. A
-   * second visual language for a second screen would read as a second app. */
-  #records {
-    position: relative;
-    width: min(780px, 94vw);
+   * One plate, three faces. The records screen started life as a second panel
+   * swapped in for the menu, which was already the right instinct — this just
+   * makes it a tab, so settings could join it without a third top-level screen
+   * and a third way to get back.
+   *
+   * `.hidden` is NOT a global utility in this file, it is declared per element.
+   * The first version of the swap toggled it on an element nothing styled and
+   * hid nothing, stacking two panels on top of each other. Hence this rule. */
+  .mpane.hidden { display: none; }
+  .mtabs {
     display: flex;
-    flex-direction: column;
-    gap: clamp(12px, 1.9vh, 19px);
-    /* Padded on all four sides, unlike #menu — #menu ends in the controls
-       strip, which is a full-bleed band that supplies its own bottom edge.
-       This screen ends in text, and text against a panel edge reads as
-       clipped. */
-    padding: clamp(18px, 2.6vh, 28px) clamp(16px, 2.4vw, 30px) clamp(14px, 2vh, 20px);
-    background: linear-gradient(168deg, var(--m-panel-a), var(--m-panel-b));
-    border: 1px solid var(--m-line);
-    border-radius: 3px;
-    box-shadow: 0 30px 90px rgba(0, 0, 0, .62), inset 0 1px 0 rgba(255, 255, 255, .07);
-    overflow: hidden;
+    gap: 6px;
+    border-bottom: 1px solid var(--m-line);
+    padding-bottom: 10px;
   }
-  #records.hidden { display: none; }
-  /* The menu needs its own hide rule: `.hidden` is not a global utility here,
-     it is declared per element (see `#overlay.hidden`), and toggling a class
-     nothing styles hides nothing — the first build stacked the records screen
-     UNDER a still-visible menu. */
-  #menu.hidden { display: none; }
+  .mtab {
+    pointer-events: auto;
+    appearance: none;
+    font: inherit;
+    cursor: pointer;
+    flex: 1;
+    padding: 8px 10px;
+    font-size: 10px;
+    letter-spacing: .28em;
+    text-transform: uppercase;
+    color: var(--m-dim);
+    background: rgba(0, 0, 0, .22);
+    border: 1px solid var(--m-line);
+    border-radius: 2px;
+    transition: color .16s, border-color .16s, background .16s;
+  }
+  .mtab:hover { color: var(--m-ink); border-color: var(--m-line-on); }
+  .mtab[aria-selected="true"] {
+    color: var(--m-accent-hi);
+    border-color: var(--m-line-on);
+    background: rgba(217, 164, 65, .10);
+  }
+  .mpane { display: flex; flex-direction: column; gap: clamp(12px, 1.9vh, 19px); }
+
+  /* --- settings rows ----------------------------------------------------- */
+  .setrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 0;
+  }
+  .setrow label { font-size: 11px; color: var(--m-ink); letter-spacing: .06em; }
+  .setnote {
+    font-size: 9px;
+    color: var(--m-dim);
+    opacity: .5;
+    letter-spacing: .04em;
+    line-height: 1.5;
+    margin: -4px 0 6px;
+  }
+  .segs { display: flex; gap: 4px; }
+  .seg, .toggle {
+    pointer-events: auto;
+    appearance: none;
+    font: inherit;
+    cursor: pointer;
+    padding: 4px 12px;
+    font-size: 9px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--m-dim);
+    background: rgba(0, 0, 0, .22);
+    border: 1px solid var(--m-line);
+    border-radius: 2px;
+    transition: color .16s, border-color .16s, background .16s;
+  }
+  .seg:hover, .toggle:hover { color: var(--m-ink); border-color: var(--m-line-on); }
+  .seg[aria-pressed="true"], .toggle[aria-pressed="true"] {
+    color: var(--m-accent-hi);
+    border-color: var(--m-line-on);
+    background: rgba(217, 164, 65, .10);
+  }
+  /* The controls table already had a home in the disclosure; it keeps its own
+     styling and just lives under a heading now. */
+  /* Two columns here, not the disclosure's four. The four-column layout was
+     built to keep a collapsed reference SHORT on the way to the start button;
+     on its own tab there is room, and a key/meaning pair reads far better as
+     one column of pairs than as two pairs sharing a row. */
+  .mpane[data-pane="settings"] #keys {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    border-top: 0;
+    text-align: left;
+  }
+  .mpane[data-pane="settings"] #keys .sec { grid-column: 1 / -1; }
+  .mpane[data-pane="settings"] #keys b { text-align: left; }
+  #keys em { font-style: normal; color: var(--m-accent); opacity: .85; }
 
   /* Rule tabs. The board is scoped to a rule set, so picking one is not a
      filter over a bigger list — it IS which board you are looking at. */
@@ -1815,6 +1882,16 @@
          Both banners are drawn in their OWN colours, whichever theme is live,
          and both were drawn against real captures of the two worlds rather
          than from memory of them. -->
+    <!-- The three faces of the panel. PLAY is first and selected because the
+         overwhelmingly common reason to be here is to start a run; a menu that
+         opens on anything else taxes every session to serve the rare one. -->
+    <div class="mtabs" role="tablist">
+      <button type="button" class="mtab" data-pane="play" data-nostart aria-selected="true">Play</button>
+      <button type="button" class="mtab" data-pane="board" data-nostart aria-selected="false">Records</button>
+      <button type="button" class="mtab" data-pane="settings" data-nostart aria-selected="false">Settings</button>
+    </div>
+
+    <div class="mpane" data-pane="play">
     <div class="pick">
       <div class="sec-h"><i>1</i>Route <em>&mdash; which world</em></div>
       <div class="picks" id="maps">
@@ -2110,7 +2187,6 @@
     <div class="go">
       <button type="button" id="cta">click to run</button>
       <div id="esc">escape releases the cursor at any time</div>
-      <button type="button" id="recbtn" data-nostart>records &mdash; every route, every rule</button>
     </div>
 
     <div class="ref">
@@ -2118,19 +2194,60 @@
         <span><b>WASD</b>run</span>
         <span><b>SHIFT</b>sprint</span>
         <span><b>SPACE</b>jump &middot; double &middot; wall-jump</span>
-        <span><b>CTRL</b>slide</span>
+        <span><b>C</b>slide</span>
         <span><b>Q</b>air dash</span>
         <span><b>F</b>grapple</span>
       </div>
+    </div>
+    </div><!-- /pane play -->
 
-      <details id="keysbox" data-nostart>
-        <summary>All controls</summary>
+    <!-- RECORDS. Populated by src/hud.js `renderRecords`. -->
+    <div class="mpane hidden" data-pane="board">
+      <div class="rtabs" id="rtabs" role="tablist"></div>
+      <div class="rcols" id="rcols"></div>
+      <div id="rnote">a run is filed the moment you cross the finish &mdash;
+        there is nothing to submit. Times live in this browser.</div>
+    </div>
+
+    <!-- SETTINGS, including the full control reference. Ethan asked for the
+         controls to live here, and he is right: they are reference material,
+         and reference material on the way to the start button is noise on every
+         run after the first. The six-key strip stays on PLAY. -->
+    <div class="mpane hidden" data-pane="settings">
+      <div class="pick">
+        <div class="sec-h">Display</div>
+        <div class="setrow">
+          <label for="set-fs">Fullscreen on run</label>
+          <button type="button" id="set-fs" class="toggle" data-nostart aria-pressed="true">on</button>
+        </div>
+        <div class="setnote">the run takes the whole screen when you click to run,
+          and gives it back on Escape</div>
+
+        <div class="setrow">
+          <label>Look</label>
+          <div class="segs" id="set-look"></div>
+        </div>
+        <div class="setnote">legacy is the shipped look. Changing this reloads &mdash;
+          the world is baked at boot</div>
+
+        <div class="setrow">
+          <label>Quality</label>
+          <div class="segs" id="set-quality"></div>
+        </div>
+        <div class="setnote">pixel ratio and effect taps. Takes effect on the next
+          frame, no reload</div>
+      </div>
+
+      <div class="pick">
+        <div class="sec-h">Controls</div>
         <div id="keys">
           <div class="sec">movement</div>
           <b>WASD</b><span>run</span>
           <b>SHIFT</b><span>sprint</span>
           <b>SPACE</b><span>jump &middot; double jump in the air &middot; wall-jump off a wall</span>
-          <b>CTRL</b><span>slide &mdash; jump out of it to keep the speed</span>
+          <b>C / CTRL</b><span>slide &mdash; jump out of it to keep the speed.
+            <em>Use C: CTRL+W is your browser's close-tab shortcut, and W is how you
+            run</em></span>
           <b>MOUSE</b><span>look &mdash; run along a wall to wall-run</span>
           <div class="sec">charges</div>
           <b>Q / RIGHT-CLICK</b><span>air dash &mdash; one charge, recharges on landing</span>
@@ -2140,9 +2257,10 @@
           <b>R</b><span>restart from the last checkpoint</span>
           <b>P</b><span>photo mode &mdash; freeze the frame and free the cursor, without this
             menu. click to resume</span>
+          <b>F11</b><span>fullscreen</span>
           <b>ESC</b><span>release the cursor</span>
         </div>
-      </details>
+      </div>
     </div>
 
     <!-- Shown only while a world change is reloading the page: the same plate,
@@ -2156,32 +2274,6 @@
     </div>
   </div>
 
-  <!-- RECORDS — the boards at full size, one screen, no scrolling.
-       Every route against every rule set, which is six boards, because a time
-       only means something against the course AND the cuff it was set under.
-       It replaces the menu rather than floating over it: the menu is a set of
-       decisions and this is a thing you read, and the two want the same
-       attention. `data-nostart` throughout, or reading your own records would
-       grab the pointer and drop you into a run. -->
-  <div id="records" class="hidden" data-nostart>
-    <div class="title">
-      <h1>Records</h1>
-      <div class="rule">
-        <span></span>
-        <div class="tag">your five fastest, per route, per rule</div>
-        <span></span>
-      </div>
-    </div>
-
-    <div class="rtabs" id="rtabs" role="tablist"></div>
-    <div class="rcols" id="rcols"></div>
-
-    <div class="go">
-      <button type="button" id="recback" data-nostart>back</button>
-      <div id="rnote">a run is filed the moment you cross the finish &mdash;
-        there is nothing to submit. Times live in this browser.</div>
-    </div>
-  </div>
 </div>
 
 <script type="module" src="/src/main.js"></script>

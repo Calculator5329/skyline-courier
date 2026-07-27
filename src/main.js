@@ -11,7 +11,8 @@ import { SpeedFX } from './fx/speed.js'
 import { GrappleFX } from './fx/grapple.js'
 import { VoidFX } from './fx/voidfx.js'
 import { RenderPipeline } from './render/index.js'
-import { DEFAULT_QUALITY, QUALITY_LEVELS, QUALITY_NAMES, resolveQuality } from './render/quality.js'
+import { DEFAULT_QUALITY, QUALITY_LEVELS, QUALITY_NAMES, resolveQuality,
+         LOOK_NAMES, readLook, setLook } from './render/quality.js'
 import { Music } from './music.js'
 import { selectTheme, getTheme, THEMES } from './theme.js'
 
@@ -330,7 +331,12 @@ hud.overlay.addEventListener('click', (e) => {
   // Clicking back in is also how you leave photo mode — reaching for P again
   // when you have a free cursor and the world in front of you is not obvious.
   if (photoMode) setPhotoMode(false)
-  else canvas.requestPointerLock()
+  else {
+    // Same gesture takes the screen and the pointer. Fullscreen must be
+    // requested from a user gesture, and this click is the only one there is.
+    enterFullscreen()
+    canvas.requestPointerLock()
+  }
 })
 
 document.addEventListener('pointerlockchange', () => {
@@ -341,7 +347,7 @@ document.addEventListener('pointerlockchange', () => {
   // Whatever raises the panel raises the MENU. Coming back from a run to the
   // records screen you left open ten minutes ago would hide the one control
   // that starts another one.
-  if (locked) openRecords(false)
+  if (locked) showPane('play')
   if (locked) {
     // A menu button keeps DOM focus after the click that dismissed the menu, so
     // an Enter mid-run would re-fire it — and on a map card that is a page
@@ -853,18 +859,140 @@ function paintRecordsScreen() {
   }, (key) => { recordsMode = key; paintRecordsScreen() })
 }
 
-function openRecords(open) {
-  if (open) {
-    // Re-read on open, never cached: a run filed since the last look is the
-    // only reason to be on this screen at all.
+/**
+ * Show one face of the panel: 'play', 'board' or 'settings'.
+ *
+ * Pane switching lives HERE rather than on the Hud, where the records swap it
+ * replaces used to live. It is menu chrome — class toggles on elements the HUD
+ * has no other business with — and the Hud is instrumentation for a running
+ * player. Moving it also freed this change from a lease the overdrive lane
+ * holds on src/hud.js, which is the kind of nudge that usually means the
+ * boundary was wrong to begin with.
+ */
+function paintPane(name) {
+  for (const pane of document.querySelectorAll('.mpane')) {
+    pane.classList.toggle('hidden', pane.dataset.pane !== name)
+  }
+  for (const tab of document.querySelectorAll('.mtab')) {
+    tab.setAttribute('aria-selected', tab.dataset.pane === name ? 'true' : 'false')
+  }
+}
+
+function showPane(name) {
+  if (name === 'board') {
+    // Re-read on every open, never cached: a run filed since the last look is
+    // the only reason to be on this pane at all.
     recordsMode = getMode()
     paintRecordsScreen()
   }
-  hud.showRecords(open)
+  paintPane(name)
 }
 
-document.getElementById('recbtn')?.addEventListener('click', () => openRecords(true))
-document.getElementById('recback')?.addEventListener('click', () => openRecords(false))
+for (const tab of document.querySelectorAll('.mtab')) {
+  tab.addEventListener('click', () => showPane(tab.dataset.pane))
+}
+showPane('play')
+
+// ------------------------------------------------------------------ settings
+//
+// Quality and look were console-only (`__game.setQuality`) with the menu item
+// sitting in docs/roadmap.md. Ethan asked for a settings tab, so this is that
+// item: the same two levers, in the panel, with the same persistence.
+
+const FS_KEY = 'skyline-courier:fullscreen'
+let fullscreenOnRun = (() => {
+  try { return localStorage.getItem(FS_KEY) !== '0' } catch { return true }
+})()
+
+const fsBtn = document.getElementById('set-fs')
+
+function paintFsBtn() {
+  if (!fsBtn) return
+  fsBtn.setAttribute('aria-pressed', fullscreenOnRun ? 'true' : 'false')
+  fsBtn.textContent = fullscreenOnRun ? 'on' : 'off'
+}
+paintFsBtn()
+
+fsBtn?.addEventListener('click', () => {
+  fullscreenOnRun = !fullscreenOnRun
+  try { localStorage.setItem(FS_KEY, fullscreenOnRun ? '1' : '0') } catch { /* private mode */ }
+  paintFsBtn()
+})
+
+/**
+ * Take the screen for the run.
+ *
+ * Requested from the same click that takes the pointer, because a fullscreen
+ * request needs a user gesture and that click is the only one there is. It is
+ * allowed to fail — some browsers and some embeds refuse — and failing must not
+ * cost you the run, so the rejection is swallowed and the pointer lock proceeds
+ * either way.
+ */
+function enterFullscreen() {
+  if (!fullscreenOnRun || document.fullscreenElement) return
+  document.documentElement.requestFullscreen?.().catch(() => { /* refused; play windowed */ })
+}
+
+/** Build a segmented control, remembering which segment is live. */
+function segControl(hostId, names, get, set, label = (n) => n) {
+  const host = document.getElementById(hostId)
+  if (!host) return () => {}
+  const paint = () => {
+    for (const b of host.children) b.setAttribute('aria-pressed', b.dataset.v === get() ? 'true' : 'false')
+  }
+  for (const n of names) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'seg'
+    b.dataset.v = n
+    b.dataset.nostart = ''
+    b.textContent = label(n)
+    b.addEventListener('click', () => { set(n); paint() })
+    host.append(b)
+  }
+  paint()
+  return paint
+}
+
+segControl('set-quality', QUALITY_NAMES, () => quality, (n) => {
+  quality = resolveQuality(n)
+  try { localStorage.setItem(QUALITY_KEY, quality) } catch { /* private mode */ }
+  applyPixelRatio()
+  pipeline.setQuality?.(quality)
+})
+
+// LOOK changes what the geometry is generated from, which happens once at boot
+// — so it reloads, exactly like a route change, and says so on the row rather
+// than appearing to do nothing until you next start the game.
+segControl('set-look', LOOK_NAMES, () => readLook(), (n) => {
+  if (n === readLook()) return
+  setLook(n)
+  location.reload()
+}, (n) => (n === 'no-foliage' ? 'no foliage' : n))
+
+// ------------------------------------------------------- the CTRL+W problem
+//
+// Ethan: "ctrl W just closed the tab for me we should fix".
+//
+// It cannot be blocked. CTRL+W is reserved by the browser and never reaches the
+// page — preventDefault on it does nothing, by design, in every engine. So this
+// is defence in depth rather than a fix:
+//
+//   1. C is now the ADVERTISED slide key (it was already bound). CTRL still
+//      works, but the strip and the controls table say C, because CTRL+W is
+//      slide-while-running-forward, which is the single most common input in
+//      the game. A binding that closes the tab during normal play is a bad
+//      binding no matter whose shortcut it is.
+//   2. This guard. An interrupted RUN gets the browser's "leave site?" prompt,
+//      so the reflex costs a dialog instead of the run.
+//
+// Only while a run is actually in progress. A confirm dialog on a menu you were
+// finished with is the kind of thing that makes people close the tab on purpose.
+window.addEventListener('beforeunload', (e) => {
+  if (!run.started || run.finished) return
+  e.preventDefault()
+  e.returnValue = ''        // Chrome still requires this to show the prompt
+})
 
 // --------------------------------------------------------------- debug API
 
