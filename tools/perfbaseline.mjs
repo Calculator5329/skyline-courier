@@ -21,10 +21,11 @@
 
 import { readFile } from 'node:fs/promises'
 import { extname, normalize, resolve } from 'node:path'
+import { chromium } from 'playwright'
 import { analyzeBuffer } from './analyze.mjs'
 import { SHOTS, SHOT_NAMES, VOID_SHOTS, VOID_SHOT_NAMES } from './shots.mjs'
 import {
-  DEFAULTS, REPO, buildDist, glRenderer, hideChrome, launchBrowser, num,
+  DEFAULTS, GPU_ARGS, REPO, buildDist, glRenderer, hideChrome, launchBrowser, num,
   parseArgs, pumpShot,
 } from './harness.mjs'
 
@@ -56,7 +57,45 @@ function seededRandom() {
   window.cancelAnimationFrame = () => {}
 }
 
-async function openFromDist(browser, url, width, height) {
+function liveFrameProbe() {
+  let s = 0x5c0117
+  Math.random = () => {
+    s ^= s << 13; s >>>= 0
+    s ^= s >>> 17
+    s ^= s << 5; s >>>= 0
+    return s / 4294967296
+  }
+
+  const nativeRAF = window.requestAnimationFrame.bind(window)
+  const samples = []
+  let lastTimestamp = null
+  let syncPixel = null
+  window.__SC_LIVE_FRAME_AUDIT__ = samples
+  window.requestAnimationFrame = (callback) => nativeRAF((timestamp) => {
+    const start = performance.now()
+    callback(timestamp)
+    // Sync only in this opt-in audit arm. Production has no readback; forcing
+    // completion here makes `completedMs` CPU + GPU instead of queueing time.
+    const game = window.__game
+    if (game && game.renderer) {
+      const gl = game.renderer.getContext()
+      if (!syncPixel) syncPixel = new Uint8Array(4)
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, syncPixel)
+    }
+    const end = performance.now()
+    if (lastTimestamp !== null) {
+      samples.push({
+        intervalMs: timestamp - lastTimestamp,
+        completedMs: end - start,
+        heapBytes: performance.memory ? performance.memory.usedJSHeapSize : null,
+      })
+      if (samples.length > 1200) samples.shift()
+    }
+    lastTimestamp = timestamp
+  })
+}
+
+async function openFromDist(browser, url, width, height, live = false) {
   const root = resolve(REPO, 'dist')
   const context = await browser.newContext({
     viewport: { width, height },
@@ -91,11 +130,95 @@ async function openFromDist(browser, url, width, height) {
   page.on('requestfailed', (r) => {
     errors.push(`requestfailed: ${r.url()} ${r.failure()?.errorText ?? ''}`)
   })
-  await page.addInitScript(seededRandom)
+  await page.addInitScript(live ? liveFrameProbe : seededRandom)
   await page.goto(url, { waitUntil: 'load' })
   await page.waitForFunction('window.__READY__ === true', null, { timeout: 30000 })
   await page.evaluate((shots) => { window.__SHOTS__ = shots }, { ...SHOTS, ...VOID_SHOTS })
   return { context, page, errors }
+}
+
+function distribution(values) {
+  const sorted = values.slice().sort((a, b) => a - b)
+  const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]
+  const r = (v) => +v.toFixed(3)
+  return {
+    mean: r(sorted.reduce((sum, value) => sum + value, 0) / sorted.length),
+    p50: r(at(0.5)),
+    p95: r(at(0.95)),
+    p99: r(at(0.99)),
+    max: r(sorted[sorted.length - 1]),
+  }
+}
+
+async function captureLiveFrame(browser, width, height, frames) {
+  const { context, page, errors } = await openFromDist(
+    browser, 'http://skyline.test/', width, height, true)
+  try {
+    await hideChrome(page, { hud: false })
+    await page.evaluate(() => {
+      const g = window.__game
+      g.respawn()
+      g.hold('fwd')
+      g.hold('sprint')
+      window.__SC_LIVE_FRAME_AUDIT__.length = 0
+    })
+    await page.waitForFunction(
+      (count) => window.__SC_LIVE_FRAME_AUDIT__.length >= count,
+      frames,
+      { timeout: Math.max(30000, frames * 50) }
+    )
+    const samples = await page.evaluate(
+      (count) => window.__SC_LIVE_FRAME_AUDIT__.slice(-count),
+      frames
+    )
+    const heap = samples.map((sample) => sample.heapBytes).filter(Number.isFinite)
+    const completed = distribution(samples.map((sample) => sample.completedMs))
+    return {
+      width,
+      height,
+      frames,
+      gl: await glRenderer(page),
+      interval: distribution(samples.map((sample) => sample.intervalMs)),
+      completed,
+      headroom240P95: +(1000 / 240 - completed.p95).toFixed(3),
+      heapRangeBytes: heap.length ? Math.max(...heap) - Math.min(...heap) : null,
+      errors,
+    }
+  } finally {
+    await context.close()
+  }
+}
+
+function reportLive(rows) {
+  console.log('\nlive rAF audit — running forward+sprint; completed time includes an audit-only GPU sync')
+  console.log('| native size | rAF interval p50/p95/p99 | completed p50/p95/p99/max | 240 Hz headroom at p95 | JS heap range |')
+  console.log('| --- | --- | --- | ---: | ---: |')
+  for (const row of rows) {
+    console.log(`| ${row.width}x${row.height} | ${row.interval.p50}/${row.interval.p95}/${row.interval.p99} | ${row.completed.p50}/${row.completed.p95}/${row.completed.p99}/${row.completed.max} | ${row.headroom240P95} ms | ${row.heapRangeBytes ?? 'unavailable'} |`)
+    for (const error of row.errors) console.log(`  ${row.width}x${row.height}: ${error}`)
+  }
+  console.log('')
+}
+
+async function runLiveAudit(cli) {
+  const frames = num(cli.frames, 300)
+  const sizes = cli.width || cli.height
+    ? [[num(cli.width, 1920), num(cli.height, 1080)]]
+    : [[1920, 1080], [2560, 1440]]
+  const browser = cli.headed
+    ? await chromium.launch({ headless: false, args: GPU_ARGS })
+    : await launchBrowser()
+  const rows = []
+  try {
+    for (const [width, height] of sizes) {
+      rows.push(await captureLiveFrame(browser, width, height, frames))
+    }
+  } finally {
+    await browser.close()
+  }
+  if (cli.json) console.log(JSON.stringify({ live: true, rows }, null, 2))
+  else reportLive(rows)
+  if (rows.some((row) => row.errors.length)) process.exitCode = 1
 }
 
 function visual(image) {
@@ -211,6 +334,10 @@ async function main() {
     process.exit(2)
   }
   if (!cli['no-build']) buildDist()
+  if (cli.live) {
+    await runLiveAudit(cli)
+    return
+  }
 
   const browser = await launchBrowser()
   let baseline
