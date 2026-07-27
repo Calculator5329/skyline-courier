@@ -89,14 +89,14 @@ export const QUALITY_LEVELS = {
    */
   balanced: {
     label: 'Balanced',
-    note: 'Slightly softer on a HiDPI display; contact shadows unchanged in reach, resolved at half rate.',
+    note: 'Softer contact detail and fewer AO samples, while retaining grounded forms.',
     pixelRatioCap: 1.5,
     renderScale: 1,
     contactShadows: true,
-    contactScale: 0.5,
-    contactSteps: 14,
-    aoTaps: 8,
-    aoNearTaps: 5,
+    contactScale: 0.375,
+    contactSteps: 10,
+    aoTaps: 6,
+    aoNearTaps: 4,
   },
 
   /**
@@ -126,14 +126,16 @@ export const QUALITY_LEVELS = {
    */
   lite: {
     label: 'Lite',
-    note: 'Native resolution, no supersample. Contact shadows and AO are softer and lose their finest creases at distance.',
+    note: 'Native resolution with the contact-shadow/AO pass disabled.',
     pixelRatioCap: 1,
     renderScale: 1,
-    contactShadows: true,
-    contactScale: 0.5,
-    contactSteps: 14,
-    aoTaps: 8,
-    aoNearTaps: 5,
+    contactShadows: false,
+    // These are the values used if a diagnostic explicitly re-enables the
+    // pass while Lite remains selected. Production skips the pass entirely.
+    contactScale: 0.25,
+    contactSteps: 8,
+    aoTaps: 4,
+    aoNearTaps: 2,
   },
 }
 
