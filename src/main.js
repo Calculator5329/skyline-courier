@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { CollisionWorld } from './collision.js'
 import { Player, TUNING, MODES, DEFAULT_MODE, setMode, getMode } from './player.js'
-import { CameraRig } from './camera.js'
+import { CameraRig, DEFAULT_MOUSE_SENSITIVITY } from './camera.js'
 import { buildCourse } from './level.js'
 import { buildVoidCourse } from './levels/void.js'
 import { buildWorld } from './world.js'
@@ -57,6 +57,11 @@ const SIG_KEY = 'skyline-courier:sigs'
 
 const MUSIC_KEY = 'skyline-courier:music'
 const MUSIC_DEFAULT = 38          // matches Music's own starting volume
+const SENSITIVITY_KEY = 'skyline-courier:mouse-sensitivity'
+const SENSITIVITY_MIN = 0.0006
+const SENSITIVITY_MAX = 0.0036
+const MOVEMENT_KEY = 'skyline-courier:movement-scheme'
+const MOVEMENT_SCHEMES = ['wasd', 'arrows', 'both']
 
 function loadMusicVol() {
   try {
@@ -67,6 +72,24 @@ function loadMusicVol() {
 
 let musicVol = loadMusicVol()
 
+function loadSensitivity() {
+  try {
+    const v = parseFloat(localStorage.getItem(SENSITIVITY_KEY))
+    return Number.isFinite(v)
+      ? Math.min(SENSITIVITY_MAX, Math.max(SENSITIVITY_MIN, v))
+      : DEFAULT_MOUSE_SENSITIVITY
+  } catch { return DEFAULT_MOUSE_SENSITIVITY }
+}
+
+function loadMovementScheme() {
+  try {
+    const v = localStorage.getItem(MOVEMENT_KEY)
+    return MOVEMENT_SCHEMES.includes(v) ? v : 'both'
+  } catch { return 'both' }
+}
+
+let mouseSensitivity = loadSensitivity()
+let movementScheme = loadMovementScheme()
 
 function loadMode() {
   try {
@@ -157,6 +180,7 @@ try {
 const player = new Player(collision, level.spawn)
 player.anchors = level.anchors
 const rig = new CameraRig(camera)
+rig.sensitivity = mouseSensitivity
 const audio = new Audio()
 const hud = new Hud()
 // Wayfinding needs the camera (for bearing) and the level (for the next
@@ -228,13 +252,21 @@ const keys = new Set()
 
 // ------------------------------------------------------------------ input
 
+const WASD_MAP = {
+  KeyW: 'fwd', KeyS: 'back', KeyA: 'left', KeyD: 'right',
+}
+const ARROW_MAP = {
+  ArrowUp: 'fwd', ArrowDown: 'back', ArrowLeft: 'left', ArrowRight: 'right',
+}
 const KEY_MAP = {
-  KeyW: 'fwd', ArrowUp: 'fwd',
-  KeyS: 'back', ArrowDown: 'back',
-  KeyA: 'left', ArrowLeft: 'left',
-  KeyD: 'right', ArrowRight: 'right',
   ShiftLeft: 'sprint', ShiftRight: 'sprint',
   ControlLeft: 'slide', ControlRight: 'slide', KeyC: 'slide',
+}
+
+function mappedKey(code) {
+  if (movementScheme !== 'arrows' && WASD_MAP[code]) return WASD_MAP[code]
+  if (movementScheme !== 'wasd' && ARROW_MAP[code]) return ARROW_MAP[code]
+  return KEY_MAP[code]
 }
 
 window.addEventListener('keydown', (e) => {
@@ -287,7 +319,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault()
     return
   }
-  const k = KEY_MAP[e.code]
+  const k = mappedKey(e.code)
   if (k) { keys.add(k); e.preventDefault() }
 })
 
@@ -327,7 +359,7 @@ function setPhotoMode(on) {
 window.addEventListener('keyup', (e) => {
   if (e.code === 'Space') { input.jumpHeld = false; return }
   if (e.code === 'KeyF') { input.grappleHeld = false; return }
-  const k = KEY_MAP[e.code]
+  const k = mappedKey(e.code)
   if (k) keys.delete(k)
 })
 
@@ -1050,6 +1082,34 @@ if (musicSlider) {
 }
 applyMusicVol(musicVol, false)
 
+// ------------------------------------------------------------- mouse input
+//
+// Stored in the same local browser settings plane as music. The rig reads its
+// sensitivity on every locked mousemove, so an `input` event changes the very
+// next look delta rather than waiting for a reload or a new run.
+const sensitivitySlider = document.getElementById('set-sensitivity')
+const sensitivityVal = document.getElementById('set-sensitivity-val')
+
+function applySensitivity(v, persist) {
+  mouseSensitivity = Math.min(SENSITIVITY_MAX, Math.max(SENSITIVITY_MIN, v))
+  rig.sensitivity = mouseSensitivity
+  if (sensitivityVal) sensitivityVal.textContent = mouseSensitivity.toFixed(4)
+  sensitivitySlider?.style.setProperty(
+    '--v',
+    `${(mouseSensitivity - SENSITIVITY_MIN) / (SENSITIVITY_MAX - SENSITIVITY_MIN)}`,
+  )
+  if (persist) {
+    try { localStorage.setItem(SENSITIVITY_KEY, mouseSensitivity.toFixed(4)) } catch { /* private mode */ }
+  }
+}
+
+if (sensitivitySlider) {
+  sensitivitySlider.value = `${mouseSensitivity}`
+  sensitivitySlider.addEventListener('input', () => applySensitivity(+sensitivitySlider.value, false))
+  sensitivitySlider.addEventListener('change', () => applySensitivity(+sensitivitySlider.value, true))
+}
+applySensitivity(mouseSensitivity, false)
+
 /**
  * Take the screen for the run.
  *
@@ -1101,6 +1161,33 @@ segControl('set-look', LOOK_NAMES, () => readLook(), (n) => {
   location.reload()
 }, (n) => (n === 'no-foliage' ? 'no foliage' : n))
 
+// Directional bindings are the only part of the control vocabulary this
+// setting changes. Clearing held actions on a switch prevents a key accepted
+// under the previous scheme from remaining stuck after it becomes disabled.
+const movementKeys = document.getElementById('movement-keys')
+
+function setMovementScheme(name) {
+  movementScheme = MOVEMENT_SCHEMES.includes(name) ? name : 'both'
+  keys.clear()
+  input.forward = 0
+  input.right = 0
+  if (movementKeys) {
+    movementKeys.textContent = movementScheme === 'wasd'
+      ? 'WASD'
+      : movementScheme === 'arrows' ? 'ARROW KEYS' : 'WASD / ARROW KEYS'
+  }
+  try { localStorage.setItem(MOVEMENT_KEY, movementScheme) } catch { /* private mode */ }
+}
+
+segControl(
+  'set-movement',
+  MOVEMENT_SCHEMES,
+  () => movementScheme,
+  setMovementScheme,
+  (n) => (n === 'wasd' ? 'WASD' : n === 'arrows' ? 'Arrows' : 'Both'),
+)
+setMovementScheme(movementScheme)
+
 // ------------------------------------------------------- the CTRL+W problem
 //
 // Ethan: "ctrl W just closed the tab for me we should fix". CTRL+W cannot be
@@ -1137,6 +1224,14 @@ window.__game = {
   // design, so "no console error" is not evidence there either.
   audio,
   tick, TUNING, MODES, getMode, setMode: applyMode,
+  getSensitivity: () => rig.sensitivity,
+  setSensitivity(v) {
+    applySensitivity(+v, true)
+    if (sensitivitySlider) sensitivitySlider.value = `${mouseSensitivity}`
+    return rig.sensitivity
+  },
+  getMovementScheme: () => movementScheme,
+  setMovementScheme,
   /**
    * Graphics quality. `__game.setQuality('lite' | 'balanced' | 'high')`.
    *

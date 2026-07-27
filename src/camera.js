@@ -97,12 +97,14 @@ const CONTACT_HZ_CLIMB = 74
 const CONTACT_HZ_RUN = 39
 const CONTACT_RUN_AMP = 0.34
 
+export const DEFAULT_MOUSE_SENSITIVITY = 0.0021
+
 export class CameraRig {
   constructor(camera) {
     this.camera = camera
     this.yaw = 0
     this.pitch = 0
-    this.sensitivity = 0.0021
+    this.sensitivity = DEFAULT_MOUSE_SENSITIVITY
 
     this.roll = 0
     this.rollVel = 0
