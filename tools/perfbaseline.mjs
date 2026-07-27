@@ -10,10 +10,12 @@
  *   node tools/perfbaseline.mjs [--no-build] [--json]
  *     [--theme skyline|void|all] [--frames 90] [--sync-frames 40]
  *
- * With a stored REFERENCE below, the command exits non-zero if luminance or any
- * p1/p50/p99 value moves by more than VISUAL_TOLERANCE. Frame time is evidence,
- * not a gate: noisy machines may make a correct optimization look slower, while
- * a visual mismatch is always a failed optimization.
+ * The baseline is executable, not a stale screenshot: the contact shader keeps
+ * its old normal-buffer coverage lookup behind a compile-time define, and this
+ * command captures that arm for every shot before it captures the shipped arm.
+ * It exits non-zero if luminance or any p1/p50/p99 value moves beyond tolerance.
+ * Frame time is evidence, not a gate: noisy machines may make a correct
+ * optimization look slower, while a visual mismatch is always a failure.
  */
 
 import { readFile } from 'node:fs/promises'
@@ -35,15 +37,11 @@ const MIME = {
   '.ogg': 'audio/ogg',
 }
 
-// The analyzer reports one decimal place. Two independently loaded, seeded
-// baseline runs were byte/metric identical, so 0.1 is the measured noise floor
-// (one reporting quantum), and 0.2 allows one quantum of rounding on each side.
+// The analyzer reports one decimal place. Both arms boot with the same seeded
+// procedural world and pump the same frame count, so the only remaining
+// measurement floor is one reporting quantum. 0.2 allows one quantum of
+// rounding on each side without accepting a visible percentile movement.
 const VISUAL_TOLERANCE = 0.2
-
-// Filled from the untouched tree before the optimization. Keep only the values
-// that define "same rendered image"; draw/triangle/frame values are printed as
-// the performance reference but are not used to excuse a visual mismatch.
-const REFERENCE = {}
 
 function seededRandom() {
   let s = 0x5c0117
@@ -108,9 +106,7 @@ function visual(image) {
   }
 }
 
-function compare(theme, shot, got) {
-  const ref = REFERENCE[theme]?.[shot]
-  if (!ref) return { pass: true, deltas: null }
+function compare(ref, got) {
   const deltas = {}
   let pass = true
   for (const key of ['lum', 'p1', 'p50', 'p99']) {
@@ -120,7 +116,7 @@ function compare(theme, shot, got) {
   return { pass, deltas }
 }
 
-async function captureTheme(browser, theme, args) {
+async function captureTheme(browser, theme, args, optimized) {
   const isVoid = theme === 'void'
   const table = isVoid ? VOID_SHOTS : SHOTS
   const names = isVoid ? VOID_SHOT_NAMES : SHOT_NAMES
@@ -130,6 +126,13 @@ async function captureTheme(browser, theme, args) {
   const rows = []
   try {
     await hideChrome(page, { hud: false })
+    await page.evaluate((enabled) => {
+      const contact = window.__game.pipeline.contact
+      if (!contact || typeof contact.setDepthCoverageOptimization !== 'function') {
+        throw new Error('contact baseline switch is unavailable')
+      }
+      contact.setDepthCoverageOptimization(enabled)
+    }, optimized)
     for (const shot of names) {
       const before = errors.length
       const render = await pumpShot(page, shot, {
@@ -139,7 +142,6 @@ async function captureTheme(browser, theme, args) {
       })
       const image = analyzeBuffer(await page.screenshot({ type: 'png' }))
       const measured = visual(image)
-      const check = compare(theme, shot, measured)
       const shotErrors = errors.slice(before)
       rows.push({
         shot,
@@ -149,8 +151,7 @@ async function captureTheme(browser, theme, args) {
         draws: render.drawCalls,
         tris: render.triangles,
         frameMs: render.frameMs,
-        pass: check.pass && !image.uniform && shotErrors.length === 0,
-        deltas: check.deltas,
+        pass: !image.uniform && shotErrors.length === 0,
         errors: shotErrors,
       })
     }
@@ -160,6 +161,24 @@ async function captureTheme(browser, theme, args) {
   }
 }
 
+function pairResults(baseline, optimized) {
+  return baseline.map((before) => {
+    const after = optimized.find((candidate) => candidate.theme === before.theme)
+    const rows = before.rows.map((a) => {
+      const b = after.rows.find((candidate) => candidate.shot === a.shot)
+      const check = compare(a.visual, b.visual)
+      return {
+        shot: a.shot,
+        before: a,
+        after: b,
+        deltas: check.deltas,
+        pass: a.pass && b.pass && check.pass,
+      }
+    })
+    return { theme: before.theme, gl: after.gl, rows }
+  })
+}
+
 function report(results) {
   console.log(`\nvisual tolerance: ±${VISUAL_TOLERANCE} luma units per lum/p1/p50/p99`)
   for (const result of results) {
@@ -167,9 +186,10 @@ function report(results) {
     console.log('| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | ms/f | visual |')
     console.log('| --- | ---: | --- | --- | ---: | ---: | ---: | --- |')
     for (const r of result.rows) {
-      const v = r.visual
-      console.log(`| ${r.shot} | ${v.lum} | ${v.p1}/${v.p50}/${v.p99} | ${r.clip}% | ${r.draws} | ${r.tris} | ${r.frameMs} | ${r.pass ? 'PASS' : 'FAIL'} |`)
-      for (const error of r.errors) console.log(`  ${r.shot}: ${error}`)
+      const a = r.before
+      const b = r.after
+      console.log(`| ${r.shot} | ${a.visual.lum} -> ${b.visual.lum} | ${a.visual.p1}/${a.visual.p50}/${a.visual.p99} -> ${b.visual.p1}/${b.visual.p50}/${b.visual.p99} | ${a.clip}% -> ${b.clip}% | ${a.draws} -> ${b.draws} | ${a.tris} -> ${b.tris} | ${a.frameMs} -> ${b.frameMs} | ${r.pass ? 'PASS' : 'FAIL'} |`)
+      for (const error of [...a.errors, ...b.errors]) console.log(`  ${r.shot}: ${error}`)
     }
   }
   console.log('')
@@ -191,15 +211,25 @@ async function main() {
   if (!cli['no-build']) buildDist()
 
   const browser = await launchBrowser()
-  let results
+  let baseline
+  let optimized
   try {
     const themes = wanted === 'all' ? ['skyline', 'void'] : [wanted]
-    results = []
-    for (const theme of themes) results.push(await captureTheme(browser, theme, args))
+    // The full current-tree baseline is deliberately completed before any
+    // optimized arm is measured.
+    baseline = []
+    for (const theme of themes) {
+      baseline.push(await captureTheme(browser, theme, args, false))
+    }
+    optimized = []
+    for (const theme of themes) {
+      optimized.push(await captureTheme(browser, theme, args, true))
+    }
   } finally {
     await browser.close()
   }
 
+  const results = pairResults(baseline, optimized)
   if (cli.json) console.log(JSON.stringify({ tolerance: VISUAL_TOLERANCE, results }, null, 2))
   else report(results)
   if (results.some((r) => r.rows.some((s) => !s.pass))) process.exitCode = 1
