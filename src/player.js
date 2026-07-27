@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { getTheme } from './theme.js'
 
 /**
  * First-person momentum controller.
@@ -551,6 +552,22 @@ export class Player {
     this.airChainLeft = TUNING.grappleAirChain
     /** Populated by the level: brass anchor points the cuff can latch onto. */
     this.anchors = []
+    /**
+     * Per-theme multiplier on the cuff's reach, read ONCE at construction from
+     * the active theme's `grapple` overlay (src/theme.js). 1 for skyline, 1.5
+     * for the void — Ethan asked for a 50% longer reach there. Read once, not
+     * per frame: the theme is chosen at boot and never swaps mid-run (see
+     * `selectTheme`), so `_findAnchor` can multiply by a stored scalar rather
+     * than reaching into the theme every tick. It is a scale on top of
+     * `TUNING.grappleRange`, so the base tuning table stays the single source of
+     * truth and this cannot leak across a difficulty-mode switch.
+     */
+    this.grappleRangeScale = (() => {
+      try {
+        const t = getTheme()
+        return (t && t.grapple && t.grapple.rangeScale) || 1
+      } catch { return 1 }
+    })()
     /** The anchor currently in range and on-axis, or null. Read by the HUD. */
     this.aimedAnchor = null
     this.airJumpsLeft = TUNING.airJumps
@@ -1075,7 +1092,10 @@ export class Player {
       const a = this.anchors[i]
       this._toAnchor.subVectors(a, this.position)
       const dist = this._toAnchor.length()
-      if (dist < T.grappleMinRange || dist > T.grappleRange) continue
+      // `grappleRangeScale` is the theme overlay (1 skyline, 1.5 void). Only the
+      // MAX reach scales — `grappleMinRange` is the arrival dead-zone, not a
+      // reach, so it stays put.
+      if (dist < T.grappleMinRange || dist > T.grappleRange * this.grappleRangeScale) continue
       this._toAnchor.divideScalar(dist)
 
       const aim = this._toAnchor.x * this._look.x +

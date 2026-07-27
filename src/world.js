@@ -3,7 +3,12 @@ import { PALETTE } from './materials.js'
 import { SKY, SKY_GRADIENT_GLSL } from './render/skygrad.js'
 import { getTheme, themeSunDir } from './theme.js'
 import { voidBeamSites } from './fx/voidfx.js'
-import { VoidBackdrop } from './fx/voidbackdrop.js'
+// The clearance assertion is reused verbatim from the old impostor layer — it
+// already carries the void's play-volume extents and the fail-closed 140 m
+// check, and duplicating them is how the two would drift apart. `VoidBackdrop`
+// (the scattered-prism class) is intentionally NOT imported any more: it is
+// replaced below by `VoidCityBackdrop`, built in this file. See that class.
+import { assertClear } from './fx/voidbackdrop.js'
 
 /**
  * Sky, light, and atmosphere.
@@ -319,6 +324,356 @@ const SKY_FRAG = /* glsl */`
   }
 `
 
+/* ==========================================================================
+ * THE FAR CITY — connected ruined buildings, not scattered slabs.
+ * ==========================================================================
+ *
+ * Ethan, 2026-07-27, playing the Underworld:
+ *
+ *   "for the far-off structures... make them even more low-poly, but increase
+ *    the graphics and increase the size, and also make them look more like
+ *    actual buildings instead of random geometry or, like, random slabs. There
+ *    could be random slabs for, like, stairs or something... Things should be
+ *    more connected and not just, like, random objects pasted in the background."
+ *
+ * The predecessor of this layer (`src/fx/voidbackdrop.js`) built the distance
+ * from ONE archetype — a tapered n-gon prism with a broken point — scattered in
+ * clusters. Its own author's verdict, quoting Ethan, is in that file: "the
+ * random shapes in the background is very weak", "the shapes are eh", "all
+ * these shapes really take you out of it". No count of prisms becomes a
+ * cathedral, so that layer was deleted and the painted dome took the far read.
+ *
+ * This is the answer to the OTHER half of his note: bring back real geometry,
+ * but as ARCHITECTURE. The failure being fixed is that the background read as a
+ * scatter of unrelated objects; the fix is that every mass here is a CONNECTED
+ * building complex — parts that share a footprint, stack, and touch:
+ *
+ *   FEWER, BIGGER, SIMPLER, CONNECTED.
+ *
+ *   - A shared base skirt every tower rises from, so a complex has one footing.
+ *   - A main tower with setback tiers and a flat roof cap — a silhouette that is
+ *     unmistakably a building, not a rock: vertical, stacked, flat-topped.
+ *   - An adjacent shorter tower whose footprint TOUCHES the main one, with a
+ *     SPAN bridging the two partway up — the "bridge between two towers".
+ *   - Stepped buttresses leaning off the base, and a short flight of stair
+ *     slabs (the one place Ethan blesses a slab).
+ *
+ * DELIBERATELY LOW POLY. He asked for MORE low-poly, and the read at 500-700 m
+ * is the silhouette, never the triangle count — so every part is an axis-boxed
+ * mass. The whole layer is a couple of thousand triangles (the prism field was
+ * ~22k plus a 16 MB atlas bake) and there is NO bake at all: pure geometry,
+ * merged into one draw. If a future edit makes this cost MORE than the prisms
+ * did, the premise — fewer, simpler — has been lost.
+ *
+ * SAME CONTRACT AS EVERY BACKDROP. No collider, never reachable, and
+ * `assertClear()` (imported from the old layer) PROVES the closest mass clears
+ * the play volume by the same 140 m the prisms had to. It fades into the SAME
+ * `scVoidGradient` the dome and the aerial perspective terminate on, so it can
+ * never disagree with the background. It sits in front of the dome (which keeps
+ * the true-infinity read) and parallaxes; the dome does not.
+ *
+ * The reference for the read is `docs/reference/theme2-void.png`.
+ */
+const CITY_VERT = /* glsl */`
+  attribute float aTone;
+  varying vec3 vNormalW;
+  varying float vDist;
+  varying vec3 vDirW;
+  varying float vTone;
+  varying float vWorldY;
+  void main() {
+    // Positions and normals are baked in WORLD space (see the merge loop), so
+    // the model matrix is identity and this is fixed scenery — it does not
+    // follow the player, which is what lets it parallax against the course.
+    vec3 world = position;
+    vNormalW = normalize(normal);
+    vec3 toCam = cameraPosition - world;
+    vDist = length(toCam);
+    vDirW = -toCam / max(vDist, 1e-4);
+    vTone = aTone;
+    vWorldY = world.y;
+    gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
+  }
+`
+
+const CITY_FRAG = /* glsl */`
+  ${SKY_GRADIENT_GLSL}
+
+  uniform vec3 uZenith;      // theme.sky.zenith
+  uniform vec3 uHaze;        // theme.sky.horizon — what everything fades into
+  uniform vec3 uSkyTint;     // theme.light.hemiSky
+  uniform vec3 uGroundTint;  // theme.light.hemiGround
+  uniform vec3 uRimTint;     // theme.light.fillColor
+  uniform vec3 uRimDir;
+  // x: extinction per metre, y: transmittance floor, z: inscatter gain,
+  // w: body brightness. Mirrors the tuned values the deleted layer shipped.
+  uniform vec4 uHazeParams;
+  uniform float uFloorH;     // storey height, in metres, for the tier banding
+
+  varying vec3 vNormalW;
+  varying float vDist;
+  varying vec3 vDirW;
+  varying float vTone;
+  varying float vWorldY;
+
+  void main() {
+    vec3 N = normalize(vNormalW);
+
+    // The mass, unlit but for the hemispheric split — tops catch the violet
+    // dome, undersides fall to the deep blue below. A full lighting solve would
+    // be thrown away by the extinction below at this range, exactly as the old
+    // layer argued.
+    float up = N.y * 0.5 + 0.5;
+    vec3 body = mix(uGroundTint, uSkyTint, up * up) * uHazeParams.w;
+
+    // Cold rim from the fill direction, so one mass's edge reads off another's.
+    body += uRimTint * pow(max(dot(N, normalize(uRimDir)), 0.0), 5.0) * 0.015;
+
+    // Per-COMPLEX value wobble (aTone is constant across a complex), so masses
+    // read as many buildings at many distances rather than one notched cutout.
+    body *= 0.72 + 0.56 * vTone;
+
+    // FAINT STOREY BANDING — the cheapest way to say "building" rather than
+    // "rock" without a single extra triangle. A slow cosine in world Y reads as
+    // stacked floors; gated to near-vertical faces (1 - |N.y|) so roofs and the
+    // ground stay clean, and kept to 10% so it is texture, never stripes.
+    float vface = 1.0 - abs(N.y);
+    float band = 0.5 + 0.5 * cos(vWorldY * (6.2831853 / max(uFloorH, 1.0)));
+    body *= 1.0 - 0.10 * band * vface;
+
+    // Inscatter is scVoidGradient, the SAME function the dome and the aerial
+    // perspective evaluate, so distance can never fade into a violet the sky
+    // does not reach. Gain is at or below 1 so a mass can never render brighter
+    // than the void behind it.
+    vec3 inscatter = scVoidGradient(vDirW, uZenith, uHaze) * uHazeParams.z;
+
+    // Plain distance extinction (not the scene's height-integrated aerial
+    // perspective, which is built for the 250 m course and would evaporate the
+    // city the moment the player climbs). A shell at a fixed range fades by
+    // distance alone.
+    float T = max(exp(-vDist * uHazeParams.x), uHazeParams.y);
+
+    gl_FragColor = vec4(body * T + inscatter * (1.0 - T), 1.0);
+  }
+`
+
+/** Deterministic per-complex RNG — the shot harness must reproduce frames. */
+function cityRng(seed) {
+  let s = seed >>> 0
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0
+    return s / 4294967296
+  }
+}
+
+/**
+ * The far city: connected building complexes, merged into one draw call.
+ *
+ * Matches the object shape `world.update`/`__game.backdrop` expect: `instances`,
+ * `triangles`, `clearance`, and `update(time)`.
+ */
+export class VoidCityBackdrop {
+  // eslint-disable-next-line no-unused-vars
+  constructor(scene, theme, renderer = null) {
+    const sky = theme.sky || {}
+    const L = theme.light
+    const rim = new THREE.Vector3(...theme.sunDir).normalize().negate()
+
+    // One unit cube, expanded to per-face normals, is the only primitive. Every
+    // building part is this box transformed — translate, non-uniform scale, yaw.
+    const unit = new THREE.BoxGeometry(1, 1, 1).toNonIndexed()
+    const uPos = unit.attributes.position.array   // 108 floats = 36 verts
+    const uNrm = unit.attributes.normal.array
+
+    const positions = []
+    const normals = []
+    const tones = []
+    // Clearance items, in `clearanceOf`'s convention: `y` is the BASE and the
+    // box rises `h` above it. A centred box [cy-hy, cy+hy] is passed as base
+    // cy-hy with full height 2*hy, which that helper reads exactly right (and
+    // its extra downward slack only makes the check more conservative).
+    const items = []
+    let boxCount = 0
+
+    const m4 = new THREE.Matrix4()
+    const nm3 = new THREE.Matrix3()
+    const q = new THREE.Quaternion()
+    const eul = new THREE.Euler()
+    const scl = new THREE.Vector3()
+    const pos = new THREE.Vector3()
+    const tmp = new THREE.Vector3()
+
+    const pushBox = (cx, cy, cz, w, h, d, yaw, tone) => {
+      eul.set(0, yaw, 0)
+      q.setFromEuler(eul)
+      m4.compose(pos.set(cx, cy, cz), q, scl.set(w, h, d))
+      nm3.getNormalMatrix(m4)
+      for (let i = 0; i < uPos.length; i += 3) {
+        tmp.set(uPos[i], uPos[i + 1], uPos[i + 2]).applyMatrix4(m4)
+        positions.push(tmp.x, tmp.y, tmp.z)
+        tmp.set(uNrm[i], uNrm[i + 1], uNrm[i + 2]).applyMatrix3(nm3).normalize()
+        normals.push(tmp.x, tmp.y, tmp.z)
+        tones.push(tone)
+      }
+      items.push({ x: cx, y: cy - h / 2, z: cz, w, d, h, drift: 0 })
+      boxCount++
+    }
+
+    // ONE CONNECTED COMPLEX. Every part is placed in the complex's own frame
+    // (localX / localZ, derived from the shared yaw) so the towers TOUCH, the
+    // span bridges them, and the merged silhouette reads as a single building.
+    const buildComplex = (ox, baseY, oz, S, yaw, rand, tone) => {
+      const lq = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0))
+      const localX = new THREE.Vector3(1, 0, 0).applyQuaternion(lq)
+      const localZ = new THREE.Vector3(0, 0, 1).applyQuaternion(lq)
+
+      // The shared footing — one skirt the whole complex stands on.
+      const skirtW = 34 * S, skirtD = 26 * S, skirtH = 12 * S
+      pushBox(ox, baseY + skirtH / 2, oz, skirtW, skirtH, skirtD, yaw, tone)
+
+      // The main tower.
+      const mainW = 18 * S, mainD = 15 * S
+      const mainH = (90 + rand() * 80) * S
+      pushBox(ox, baseY + skirtH + mainH / 2, oz, mainW, mainH, mainD, yaw, tone)
+
+      // Setback tiers stacked on it — the skyscraper/ziggurat step that is the
+      // clearest "this is a building" cue a silhouette has.
+      let ty = baseY + skirtH + mainH
+      let tw = mainW * 0.7, td = mainD * 0.7
+      const tiers = 1 + ((rand() * 2) | 0)
+      for (let k = 0; k < tiers; k++) {
+        const th = (22 + rand() * 24) * S
+        pushBox(ox, ty + th / 2, oz, tw, th, td, yaw, tone)
+        ty += th; tw *= 0.68; td *= 0.68
+      }
+      // A flat roof cap, slightly proud of the top tier.
+      pushBox(ox, ty + 3 * S, oz, tw * 1.25, 6 * S, td * 1.25, yaw, tone)
+
+      // An adjacent, shorter tower whose footprint TOUCHES the main one.
+      const off = (mainW * 0.5 + 9 * S) * 0.95
+      const ax = ox + localX.x * off, az = oz + localX.z * off
+      const adjH = mainH * (0.5 + rand() * 0.25)
+      pushBox(ax, baseY + skirtH + adjH / 2, az, 12 * S, adjH, 12 * S, yaw, tone)
+
+      // The SPAN — a bridge between the two towers, partway up.
+      pushBox((ox + ax) / 2, baseY + skirtH + Math.min(mainH, adjH) * 0.6,
+        (oz + az) / 2, off * 1.15, 4 * S, 5 * S, yaw, tone)
+
+      // Stepped buttresses leaning off the base on the far side of the main
+      // tower — descending boxes read as a flying buttress.
+      for (let k = 0; k < 2; k++) {
+        const bx = ox - localX.x * (mainW * 0.5 + (3 + k * 4) * S)
+        const bz = oz - localX.z * (mainW * 0.5 + (3 + k * 4) * S)
+        const bh = skirtH + (30 - k * 12) * S
+        pushBox(bx, baseY + bh / 2, bz, 6 * S, bh, 8 * S, yaw, tone)
+      }
+
+      // A short flight of stair slabs stepping out along localZ — the one place
+      // Ethan blesses a slab, "for, like, stairs or something".
+      for (let k = 0; k < 3; k++) {
+        const reach = skirtD * 0.5 + (3 + k * 3.5) * S
+        pushBox(ox + localZ.x * reach, baseY + (4 + k * 4) * S, oz + localZ.z * reach,
+          12 * S, 3 * S, 6 * S, yaw, tone)
+      }
+    }
+
+    // FEWER, BIGGER. Fifteen complexes in two depth rings — a near ring that
+    // resolves its setbacks, and a far ring scaled up so its biggest masses
+    // break the horizon line and read as a colossal ruined city receding into
+    // the haze. Placement is deterministic and roughly even around the ring
+    // with jitter, so there are gaps to see between — the gaps are the depth.
+    const COUNT = 15
+    for (let i = 0; i < COUNT; i++) {
+      const rand = cityRng((0x0C17 + i * 0x9E37) >>> 0)
+      const far = (i % 3) === 0
+      const az = (i / COUNT) * Math.PI * 2 + (rand() - 0.5) * 0.28
+      const radius = (far ? 720 : 520) + (rand() - 0.5) * 120
+      const S = (far ? 1.5 : 1.0) * (0.85 + rand() * 0.6)
+      const ox = Math.cos(az) * radius, oz = Math.sin(az) * radius
+      // Verticality spread wide so masses break the horizon at many climb
+      // heights rather than all sitting in one band.
+      const baseY = -40 + (rand() - 0.5) * 160 + (far ? 60 : 0)
+      // Turn the broad face roughly toward the shaft so the building reads
+      // front-on, with a little variety.
+      const yaw = az + Math.PI / 2 + (rand() - 0.5) * 0.6
+      buildComplex(ox, baseY, oz, S, yaw, rand, i / COUNT)
+    }
+    unit.dispose()
+
+    // Fail closed — the same 140 m the prisms had to clear, against the same
+    // published play-volume extents. If void.js grows its play volume, this
+    // throws loudly rather than shipping reachable scenery.
+    this.clearance = assertClear(items)
+
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
+    geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), 3))
+    geo.setAttribute('aTone', new THREE.BufferAttribute(new Float32Array(tones), 1))
+    geo.computeBoundingSphere()
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: CITY_VERT,
+      fragmentShader: CITY_FRAG,
+      uniforms: {
+        uTime: { value: 0 },
+        // Declared by the shared sky include; set so a future edit routed
+        // through scSkyGradient cannot silently get the skyline branch.
+        scSkyVoid: { value: 1 },
+        uZenith: { value: new THREE.Color(sky.zenith != null ? sky.zenith : 0x000000) },
+        uHaze: { value: new THREE.Color(sky.horizon != null ? sky.horizon : 0x000000) },
+        uSkyTint: { value: new THREE.Color(L.hemiSky) },
+        uGroundTint: { value: new THREE.Color(L.hemiGround) },
+        uRimTint: { value: new THREE.Color(L.fillColor) },
+        uRimDir: { value: rim },
+        // [extinction/m, transmittance floor, inscatter gain, body brightness].
+        // Lifted from the deleted near band, which was measured against this
+        // theme's own shot set: a mass that reads as a dark silhouette lifting
+        // into the haze, never brighter than the void behind it.
+        uHazeParams: { value: new THREE.Vector4(0.0026, 0.05, 0.90, 0.55) },
+        uFloorH: { value: 9.0 },
+      },
+      transparent: false,
+      depthWrite: true,
+      depthTest: true,
+      side: THREE.FrontSide,
+      fog: false,
+    })
+    // Its own haze is already in the shader; the aerial-perspective patcher must
+    // not apply a second one.
+    material.userData.scNoPatch = true
+    this.material = material
+
+    const mesh = new THREE.Mesh(geo, material)
+    // Read as infinitely far: a contact-shadow ray that hit this would shadow a
+    // third of the frame, and it must never cast or receive.
+    mesh.userData.scNoPrepass = true
+    mesh.castShadow = false
+    mesh.receiveShadow = false
+    // After the sky dome (renderOrder 0, no depth write) so a mass past the
+    // dome's 900 m radius is not clipped by it; before the additive layers.
+    mesh.renderOrder = 1
+    mesh.name = 'void-city-backdrop'
+    scene.add(mesh)
+    this.mesh = mesh
+
+    this.instances = boxCount
+    this.triangles = (positions.length / 3) / 3 | 0
+  }
+
+  // No motion: buildings do not tumble or drift (that was the fragments' job in
+  // the old layer). Kept for interface parity with `world.update`.
+  // eslint-disable-next-line no-unused-vars
+  update(time) {
+    if (this.material.uniforms.uTime) this.material.uniforms.uTime.value = time
+  }
+
+  dispose() {
+    this.mesh.parent?.remove(this.mesh)
+    this.mesh.geometry.dispose()
+    this.material.dispose()
+  }
+}
+
 export function buildWorld(scene, renderer, theme = getTheme()) {
   // Golden hour: the sun sits LOW. This single number does more for the look
   // than any shader in the project — a high sun flattens everything into
@@ -623,11 +978,14 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
   // sense the dome and the aerial perspective are. Building it in the level
   // would put unreachable geometry in the file whose entire job is reachable
   // geometry. Themes that do not ask for it pay nothing.
-  // TWO bands now, not three. The far one used to be baked impostor cards and
-  // is deleted — `public/sky/void-dome.png`, wired into the sky above, carries
-  // the distance instead and carries it as architecture rather than as prisms.
-  // See the block headed "THE FAR BAND IS GONE" in that file.
-  const backdrop = theme.backdrop ? new VoidBackdrop(scene, theme, renderer) : null
+  //
+  // CONNECTED BUILDINGS, NOT SCATTERED PRISMS — `VoidCityBackdrop`, defined
+  // above. Ethan asked for the far structures to read as an actual ruined city,
+  // fewer/bigger/simpler/connected, not a field of random slabs; the old
+  // scattered-prism layer (`src/fx/voidbackdrop.js` `VoidBackdrop`) could never
+  // do that and was already off. This new layer parallaxes in front of the
+  // painted dome, which keeps the true-infinity read. `theme.backdrop` gates it.
+  const backdrop = theme.backdrop ? new VoidCityBackdrop(scene, theme, renderer) : null
 
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
