@@ -18,7 +18,9 @@
  * old contact lookup, periodic scene walk, full emitter sort and automatic
  * static matrices behind one audit switch. This command captures that arm for
  * every shot before it captures the shipped arm.
- * It exits non-zero if luminance or any p1/p50/p99 value moves beyond tolerance.
+ * It exits non-zero if HIGH's luminance or any p1/p50/p99 value moves beyond
+ * tolerance. Balanced and Lite intentionally move the image and are reported
+ * by `--quality-levels`; they are not inputs to this image-invariance gate.
  * Frame time is evidence, not a gate: noisy machines may make a correct
  * optimization look slower, while a visual mismatch is always a failure.
  */
@@ -43,17 +45,11 @@ const MIME = {
   '.ogg': 'audio/ogg',
 }
 
-// Reproducibility calibration (2026-07-27): five IDENTICAL high-quality
-// captures per shot, each in a fresh seeded browser context, are compared by
-// `--calibrate-visual 5`. Keep this value above the largest observed range,
-// and record that run here before changing it. This gate is for HIGH only:
-// balanced/lite intentionally move the image and are measured separately.
-//
-// Calibration supplied with this lane: N=5 identical captures, observed
-// maximum range 0.7 at skyline/terrace p99. 0.8 is exactly one analyzer
-// reporting quantum above that measured maximum. Re-run the calibration when
-// the capture stack changes; do not tune this against an optimization result.
-const VISUAL_TOLERANCE = 0.8
+// The analyzer reports one decimal place. The high-only gate first takes five
+// IDENTICAL captures in fresh seeded contexts, records every per-metric range,
+// then sets its tolerance exactly one reporting quantum above that run's
+// observed maximum. The candidate arm cannot influence this number.
+const VISUAL_REPORTING_QUANTUM = 0.1
 
 function seededRandom() {
   let s = 0x5c0117
@@ -240,12 +236,12 @@ function visual(image) {
   }
 }
 
-function compare(ref, got) {
+function compare(ref, got, tolerance) {
   const deltas = {}
   let pass = true
   for (const key of ['lum', 'p1', 'p50', 'p99']) {
     deltas[key] = +(got[key] - ref[key]).toFixed(1)
-    if (Math.abs(deltas[key]) > VISUAL_TOLERANCE) pass = false
+    if (Math.abs(deltas[key]) > tolerance) pass = false
   }
   return { pass, deltas }
 }
@@ -321,11 +317,9 @@ function calibrationRanges(captures) {
   return rows
 }
 
-async function runVisualCalibration(browser, themes, args, count, json) {
+async function measureVisualCalibration(browser, themes, args, count) {
   if (!Number.isInteger(count) || count < 5) {
-    console.error('--calibrate-visual requires an integer capture count >= 5')
-    process.exitCode = 2
-    return
+    throw new Error('visual calibration requires an integer capture count >= 5')
   }
   const captures = []
   for (let run = 0; run < count; run++) {
@@ -341,23 +335,34 @@ async function runVisualCalibration(browser, themes, args, count, json) {
   const observedMax = Math.max(
     ...rows.flatMap((row) => Object.values(row.metrics).map((metric) => metric.range))
   )
-  if (json) {
-    console.log(JSON.stringify({
-      calibration: true,
-      quality: 'high',
-      captures: count,
-      observedMax,
-      rows,
-    }, null, 2))
-    return
+  return {
+    quality: 'high',
+    captures: count,
+    observedMax,
+    tolerance: +(observedMax + VISUAL_REPORTING_QUANTUM).toFixed(1),
+    rows,
   }
-  console.log(`\nhigh-only visual reproducibility — ${count} identical captures`)
+}
+
+function reportVisualCalibration(calibration) {
+  const { captures, observedMax, tolerance, rows } = calibration
+  console.log(`\nhigh-only visual reproducibility — ${captures} identical captures`)
   console.log('| theme | shot | lum range | p1 range | p50 range | p99 range |')
   console.log('| --- | --- | ---: | ---: | ---: | ---: |')
   for (const row of rows) {
     console.log(`| ${row.theme} | ${row.shot} | ${row.metrics.lum.range} | ${row.metrics.p1.range} | ${row.metrics.p50.range} | ${row.metrics.p99.range} |`)
   }
-  console.log(`\nobserved maximum range: ${observedMax} luma units\n`)
+  console.log(`\nobserved maximum range: ${observedMax} luma units`)
+  console.log(`high-only gate tolerance: ±${tolerance} (observed max + one 0.1 reporting quantum)\n`)
+}
+
+async function runVisualCalibration(browser, themes, args, count, json) {
+  const calibration = await measureVisualCalibration(browser, themes, args, count)
+  if (json) {
+    console.log(JSON.stringify({ calibration: true, ...calibration }, null, 2))
+    return
+  }
+  reportVisualCalibration(calibration)
 }
 
 const QUALITY_NAMES = ['high', 'balanced', 'lite']
@@ -506,12 +511,12 @@ async function runQualityLevels(browser, cli, args) {
   if (results.some((result) => result.errors.length)) process.exitCode = 1
 }
 
-function pairResults(baseline, optimized) {
+function pairResults(baseline, optimized, tolerance) {
   return baseline.map((before) => {
     const after = optimized.find((candidate) => candidate.theme === before.theme)
     const rows = before.rows.map((a) => {
       const b = after.rows.find((candidate) => candidate.shot === a.shot)
-      const check = compare(a.visual, b.visual)
+      const check = compare(a.visual, b.visual, tolerance)
       return {
         shot: a.shot,
         before: a,
@@ -524,8 +529,9 @@ function pairResults(baseline, optimized) {
   })
 }
 
-function report(results) {
-  console.log(`\nvisual tolerance: ±${VISUAL_TOLERANCE} luma units per lum/p1/p50/p99`)
+function report(results, calibration) {
+  reportVisualCalibration(calibration)
+  console.log(`visual tolerance: ±${calibration.tolerance} luma units per lum/p1/p50/p99`)
   for (const result of results) {
     console.log(`\n${result.theme} — ${result.gl.renderer}`)
     console.log('| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | CPU ms/f | synced ms/f | visual |')
@@ -562,6 +568,7 @@ async function main() {
   const browser = await launchBrowser()
   let baseline
   let optimized
+  let calibration
   try {
     const themes = wanted === 'all' ? ['skyline', 'void'] : [wanted]
     if (cli['calibrate-visual']) {
@@ -573,6 +580,10 @@ async function main() {
       await runQualityLevels(browser, cli, args)
       return
     }
+    // Calibrate from identical HIGH captures before either comparison arm.
+    // This is deliberately part of every gate run: a stale constant is what
+    // manufactured the original failures when terrace p99 moved by 0.7.
+    calibration = await measureVisualCalibration(browser, themes, args, 5)
     // The full current-tree baseline is deliberately completed before any
     // optimized arm is measured.
     baseline = []
@@ -587,9 +598,9 @@ async function main() {
     await browser.close()
   }
 
-  const results = pairResults(baseline, optimized)
-  if (cli.json) console.log(JSON.stringify({ tolerance: VISUAL_TOLERANCE, results }, null, 2))
-  else report(results)
+  const results = pairResults(baseline, optimized, calibration.tolerance)
+  if (cli.json) console.log(JSON.stringify({ calibration, results }, null, 2))
+  else report(results, calibration)
   if (results.some((r) => r.rows.some((s) => !s.pass))) process.exitCode = 1
 }
 

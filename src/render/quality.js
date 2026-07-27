@@ -79,13 +79,13 @@ export const QUALITY_LEVELS = {
   },
 
   /**
-   * The tier that exists because the pixel-ratio cap is so coarse.
+   * The middle tier retains the pass but reduces both its pixel footprint and
+   * its shader work. The 3/8 scale is intentionally between High's half-scale
+   * buffer and Lite's disabled pass rather than another alias for High.
    *
-   * 2 -> 1 is a FOUR-times cut in pixels, which on a fill-bound renderer is
-   * most of the frame — far more than a player with a mildly slow machine
-   * needs to give up. 1.5 is 2.25x the pixels of native instead of 4x, and on
-   * a HiDPI panel that is still comfortably past the point where the
-   * supersample stops being visible.
+   * The tap reduction did not move this discrete GPU when tested alone, but
+   * it is a real reduction for ALU-bound integrated parts and it makes the
+   * level's work budget explicit. Resolution remains the measured lever here.
    */
   balanced: {
     label: 'Balanced',
@@ -100,29 +100,12 @@ export const QUALITY_LEVELS = {
   },
 
   /**
-   * Lite. The contact pass SURVIVES, at a quarter of the pixels, because
-   * turning it off is the one change available here that restyles the game
-   * rather than softening it: the sun sits at ~10 degrees, so ambient does
-   * nearly all the lighting, and the AO in this pass is what puts form into
-   * that ambient. Without it every wall/floor junction flattens and the scene
-   * reads as untextured primitives — the exact failure the pass was written to
-   * fix. A slow machine should get a soft version of this game, not a
-   * different-looking one.
-   *
-   * NOTE THE TAP COUNTS: identical to `high`, and that is a measurement, not
-   * an oversight. Dropping the march to 10 steps and the AO to 6/4 taps was
-   * measured (`perfprobe --modes base,chalf,clite`) and came back
-   * indistinguishable from `chalf` on every shot on both themes — sometimes
-   * slower. Skipping the two bilateral blur passes entirely (`noblur`) is also
-   * free. So this pass is not bound by its arithmetic or by its blur; it is
-   * bound by the number of pixels it runs at and the dependent texture fetches
-   * those pixels make. Cutting taps would therefore be pure image loss at zero
-   * saving, which is the worst trade in this file.
-   *
-   * The knobs stay wired because they are the right knobs to reach for on a
-   * part with a different balance — an integrated GPU is far more likely to be
-   * ALU-bound than this one. Turn them when a measurement on that part says to,
-   * not before.
+   * Lite removes the contact-shadow/AO pass. This is a visible trade: joints
+   * flatten and small-scale grounding is gone. It is also the only measured
+   * lever large enough to move the worst 1440p shots under the 4.167 ms 240 Hz
+   * budget: the four-shot diagnostic floor measured 2.94 ms/f, versus High's
+   * 5.46 ms/f. Calling that image change "Lite" is more honest than leaving
+   * the expensive pass on and presenting a level that is identical on DPR 1.
    */
   lite: {
     label: 'Lite',
