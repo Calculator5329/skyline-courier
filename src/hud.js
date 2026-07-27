@@ -1,4 +1,4 @@
-import { TUNING } from './player.js'
+import { TUNING, getMode } from './player.js'
 
 /**
  * The HUD is instrumentation, not a tutorial.
@@ -29,6 +29,87 @@ import { TUNING } from './player.js'
  */
 
 const $ = (id) => document.getElementById(id)
+
+// ----------------------------------------------------------- progressive unlocks
+//
+// The move set is handed over one verb at a time, in course order, and each
+// unlock is ANNOUNCED — an unlock the player does not notice is the same as no
+// unlock. The schedule (which verb, which checkpoint) lives in the level
+// (src/level.js `L.unlocks`); this file owns two things the level does not: how
+// a verb is WITHHELD until its moment, and how the moment is spoken.
+//
+// The withholding rule that governs everything here: gating availability must
+// not change how a verb FEELS once unlocked (the task's one hard movement
+// constraint). So every hold is applied through a lever the controller ALREADY
+// reads — `TUNING`, which player.js consults live every sim step, and a handful
+// of player fields — and every release restores the exact base value. Once a
+// verb is open, nothing below ever touches it again; it is bit-identical to the
+// ungated game. The holds:
+//
+//   wall     TUNING.wallReach -> 0. Every wall probe (`_probeWall`/`_probeDir`)
+//            offsets by wallReach, so at 0 no wall is ever found and the run,
+//            the climb and the kick-off all simply do not fire. Collision is
+//            unaffected (it uses radius, not reach), so you still cannot walk
+//            through the wall — you just cannot yet run it.
+//   double   TUNING.airJumps -> 0. player.js handles zero air jumps natively;
+//            the double jump is absent and the AIR chip reads unavailable.
+//   dash     player.dashCooldown -> Infinity. The dash trigger requires
+//            `dashCooldown <= 0`, so it never fires and no burst is emitted.
+//   grapple  player.anchors -> []. `_findAnchor` iterates the anchor list; an
+//            empty one means the reticle never lights and F does nothing. The
+//            LEVEL's anchor array is untouched, so tools/reachability.mjs (which
+//            harvests level.anchors, not player.anchors) still sees them all.
+//
+// Jump is never actually withheld — it is the base verb and a game you cannot
+// jump in is not playable — so its "hold" is a no-op and only its toast fires.
+const EMPTY_ANCHORS = []
+
+/** Per-course memory of which verbs the player has already been taught. */
+const LEARN_KEY = 'skyline-courier:learned'
+
+/**
+ * The presentation and the mechanism for each verb.
+ *
+ * `big`/`sub` are functions so the grapple can name itself the TETHER in
+ * Hardcore, where the cuff holds distance instead of reeling (see player.js
+ * MODES.hardcore). `gate`/`release` are the hold and its exact undo; the ones
+ * that touch the player tolerate a null player (they re-apply on the first
+ * `update`, where the player is always in hand).
+ */
+const UNLOCK_INFO = {
+  jump: {
+    big: () => 'JUMP',
+    sub: () => 'SPACE — clear the gaps ahead',
+    gate: null,
+    release: null,
+  },
+  wall: {
+    big: () => 'WALL-RUN',
+    sub: () => 'brass is runnable — hold into it, SPACE to kick off or climb',
+    gate: (h) => { TUNING.wallReach = 0 },
+    release: (h) => { TUNING.wallReach = h._baseWallReach },
+  },
+  double: {
+    big: () => 'DOUBLE JUMP',
+    sub: () => 'SPACE again in the air — for the wider gaps',
+    gate: (h) => { TUNING.airJumps = 0 },
+    release: (h) => { TUNING.airJumps = h._baseAirJumps },
+  },
+  dash: {
+    big: () => 'DASH',
+    sub: () => 'Q or right-click — commit across the long gaps',
+    gate: (h, p) => { if (p) p.dashCooldown = Infinity },
+    release: (h, p) => { if (p) p.dashCooldown = 0 },
+  },
+  grapple: {
+    big: () => (getMode() === 'hardcore' ? 'TETHER' : 'GRAPPLE'),
+    sub: () => (getMode() === 'hardcore'
+      ? 'F on a brass anchor — swing the tether across'
+      : 'F on a brass anchor — reach what you cannot jump'),
+    gate: (h, p) => { if (p) p.anchors = EMPTY_ANCHORS },
+    release: (h, p) => { if (p) p.anchors = h._level.anchors },
+  },
+}
 
 // ---------------------------------------------------------------- altimeter
 //
@@ -130,6 +211,17 @@ export class Hud {
     this._onResize = () => { this._w = window.innerWidth; this._h = window.innerHeight }
     window.addEventListener('resize', this._onResize)
 
+    // --- progressive unlocks (see the registry above and `_initUnlocks`) ---
+    // The base values are captured here, before any hold can run, so a release
+    // always restores exactly what the ungated game uses. Neither is overridden
+    // by any difficulty mode, so the value read now is the value forever.
+    this._baseWallReach = TUNING.wallReach
+    this._baseAirJumps = TUNING.airJumps
+    this._unlocks = null          // the level's schedule, or null if it opted out
+    this._learned = null          // Set of verbs the player has already been taught
+    this._unlocked = null         // { verb: bool } — the live availability
+    this._unlockState = null      // the same booleans, published on the level
+
     this._buildAltTape()
     // The sprint threshold, stamped on the speed scale at the same fraction the
     // fill uses, so the mark and the bar can never disagree.
@@ -153,6 +245,96 @@ export class Hud {
     this._navHit = -1          // force a target recompute on the next update
     this._target = null
     if (this._camera && this._level) this.compass.classList.add('live')
+    // Set up the unlock schedule now, before the first frame runs: the TUNING
+    // holds (wall, double) must be in place before player.update sees them, and
+    // setNav is called at boot, ahead of the game loop starting.
+    this._initUnlocks()
+  }
+
+  /**
+   * Read the level's unlock schedule and apply the opening holds.
+   *
+   * Verbs the player has already learned on this course (persisted per level)
+   * start open with no toast — a returning player, and a speedrunner re-running
+   * a course they have finished, is handed the whole set at once rather than
+   * re-taught. Everything else starts held, and `_updateUnlocks` opens it in
+   * course order as the run reaches each checkpoint.
+   */
+  _initUnlocks() {
+    const sched = this._level && this._level.unlocks
+    this._unlocks = sched || null
+    if (!sched) return
+    this._learned = this._loadLearned()
+    this._unlocked = {}
+    this._unlockState = {}
+    for (const u of sched) {
+      const on = this._learned.has(u.verb)
+      this._unlocked[u.verb] = on
+      this._unlockState[u.verb] = on
+      // TUNING holds apply immediately; the player-side holds (null player here)
+      // are re-applied on the first `_updateUnlocks`, before the verb is usable.
+      if (!on) UNLOCK_INFO[u.verb].gate?.(this, null)
+    }
+    // An introspection handle for the harness and the console — the same
+    // booleans the holds are driven from. The game itself never reads it.
+    this._level._unlockState = this._unlockState
+  }
+
+  /**
+   * Open verbs as the run reaches their checkpoints, and hold the rest.
+   *
+   * Driven off `checkpointsHit` (monotonic, and never advanced by a skip a held
+   * verb could take, so a section can never be entered before the verb it needs
+   * has opened). A held verb has its hold re-asserted every frame: idempotent,
+   * and it survives a difficulty switch rewriting TUNING under us. The instant a
+   * verb opens it is released once and then left strictly alone, so its feel is
+   * the ungated game's exactly.
+   */
+  _updateUnlocks(player, checkpointsHit, time) {
+    if (!this._unlocks) return
+    const started = time > 0            // the run has actually begun moving
+    for (const u of this._unlocks) {
+      const verb = u.verb
+      const info = UNLOCK_INFO[verb]
+      const want = this._learned.has(verb)
+        || (checkpointsHit >= u.at && (verb !== 'jump' || started))
+      if (want) {
+        if (!this._unlocked[verb]) {
+          this._unlocked[verb] = true
+          this._unlockState[verb] = true
+          info.release?.(this, player)
+          // Speak it once, ever: a verb only reaches here unlearned the first
+          // time it opens. Thereafter it is remembered and starts open silently.
+          if (!this._learned.has(verb)) {
+            this._learned.add(verb)
+            this._saveLearned()
+            this.showToast(info.big(), info.sub(), time, 2.6)
+          }
+        }
+        // Already open: never touched again — pristine.
+      } else {
+        if (this._unlocked[verb]) { this._unlocked[verb] = false; this._unlockState[verb] = false }
+        info.gate?.(this, player)
+      }
+    }
+  }
+
+  _loadLearned() {
+    const set = new Set()
+    const id = this._level && this._level.id
+    if (!id) return set
+    try {
+      const raw = localStorage.getItem(`${LEARN_KEY}:${id}`)
+      if (raw) for (const v of JSON.parse(raw)) set.add(v)
+    } catch { /* private mode, or a corrupt value */ }
+    return set
+  }
+
+  _saveLearned() {
+    const id = this._level && this._level.id
+    if (!id) return
+    try { localStorage.setItem(`${LEARN_KEY}:${id}`, JSON.stringify([...this._learned])) }
+    catch { /* private mode */ }
   }
 
   /**
@@ -226,6 +408,11 @@ export class Hud {
   update(now, { time, player, checkpointsHit, checkpointsTotal, finished }) {
     const t = formatTime(time)
     if (t !== this._lastTime) { this._lastTime = t; this.timer.textContent = t }
+
+    // Hold or open each verb for the frame the controller is about to run.
+    // Placed before everything downstream so the availability the chips and the
+    // reticle read below is this frame's, not last frame's.
+    this._updateUnlocks(player, checkpointsHit, time)
 
     // The finish is announced by the held toast, which is an event the player
     // cannot miss. The run register used to *also* recolour itself, but the

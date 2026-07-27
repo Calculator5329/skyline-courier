@@ -1206,6 +1206,58 @@ function facetsFor(lengthX, lengthZ) {
 }
 
 /**
+ * Progressive ability unlocks, in course order.
+ *
+ * Ethan, after playing: *"I wish we only unlocked abilities as we need them and
+ * we communicate that to the user (jump for first jumps, wall climb/jump for
+ * wall(s), double jump for bigger jumps, q ability for even bigger, and grapple
+ * once necessary)."* The move set is handed over one verb at a time, gated on
+ * PROGRESS (a checkpoint count, never a timer) and lined up with the section
+ * that already teaches that verb in isolation — so the unlock lands exactly
+ * where the geometry starts demanding it, which is the same teaching structure
+ * docs/course-design.md already believed in but had always granted implicitly.
+ *
+ * `at` is the value of `run.checkpointsHit` that opens the verb: the Nth
+ * checkpoint reached. The spine, in order, is
+ *   1 terrace · 2 the gaps · 3 the ledges · 4 the crossing · 5 the underpass ·
+ *   6 the chain · 7 the tower · 8+ the grapple-mandatory extension,
+ * so each `at` names the checkpoint whose NEXT leg first demands the verb:
+ *
+ *   jump    from the first step — the base verb, never actually withheld, only
+ *           named once the run gets moving.
+ *   wall    at 'the ledges' (3): the very next leg is the section-4 wall-run
+ *           across the void, the first wall the course puts in the way. Covers
+ *           the lateral run, the vertical climb, and the wall-jump (section 6).
+ *   double  at 'the crossing' (4): the bigger gaps past the wall.
+ *   dash    at 'the chain' (6): the leap off the tower (tower -> far-1) is a
+ *           committed dash gap, and it is the leg immediately after the tower —
+ *           so the charge has to be in hand a checkpoint early.
+ *   grapple at 'the tower' (7): ACT TWO is grapple-mandatory (far-1 -> far-2 is
+ *           23 m of void that no jump crosses). The grapple MUST open on the
+ *           last spine checkpoint, BEFORE the first crossing that needs it, or
+ *           the course soft-locks — the worst bug this feature could ship.
+ *
+ * Every leg between two of these is completable with exactly the verbs open by
+ * the time the player arrives (checked by hand and by driving; see src/hud.js).
+ * Because each `at` is the checkpoint that sits on the linear path just BEFORE
+ * the leg that needs the verb, and the locked verbs cannot skip ahead of their
+ * own checkpoint, the ordering is soft-lock-proof by construction.
+ *
+ * This order is Ethan's. src/hud.js owns HOW each verb is withheld and how the
+ * unlock is announced; this table owns only WHICH verb opens WHERE. Nothing
+ * here touches geometry, anchors, or checkpoints, so the reachability gate
+ * (tools/reachability.mjs), which assumes the full move set and harvests the
+ * static level, is untouched — the withholding is a runtime play-state overlay.
+ */
+export const SKYLINE_UNLOCKS = [
+  { verb: 'jump', at: 0 },
+  { verb: 'wall', at: 3 },
+  { verb: 'double', at: 4 },
+  { verb: 'dash', at: 6 },
+  { verb: 'grapple', at: 7 },
+]
+
+/**
  * The opening leg of the route.
  *
  * Each section teaches exactly one verb in isolation, then the last two
@@ -1721,6 +1773,11 @@ export function buildCourse(collision) {
   report.anchors = L.anchors.length
   L.graph = A
   L.report = report
+  // Progressive unlocks (src/hud.js). `id` keys the "verbs already learned"
+  // memory per course, so a returning player is handed the whole set at once
+  // and never re-taught. The void course declares no schedule and is unaffected.
+  L.id = 'skyline'
+  L.unlocks = SKYLINE_UNLOCKS
   K.assertAllPlaced()
   return L
 }
