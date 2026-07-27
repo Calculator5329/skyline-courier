@@ -19,7 +19,7 @@
  */
 
 import { readFile } from 'node:fs/promises'
-import { extname, join, normalize, resolve } from 'node:path'
+import { extname, normalize, resolve } from 'node:path'
 import { analyzeBuffer } from './analyze.mjs'
 import { SHOTS, SHOT_NAMES, VOID_SHOTS, VOID_SHOT_NAMES } from './shots.mjs'
 import {
