@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-07-27 — contact shading stops reading the same coverage twice
+
+The full-resolution contact pass was already known to be the largest isolated
+frame cost. Its broad AO, near AO, and sun-contact ray each sampled the linear
+depth at a candidate pixel, but also sampled the normal buffer solely to ask
+whether that same pixel had geometry. Those are not independent facts:
+`GBuffer` clears both attachments together and every prepass fragment writes a
+strictly positive view depth and coverage `1`.
+
+The shipped shader now uses the depth it already fetched as the coverage test.
+That removes one dependent texture read from every one of 8 broad-AO taps, 5
+near-AO taps, and up to 14 contact-ray steps — **up to 27 reads per shaded
+pixel** — without changing a ray position, threshold, sample count, buffer,
+effect, or output expression.
+
+`tools/perfbaseline.mjs` keeps the previous lookup behind a compile-time-only
+define as an executable reference. It boots the procedural world with a fixed
+seed, captures the complete skyline and void baseline first, then captures the
+shipped arm and fails if luminance or p1/p50/p99 moves by more than **0.2 luma
+units**. The analyzer reports tenths; 0.2 allows one reporting quantum of
+rounding on each side. Both shader arms otherwise receive the same geometry,
+depth, frame count, and random sequence.
+
+### Measured, full shot set, 1600x900, 90 pumped frames
+
+Run `node tools/perfbaseline.mjs` to emit the repository's standard table:
+
+| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | ms/f |
+| --- | --- | --- | --- | --- | --- | --- |
+| all skyline and void shots | executable before → after reference | tolerance ±0.2 | unchanged gate | reported | reported | GPU-synced |
+
+This isolated lane cannot fill that table honestly: its sandbox rejects both a
+localhost listener (`listen EPERM`) and Chromium startup (`sandbox_host_linux
+EPERM`). The command remains a fail-capable outside-sandbox acceptance check;
+no unmeasured frame time or visual verdict is recorded here. This entry closes
+the changelog gap for this performance change only; it does not retroactively
+invent entries for Act Four, Overdrive, the underworld backdrop, or the BIG
+expansion.
+
 ## 2026-07-26 — the far distance is a painting now, and the impostors are gone
 
 Ethan, on the baked-impostor build shipped earlier the same day:

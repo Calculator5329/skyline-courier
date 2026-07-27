@@ -91,6 +91,9 @@ varying vec2 vUv;
 #ifndef SC_AO_NEAR_TAPS
 #define SC_AO_NEAR_TAPS 5.0
 #endif
+#ifndef SC_DEPTH_COVERAGE
+#define SC_DEPTH_COVERAGE 1
+#endif
 #define SC_GOLDEN_ANGLE 2.39996323
 
 /**
@@ -142,9 +145,23 @@ float scAmbientOcclusion( vec3 P, vec3 N, float depth, float jitter, vec4 ao, fl
     float r = min( 1.0, sqrt( ( fi + 0.5 ) / taps ) );
     vec2 suv = vUv + vec2( cos( a ), sin( a ) ) * r * uvR;
     if ( suv.x <= 0.0 || suv.x >= 1.0 || suv.y <= 0.0 || suv.y >= 1.0 ) continue;
-    if ( texture2D( tNormal, suv ).z < 0.5 ) continue;   // sky occludes nothing
+#if SC_DEPTH_COVERAGE
+    // Linear depth is cleared to 0 and every covered surface writes a positive
+    // value, so it is also the coverage test. Reading tNormal.z here used to
+    // spend a second dependent texture fetch only to rediscover the same bit.
+    // Keep the sample in a local: this is both the sky test and the depth used
+    // by scViewPos, with exactly the same accept/reject boundary as before.
+    float sampleDepth = texture2D( tDepth, suv ).r;
+    if ( sampleDepth <= 0.0 ) continue;   // sky occludes nothing
+#else
+    // Retained as the executable before-arm for tools/perfbaseline.mjs. It is
+    // compile-time dead in the shipped program, so the reference costs no GPU
+    // instructions while remaining measurable against the same exact build.
+    if ( texture2D( tNormal, suv ).z < 0.5 ) continue;
+    float sampleDepth = texture2D( tDepth, suv ).r;
+#endif
 
-    vec3 S = scViewPos( suv, texture2D( tDepth, suv ).r, uProjInv );
+    vec3 S = scViewPos( suv, sampleDepth, uProjInv );
     vec3 v = S - P;
     float d = sqrt( max( dot( v, v ), 1e-8 ) );
     float range = clamp( 1.0 - ( d - radius ) / max( radius, 1e-3 ), 0.0, 1.0 );
@@ -246,7 +263,16 @@ void main() {
     if ( suv.x <= 0.0 || suv.x >= 1.0 || suv.y <= 0.0 || suv.y >= 1.0 ) break;
 
     float sceneDepth = texture2D( tDepth, suv ).r;
-    if ( texture2D( tNormal, suv ).z < 0.5 ) continue;   // sky occludes nothing
+#if SC_DEPTH_COVERAGE
+    // The depth target and normal target are drawn and cleared together. Depth
+    // 0 therefore means the old normal.z coverage test would have failed; a
+    // positive depth means it would have passed. Reusing this already-required
+    // fetch removes one dependent normal-buffer read from every march step
+    // without changing the ray, thresholds, or output arithmetic.
+    if ( sceneDepth <= 0.0 ) continue;   // sky occludes nothing
+#else
+    if ( texture2D( tNormal, suv ).z < 0.5 ) continue;
+#endif
 
     float diff = -sp.z - sceneDepth;
     // Same two-part bias as the ray origin, for the same two reasons.
@@ -501,6 +527,18 @@ export class ContactShadows {
     this.pass.setDefine('SC_AO_TAPS', a)
     // Must carry a decimal point: it is used as a float argument and a divisor.
     this.pass.setDefine('SC_AO_NEAR_TAPS', n.toFixed(1))
+  }
+
+  /**
+   * Select the executable before/after arm used by tools/perfbaseline.mjs.
+   *
+   * The shipped arm derives coverage from the already-fetched linear depth.
+   * Keeping the old normal-buffer lookup behind a compile-time define makes the
+   * baseline reproducible on the same procedural world without imposing a
+   * runtime branch or sampler read on players.
+   */
+  setDepthCoverageOptimization(enabled) {
+    this.pass.setDefine('SC_DEPTH_COVERAGE', enabled ? 1 : 0)
   }
 
   get length() { return this.pass.uniforms.uParams.value.x }
