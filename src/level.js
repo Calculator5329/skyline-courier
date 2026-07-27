@@ -1219,9 +1219,18 @@ function facetsFor(lengthX, lengthZ) {
  *
  * `at` is the value of `run.checkpointsHit` that opens the verb: the Nth
  * checkpoint reached. The spine, in order, is
- *   1 terrace · 2 the gaps · 3 the ledges · 4 the crossing · 5 the underpass ·
- *   6 the chain · 7 the tower · 8+ the grapple-mandatory extension,
- * so each `at` names the checkpoint whose NEXT leg first demands the verb:
+ *   1 terrace · 2 the gaps · 3 the ledges · 4 the crossing · 5 the chain ·
+ *   6 the tower · 7+ the grapple-mandatory extension,
+ * so each `at` names the checkpoint whose NEXT leg first demands the verb.
+ *
+ * ACT FOUR RENUMBER (2026-07-27, the checkpoint-thinning lane): 'the underpass'
+ * checkpoint was cut — the slide it marked is taught by geometry, and the leg
+ * into it (the section-4 wall-run) is interesting enough to re-run that a save
+ * point in the middle of it was only marking progress. Cutting it slides 'the
+ * chain' from count 6 to 5 and 'the tower' from 7 to 6, so `dash` and `grapple`
+ * move down one to stay pinned to the SAME two checkpoints they always keyed on.
+ * The teaching order is unchanged; only the counts renumbered. See the
+ * checkpoint list below and `SKYLINE_UNLOCKS`.
  *
  *   jump    from the first step — the base verb, never actually withheld, only
  *           named once the run gets moving.
@@ -1229,10 +1238,10 @@ function facetsFor(lengthX, lengthZ) {
  *           across the void, the first wall the course puts in the way. Covers
  *           the lateral run, the vertical climb, and the wall-jump (section 6).
  *   double  at 'the crossing' (4): the bigger gaps past the wall.
- *   dash    at 'the chain' (6): the leap off the tower (tower -> far-1) is a
+ *   dash    at 'the chain' (5): the leap off the tower (tower -> far-1) is a
  *           committed dash gap, and it is the leg immediately after the tower —
  *           so the charge has to be in hand a checkpoint early.
- *   grapple at 'the tower' (7): ACT TWO is grapple-mandatory (far-1 -> far-2 is
+ *   grapple at 'the tower' (6): ACT TWO is grapple-mandatory (far-1 -> far-2 is
  *           23 m of void that no jump crosses). The grapple MUST open on the
  *           last spine checkpoint, BEFORE the first crossing that needs it, or
  *           the course soft-locks — the worst bug this feature could ship.
@@ -1253,8 +1262,8 @@ export const SKYLINE_UNLOCKS = [
   { verb: 'jump', at: 0 },
   { verb: 'wall', at: 3 },
   { verb: 'double', at: 4 },
-  { verb: 'dash', at: 6 },
-  { verb: 'grapple', at: 7 },
+  { verb: 'dash', at: 5 },
+  { verb: 'grapple', at: 6 },
 ]
 
 /**
@@ -1498,7 +1507,15 @@ export function buildCourse(collision) {
   K.balustrade(L, 131, 0, 5.6, { length: 18, height: 1.5, thickness: 0.7, kind: 'brass', detail: 1 })
   K.vineCurtain(L, 126, -0.5, -9.4, { length: 20, drop: 6 })
   K.waterfall(L, 152, -0.45, 6.4, { height: 30, width: 2.4 })
-  L.checkpoint(126, 1.4, -1.5, 'the underpass')
+  // CHECKPOINT THINNING (Act Four): 'the underpass' checkpoint used to sit here
+  // at (126, 1.4, -1.5). It was cut. The slide is taught by geometry, `double`
+  // was already learned at 'the crossing', and the leg leading into it — the
+  // section-4 wall-run over the void — is one of the course's highlights, so a
+  // save point in the middle of it only marked progress. Dying in the slide now
+  // sends you back to 'the crossing', which re-runs the wall-run: a mistake that
+  // costs interesting ground, which is difficulty, not a chore. This is the one
+  // cut inside the taught spine; it renumbers `dash`/`grapple` unlocks (see
+  // SKYLINE_UNLOCKS) but keeps them pinned to the same two checkpoints.
   K.lanternPost(L, 133, 3.85, -8.0, { height: 2.6 })
   K.lanternPost(L, 147, 3.85, 5.0, { height: 2.6 })
 
@@ -1711,13 +1728,21 @@ export function buildCourse(collision) {
 
   // Checkpoints for Act Two. NOT part of the safe-line spine — grapple-gated by
   // design (see the receipt) — but each stands on its own deck so the trigger is
-  // somewhere a body actually fits. 'the skyline' is the OLD finish and is now a
-  // mid-course checkpoint; the run continues into Act Three below, where
-  // L.finish and L.beaconAt are set at the new zenith.
+  // somewhere a body actually fits. The run continues into Act Three below,
+  // where L.finish and L.beaconAt are set at the new zenith.
+  //
+  // CHECKPOINT THINNING (Act Four). This block used to hold four: 'the first
+  // reach', 'the great wall', 'the long reach' and 'the skyline'. The last three
+  // were cut. They stood one grapple crossing apart in the most homogeneous
+  // stretch of the course — swing, land, swing again — so three of the four were
+  // marking progress, not gating interesting ground. 'the first reach' survives
+  // as the "you just got the grapple" save right after it opens; the next save
+  // is now 'the descent' at the start of Act Three, so the whole Act-Two long
+  // reach (far-2 -> far-3 -> far-4 -> far-5 -> summit -> sky-1) is one held
+  // breath. Ethan asked for exactly this: "we have checkpoints, almost too many
+  // ... so it's not difficult." Grapple swings are quick to execute, so a long
+  // segment of them raises the stakes without becoming a chore over easy ground.
   L.checkpoint(280, 9.1, 0, 'the first reach')
-  L.checkpoint(300, 20.7, 6, 'the great wall')
-  L.checkpoint(352, 30.7, -30, 'the long reach')
-  L.checkpoint(375, 40.8, -44, 'the skyline')
 
   // THE EXTENSION GRAPH. tower -> far-1 is a committed dash (the stakes rise
   // before the cuff is needed); everything past far-1 is grapple-only, each
@@ -1729,6 +1754,159 @@ export function buildCourse(collision) {
   A.link('far-3', 'far-4', 'grapple', { anchor: p4, note: 'across and up, turning off the +X axis' })
   A.link('far-4', 'far-5', 'grapple', { anchor: p5, note: 'the long reach, out over the deep cloud' })
   A.link('far-5', 'summit', 'grapple', { anchor: p6, note: 'the last swing onto the skyline, ~34 m above the tower' })
+
+  // ===================================================== ACT FOUR: THE SPIRE
+  //
+  // THE VERTICAL DETOUR. Ethan, 2026-07-27, after playing the shipped skyline
+  // ("the new skyline is awesome so cool"), picking what comes next: a VERTICAL
+  // DETOUR — *"a shaft you ascend by wall-running its faces, with anchors placed
+  // up it ... roughly 150-200 m of climb — enough that the top is a different
+  // world from the bottom."* This is the fix for the thing the "I want to FLY"
+  // brief exposed: the course was broad but shallow (708 m across, 67 m up). The
+  // spire is 150 m of climb in one place, hung off the Act-Two spine.
+  //
+  // IT IS A DETOUR, NOT A GATE, and it is LATERAL by design (Ethan: "I wouldn't
+  // mind it going ... left and right as well ... the tower plus a sideways loop
+  // back to the spine gives shape without making the run longer to re-run"). The
+  // spine link far-1 -> far-2 (grapple) is UNTOUCHED, so a player who never
+  // enters the spire runs the course exactly as before — `ROUTE` and
+  // `report.routeMetres` below do not include a single spire node, so thinning
+  // the checkpoints and adding the tower did not lengthen the main line by a
+  // metre. The spire enters from far-1 and its top loops back down onto far-2,
+  // one island along: an optional side-loop, taken for the view and the launch
+  // off the top, skipped with no penalty.
+  //
+  // WHY OPTIONAL RATHER THAN MANDATORY (the design call the brief asked me to
+  // make and write down): the main line is already a proven, gated difficulty
+  // curve, and a 150 m blind climb with a single save at the top is the hardest
+  // thing in the course. Forcing every run through it — including the leaderboard
+  // runs — would turn one spectacular optional ascent into a wall that gates the
+  // finish. Kept optional, it is a reward and a flex; made mandatory, it is a
+  // toll. Ethan playtests the ceiling; an optional tower lets him raise it
+  // without it blocking the parts he already likes.
+  //
+  // THE CLIMB, modelled honestly. The archipelago's structural modes
+  // (wall-run / wall-jump / stair / contiguous) carry their height in geometry
+  // rather than in a checked arc, exactly as Sections 4 and 6 do — so the two
+  // shaft segments are `wallrun` edges with a note saying HOW, and the geometry
+  // below makes the note true: a square brass well with flat runnable inner
+  // faces and a ladder of grapple anchors up its centre, ~16 m apart, well
+  // inside the 34 m cuff. You wall-run and wall-jump the faces for position and
+  // grapple anchor-to-anchor for height. Because I cannot run the course in this
+  // lane (dispatched worktrees can't boot a browser), the climb's *feel* is
+  // flagged for an owner playtest the same way the HARDCORE line is — the anchor
+  // spacing is deliberately generous so the grapple alone carries the ascent if
+  // the wall-run timing turns out fussy. Falling in the well drops to the solid
+  // base floor, not to the kill plane, so a miss costs the climb, never the run.
+  //
+  // THE LAUNCH OFF THE TOP feeds OVERDRIVE (the parallel lane): a ramp down the
+  // vista deck's launch edge and an anchor slung out over the void ahead of the
+  // lip, placed so a swing bottoms out pointing at far-2 — a THROW, not a hop.
+  // The exit edge is proven crossable as a plain `standard` double-jump (the
+  // 142 m drop buys the airtime), so it is never IMPOSSIBLE in NORMAL; overdrive
+  // and the launch anchor just turn the descent into a dive. The slopes ask in
+  // the same brief ("slopes for sliding") could not be delivered as authored
+  // geometry: the collision world is AABB-only, so no floor contact ever returns
+  // the tilted normal the slide-downhill accelerator in src/player.js needs, and
+  // that fix lives outside this lane's owned files. `kit.ramp` builds the run-up
+  // geometry ready for it; see that prefab's docstring for the full caveat.
+  // A dedicated stream, NOT the shared `re` used by Acts Two and Three: drawing
+  // from `re` here would advance it and cosmetically reshuffle the facet-jitter
+  // seeds and tree heights of the already-shipped Act-Three islands Ethan just
+  // playtested and liked. The spire's randomness is its own.
+  const rs = makeRand(0x5217E)
+  const SPIRE_X = 250, SPIRE_Z = 22
+  const SPIRE_BASE_Y = 8, SPIRE_TOP_Y = 150     // 142 m of wall, y 8 -> 150
+  // The four brass faces of the well. Outer footprint 9 x 9, walls 1.5 m thick,
+  // a 6 m inner clear — opposite faces one wall-jump apart (wallJumpOut is 7 m),
+  // and each face 9 m long so a lateral wall-run has room to breathe. The inner
+  // faces are DEAD FLAT: like Section 4's crossing wall, nothing is allowed
+  // proud of the running plane, so all four are single unbroken slabs.
+  const wallMidY = (SPIRE_BASE_Y + SPIRE_TOP_Y) / 2      // 79
+  const wallH = SPIRE_TOP_Y - SPIRE_BASE_Y               // 142
+  L.solid(SPIRE_X + 3.75, wallMidY, SPIRE_Z, 1.5, wallH, 9, 'brass')            // +x face (inner x=253)
+  L.solid(SPIRE_X - 3.75, wallMidY, SPIRE_Z, 1.5, wallH, 9, 'brass')            // -x face (inner x=247)
+  L.solid(SPIRE_X, wallMidY, SPIRE_Z + 3.75, 6, wallH, 1.5, 'brass')           // +z face (the back)
+  // The -z (entry) face is missing its lowest 7 m: a doorway you run in through
+  // from the base ring, so the well is enterable without a hole in a wall-run
+  // surface higher up. It resumes at y=15 and runs to the top.
+  const doorTop = SPIRE_BASE_Y + 7                                             // 15
+  L.solid(SPIRE_X, (doorTop + SPIRE_TOP_Y) / 2, SPIRE_Z - 3.75,
+    6, SPIRE_TOP_Y - doorTop, 1.5, 'brass')                                    // -z face above the doorway
+
+  // The base: a moss deck that is the well floor and a 2.5 m landing ring around
+  // the shaft's foot, so the jump in from far-1 has somewhere to land before you
+  // step through the doorway.
+  deck(SPIRE_X, SPIRE_BASE_Y, SPIRE_Z, 14, 14, WILD,
+    { id: 'spire-base', bodyDepth: 3.4, seed: (rs() * 0xffffff) | 0 })
+
+  // A mid ledge, two-thirds of the way up: a real shelf against the back face to
+  // rest a hand on, and the intermediate archipelago node that keeps each
+  // structural climb claim to ~75 m rather than one 142 m leap of faith.
+  const SPIRE_MID_Y = 83
+  L.solid(SPIRE_X, SPIRE_MID_Y - 0.25, SPIRE_Z + 2.0, 5, 0.5, 3, 'porcelain')
+  A.node('spire-mid', SPIRE_X, SPIRE_MID_Y, SPIRE_Z + 2.0, 5, 3, { launchY: SPIRE_MID_Y })
+
+  // The vista deck: the top of the world, and a different one from the bottom —
+  // a moss garden 142 m up, abutting the +x face so you mantle straight out of
+  // the well onto it. This is the spire's reward and its only save point.
+  deck(262, SPIRE_TOP_Y, SPIRE_Z, 14, 14, WILD,
+    { id: 'spire-top', bodyDepth: 4.0, seed: (rs() * 0xffffff) | 0 })
+  K.cypress(L, 266, SPIRE_TOP_Y, SPIRE_Z + 4, { height: 7.5, rand: rs })
+  K.waterfall(L, 258, SPIRE_TOP_Y - 0.5, SPIRE_Z + 5.4, { height: 40, width: 2.2, rand: rs })
+
+  // THE ANCHOR LADDER up the well: bracket lanterns on alternating inner faces,
+  // ~16 m apart, each hanging near the well's centre column so it is an easy
+  // grapple from the foothold below. This is the ascent the two structural edges
+  // are asserting: the grapple does the lifting, the faces do the positioning.
+  for (const [ay, side] of [
+    [24, 1], [40, -1], [56, 1], [72, -1],          // lower segment: base -> mid
+    [96, 1], [112, -1], [128, 1], [144, -1],       // upper segment: mid -> top
+  ]) {
+    const faceX = SPIRE_X + side * 3.0             // just off the inner face
+    K.lanternPost(L, faceX, ay, SPIRE_Z,
+      { post: false, reach: -side * 2.4, axis: 'x', height: 0.7 })
+  }
+  // The climb-out anchor, standing on the vista deck at the well mouth: grapple
+  // to it from the top of the last wall-run and you land squarely on the deck,
+  // so reaching the top never hinges on a single mantle over the wall lip.
+  K.lanternPost(L, 256, SPIRE_TOP_Y, SPIRE_Z, { height: 5.5 })
+
+  // THE LAUNCH. A ramp down the deck's +x edge to pour speed into, and an anchor
+  // slung out over the void ahead of the lip — the placement discipline the
+  // brief names: "an anchor 6 m above and 10 m short of a gap converts a swing
+  // into a throw." Swing off it and the arc bottoms out pointing down the drop
+  // at far-2. Nothing here is graph-load-bearing (the exit is a proven plain
+  // double-jump); this is the fast/overdrive line, laid in as geometry.
+  K.ramp(L, 263, SPIRE_TOP_Y, SPIRE_Z, { length: 6, drop: 3, width: 8, axis: 'x', kind: 'brass' })
+  K.lanternPost(L, 269, SPIRE_TOP_Y - 1.0, SPIRE_Z - 4,
+    { post: false, reach: 4, axis: 'x', height: 0.5 })
+
+  // THE SPIRE GRAPH. Two band-checked jumps (in from far-1, out onto far-2) and
+  // two structural climbs between them; the down direction is a plain fall the
+  // player can always take, so no soft-lock. Every edge here was hand-computed
+  // against the same envelope `Archipelago.verify` uses:
+  //   far-1 -> spire-base : 9.8 m at dy -0.4  -> standard  (a double jump in)
+  //   spire-top -> far-2  : 14.4 m at dy -142 -> standard  (the 142 m drop out)
+  //   spire-base <-> far-1: the back-out, so entering never traps you.
+  A.link('far-1', 'spire-base', 'standard', { note: 'the double-jump across onto the spire foot' })
+  A.link('spire-base', 'far-1', 'standard', { note: 'back out of the spire without climbing it' })
+  A.link('spire-base', 'spire-mid', 'wallrun',
+    { note: 'the lower shaft: wall-run the brass faces and grapple the four anchors at y 24/40/56/72 up to the mid ledge' })
+  A.link('spire-mid', 'spire-top', 'wallrun',
+    { note: 'the upper shaft: four more anchors at y 96/112/128/144, then the mouth anchor onto the vista deck' })
+  A.link('spire-top', 'far-2', 'standard',
+    { note: 'the launch off the top — a 142 m drop that lands on far-2, one island along; overdrive turns it into a dive' })
+
+  // The spire's one checkpoint is REGISTERED LAST, down beside 'the zenith'
+  // below — deliberately, not where the geometry is built. The gate shader only
+  // ever draws the SINGLE next-unreached checkpoint in ARRAY order (level.js
+  // `_gates`: it discards every state but "next"), so a spire checkpoint sitting
+  // in array order right after 'the first reach' would hijack the hot waypoint
+  // and steer every main-line run up an OPTIONAL detour. Registered last, it is
+  // only ever "next" once the whole main line is already done — i.e. never, on a
+  // finished run — so the waypoint stays on the through-line. The 150 m spire is
+  // its own wayfinding; it needs no gate pointing at it.
 
   // ========================================================= ACT THREE =====
   // THE BIG SKYLINE — the fly gauntlet. Ethan, 2026-07-26: *"extend the original
@@ -1842,13 +2020,27 @@ export function buildCourse(collision) {
   K.lanternPost(L, 704.5, 66.0, -54.5, { height: 3.6 })
 
   // Act Three checkpoints. Grapple-gated by design, so out of the safe-line
-  // spine — but each stands clear on its own deck ('the low span' on the near
-  // rim away from the lintel; 'the zenith' beside the dome, never under it).
+  // spine — but each stands clear on its own deck ('the zenith' beside the dome,
+  // never under it).
+  //
+  // CHECKPOINT THINNING (Act Four). 'the low span' (was at 454, on the slide
+  // span's near rim) was cut: the slide beat is short and the swings around it
+  // are the same swing the rest of the act is made of, so it saved little. That
+  // leaves 'the descent' -> 'the gulf' as one five-crossing segment through the
+  // middle reaches, and keeps 'the buttress' — the save the ascent up the giant
+  // walls actually needs, since dying at the top of a six-wall climb and redoing
+  // all six would be the tedious kind of hard, not the good kind. The endgame
+  // (buttress -> zenith) stays three crossings so the hardest ground has the
+  // tightest granularity, which is the right shape for a difficulty curve.
   L.checkpoint(404, 34.7, -38, 'the descent')
-  L.checkpoint(454, 28.7, -8, 'the low span')
   L.checkpoint(546, 23.7, 14, 'the gulf')
   L.checkpoint(632, 41.7, -22, 'the buttress')
   L.checkpoint(708, 66.7, -46, 'the zenith')
+  // The optional spire's save point (geometry built up in Act Four above),
+  // registered here so it lands LAST in the checkpoint array — see the note at
+  // the spire for why array order matters to the gate waypoint. It is only ever
+  // reached after the tower, so it never disturbs the teaching-unlock counts.
+  L.checkpoint(262, 150.6, 22, 'the spire')
 
   L.finish = new THREE.Vector3(708, 66.6, -46)
   L.beaconAt = { x: 718, y: 74, z: -50, height: 130, radius: 4.4 }

@@ -2790,11 +2790,76 @@ export function lanternPost(L, x, y, z, opts = {}) {
   return { flame: [fx, fy, fz], topY: fy + 1.0, boxes: n }
 }
 
+/**
+ * ramp — an inclined run/slide surface that a player can pour speed down and
+ * launch off the lip of.
+ *
+ * THE PHYSICS CAVEAT, stated up front because it is the whole reason this
+ * prefab is shaped the way it is. As of this writing the collision world is
+ * axis-aligned boxes ONLY (src/collision.js's own docstring: "axis-aligned
+ * boxes only"), so a floor contact always returns a normal of exactly
+ * (0, 1, 0). The slide-downhill accelerator in src/player.js — the branch that
+ * fires when `grounded && sliding && velocity.y < -0.5` — therefore can never
+ * trigger on authored terrain, because a flat AABB top cancels all downward
+ * velocity to zero every frame. A TRUE slide-*accelerating* slope needs a
+ * tilted floor normal in (0.7, 1.0), which is a collision-system capability (a
+ * ramp / triangle collider) that does not exist yet and lives in files this
+ * kit does not own (src/collision.js, src/player.js). It wants a roadmap entry.
+ *
+ * So this ramp does the part that IS possible today and is built ready for the
+ * part that is not:
+ *   COLLISION is a fine staircase of shallow treads (`rise` well under the
+ *     controller's vault height), so every tread reads as ground, not a ledge,
+ *     and the run down it reads as a slope. You can run and slide-hop off its
+ *     lip RIGHT NOW — a run down it into a jump is a real launch, because the
+ *     existing double-jump / slide-hop converts the drop into distance.
+ * When the collision world gains a tilted-floor primitive, this SAME geometry
+ * becomes slide-accelerating with no change here.
+ *
+ * ANCHOR: (x, y, z) is the TOP of the ramp — the high end. It descends by
+ * `drop` metres over `length` metres in the +`axis` direction, so the lip you
+ * launch from is at (x + length·axis, y - drop).
+ *
+ * SOLID: every tread. There is no decor and no mesh channel, so the prefab is
+ * identical under `legacy` and under the node self-test — deliberately, since
+ * its job is collision a player pours momentum into, not silhouette.
+ *
+ * @returns {{drop:number, length:number, width:number, lip:number, boxes:number}}
+ */
+export function ramp(L, x, y, z, opts = {}) {
+  const {
+    length = 8, drop = 3, width = 6, kind = 'brass', axis = 'x',
+  } = opts
+  const F = frame(axis)
+  const { S } = emit(L, opts)
+  // ~0.6 m treads: short enough that the descending union reads as an incline
+  // rather than a flight, long enough that the box count stays sane on a long
+  // chute. Steps track length so the tread pitch is constant whatever the size.
+  const steps = Math.max(2, Math.round(length / 0.6))
+  const run = length / steps
+  const rise = drop / steps
+  let n = 0
+  for (let i = 0; i < steps; i++) {
+    // Walkable top of this tread, marching down as i grows.
+    const topH = y - drop * (i / steps)
+    const a = run * (i + 0.5)
+    const [cx, cz] = F.at(x, z, a, 0)
+    // Fill well below the tread top so consecutive treads overlap into one
+    // continuous descending mass — no gap under a nosing for the camera to see
+    // through, and nothing for the controller to catch a toe on.
+    const h = rise + 1.0
+    const [sx, sz] = F.sz(run * 1.04, width)
+    n += S(cx, topH - h / 2, cz, sx, h, sz, kind, { shade: 0.9 + 0.06 * (i % 2) })
+  }
+  return { drop, length, width, lip: y - drop, boxes: n }
+}
+
 // ------------------------------------------------------------------ export
 
 export const PREFABS = {
   drumPlatform, archway, colonnade, balustrade, gearWheel, armillary,
   observatoryDome, cypress, vineCurtain, waterfall, stairFlight, lanternPost,
+  ramp,
 }
 
 /**
