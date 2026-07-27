@@ -84,6 +84,11 @@ const skyline = {
   grade: null,
   exposure: null,
 
+  // null = the shipped grapple range (player.js TUNING.grappleRange) unchanged.
+  // Range is the SHIPPED default here; only the void overlays a scale. See the
+  // `grapple` block on that theme for the whole argument.
+  grapple: null,
+
   // null = the shipped ambient-occlusion radii in render/contact.js, which
   // were tuned against THIS theme's masonry (a moss lip, a balustrade base, a
   // stair nosing) and are its regression baseline. Do not restate them here —
@@ -514,6 +519,34 @@ const voidTheme = {
     extinction: [0.92, 1.0, 1.12],
   },
 
+  /**
+   * THE GRAPPLE, +50% REACH — a partial overlay over the shipped tuning, in the
+   * exact shape `grade`/`exposure`/`aerial` use: a small object the consumer
+   * (here `src/player.js`) reads and applies ON TOP of `BASE_TUNING`, never a
+   * second copy of the table and never a mutation of the base.
+   *
+   * Ethan, 2026-07-27, playing the Underworld: "void mode should have a range
+   * increase maybe 50% higher than current (skyline default)". So the cuff's
+   * aim/latch reach becomes 34 * 1.5 = 51 m in this theme; skyline leaves
+   * `grapple: null` and keeps the shipped 34.
+   *
+   * WHY A SCALE AND NOT A NUMBER. `grappleRange: 51` would be a copy of a value
+   * derived from the base, and the base is the single source of truth for what
+   * "default reach" is — if it ever moves, a hardcoded 51 silently stops being
+   * "1.5x default". A scale stays correct through any future retune of the base.
+   *
+   * WHAT THIS DOES AND DOES NOT TOUCH. It scales the PLAYER's reach only. It is
+   * NOT the course's authoring cap: `Archipelago.link` (src/level.js) proves
+   * every grapple crossing against its own `GRAPPLE_MAX` (34 m), which is
+   * theme-independent and which this lane does not own. So a longer reach makes
+   * every crossing the void already authors EASIER to hit — more forgiving aim,
+   * more slack for chaining, more of the scenery orbs in range — without
+   * licensing a longer authored gap. See the note on `REACH_GRAPPLE` /
+   * `CUFF_REACH` in src/levels/void.js, which re-derives its own constants
+   * against this overlay.
+   */
+  grapple: { rangeScale: 1.5 },
+
   motes: {
     count: 1400,
     // Violet-white, well over 1.0 so they catch the bloom the way dust near a
@@ -571,8 +604,19 @@ const voidTheme = {
    * with panel grids, towers with window openings. Honest loss: the near and
    * mid bands parallaxed and a dome cannot. At the distances involved that is
    * a smaller lie than a field of purple triangles.
+   *
+   * BACK ON, 2026-07-27, but as ARCHITECTURE this time. Ethan, playing the
+   * Underworld, asked for the far structures to read as actual connected
+   * buildings — "not just, like, random objects pasted in the background" —
+   * fewer, bigger, and MORE low-poly. That is a different layer from the prism
+   * scatter this comment retired: `VoidCityBackdrop` (src/world.js) builds
+   * connected building complexes (shared footing, towers, setbacks, a bridging
+   * span, buttresses, stair slabs) and PARALLAXES in FRONT of the dome, which
+   * keeps carrying the true-infinity read behind it. Turning this true selects
+   * that class; it does not resurrect `voidbackdrop.js`. See the long note on
+   * `VoidCityBackdrop` for the whole argument.
    */
-  backdrop: false,
+  backdrop: true,
 
   /**
    * AMBIENT OCCLUSION, SIZED TO THE VOID'S ARCHITECTURE — a partial overlay on

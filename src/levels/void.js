@@ -62,7 +62,21 @@ import { getTheme } from '../theme.js'
 // this file is chosen against them and a reader should not have to go looking.
 //   sprint jump ~7.3 m · +double ~13.7 m · +dash ~19 m · grapple 5-34 m
 //   jump 1.42 m up · double ~2.5 m · mantle <=1.45 m
+//
+// GRAPPLE-INDEPENDENT. `REACH_COMMITTED` is a sprint jump + double + dash and
+// has nothing to do with the cuff's reach — the void's +50% grapple overlay
+// (theme.js) does NOT move it, so it stays 19 whatever the theme does.
 const REACH_COMMITTED = 19
+// THE COURSE AUTHORING CAP, NOT THE PLAYER'S REACH — and the two diverged when
+// the void got a 50% longer cuff (theme.js `grapple.rangeScale`). Every grapple
+// crossing this file authors is re-proved by `Archipelago.link` (src/level.js)
+// against ITS OWN `GRAPPLE_MAX` (34 m), which is theme-independent and which this
+// lane does not own. So the longest gap the course may BUILD is still 34 m even
+// though the player's cuff now reaches 51 m in the void: the extra reach makes
+// the authored crossings easier (looser aim, slack for chaining), it does not
+// license a longer one. This guard therefore stays at the validator's value —
+// raising it to 51 would let the spiral author a gap that then black-screens the
+// game in `Archipelago.link`. The player's actual reach is `CUFF_REACH` below.
 const REACH_GRAPPLE = 34
 const CROSSING = 31
 
@@ -86,6 +100,14 @@ export function buildVoidCourse(collision) {
     return h >>> 0
   }
   const theme = (() => { try { return getTheme() } catch { return null } })()
+  // THE PLAYER'S ACTUAL CUFF REACH in this theme — the shipped 34 m scaled by
+  // the theme's `grapple` overlay (theme.js; the void runs 1.5x -> 51 m). This
+  // is a GAMEPLAY reach and is deliberately distinct from `REACH_GRAPPLE` above,
+  // which is the course AUTHORING cap fixed by the validator. It is read by the
+  // decor-orb reach test below, where "can the cuff actually get to this orb"
+  // is the question — and that answer moved when the reach did.
+  const grappleScale = (theme && theme.grapple && theme.grapple.rangeScale) || 1
+  const CUFF_REACH = REACH_GRAPPLE * grappleScale
   const colors = voidColors({}, theme)
   const accents = (theme && theme.accents) || {}
   // One field for the whole course: crystals are instanced per (shape, LOD),
@@ -535,7 +557,7 @@ export function buildVoidCourse(collision) {
   // the main line does not go, and links BACK on — an island with no route on
   // is a trap and `verify()` says so. These are where a player who is good
   // with the cuff gets rewarded for looking around, which is the whole point
-  // of giving them 34 m of grapple.
+  // of giving them a long cuff — 51 m here, the void's +50% reach (theme.js).
   const BRANCH_AT = [3, 8, 13, 19, 25, 30, 36, 41]
   BRANCH_AT.forEach((h, k) => {
     const base = nodes.get(heroIds[h])
@@ -865,8 +887,21 @@ export function buildVoidCourse(collision) {
    * far ruin districts are hundreds of metres past the play volume, so an
    * anchor there would be a hook the cuff can never reach — the same lie in the
    * opposite direction. Only orbs near the route are registered.
+   *
+   * RE-DERIVED AGAINST THE CUFF'S ACTUAL REACH, 2026-07-27. This is the one
+   * constant in the file that tracks the PLAYER's reach rather than the course
+   * authoring cap: it decides whether a floating orb is close enough to the
+   * route that the cuff can grab it somewhere along the way, so when the void's
+   * reach went from 34 m to 51 m (theme.js) this had to move with it or it would
+   * keep hiding orbs the longer cuff can now plainly hook. The test measures
+   * orb-to-node-CENTRE, and the player is closer than the centre by the island
+   * rim plus whatever they close in flight, so the value is the reach plus a
+   * fixed ~21 m of that slack (the slack is geometry, not reach, so it is added,
+   * not scaled): 34+21=55 held for the shipped cuff, and 51+21=72 holds now.
+   * These are decor anchors (never passed to `Archipelago.link`), so widening
+   * the net changes what glows and is hookable, never what `verify()` proves.
    */
-  const ORB_ANCHOR_REACH = 55
+  const ORB_ANCHOR_REACH = CUFF_REACH + 21
   // Thinned. Ethan: "I would say reduce overall number please... we cant have
   // decorations resembling them even if the colors differ."
   let orbSeq = 0
