@@ -1212,6 +1212,41 @@
   }
   .pickcard.on .crec { opacity: .95; }
 
+  /* --- the board proper: runs 2..5 under the record strip ----------------
+   *
+   * The strip above shows the ONE number that matters, and this is the rest of
+   * the same board — the runs that lost to it. It is deliberately quieter than
+   * the strip (smaller, dimmer, no medal) because a board is history and the
+   * record is the target; giving five rows equal weight would bury the number
+   * the player is actually chasing.
+   *
+   * Rows 2..5 only, because row 1 IS the strip. Rendering the leader twice was
+   * the first thing tried and it read as a bug.
+   *
+   * The list is empty until a SECOND run lands on this level under this mode,
+   * and an empty <ol> collapses to nothing — so a fresh board costs no vertical
+   * space and the card keeps the shape Ethan approved. */
+  .board {
+    list-style: none;
+    margin: 3px 0 0;
+    padding: 0;
+    font-size: 9px;
+    color: var(--m-dim);
+    opacity: .5;
+    font-variant-numeric: tabular-nums;
+  }
+  .board li {
+    display: flex;
+    gap: 6px;
+    line-height: 1.5;
+  }
+  /* The rank is fixed-width so the times form a column; without it a 2-digit
+     rank would shove one row's time out of alignment with the others. */
+  .board .rank { width: 8px; text-align: right; opacity: .6; }
+  .board .rparcels { opacity: .7; }
+  .board .rdate { margin-left: auto; opacity: .55; letter-spacing: .06em; }
+  .pickcard.on .board { opacity: .72; }
+
   /* --- rules cards: the smaller decision, at the smaller size ------------ */
   /* Three across, not two: the RULES row carries three cards in ascending
      difficulty where ROUTE carries two worlds, so it gets its own column count.
@@ -1763,6 +1798,7 @@
               <b class="rectime">&mdash;</b>
               <em class="recmode">no time yet</em>
             </span>
+            <ol class="board" data-board></ol>
           </span>
         </button>
 
@@ -1873,7 +1909,7 @@
           </span>
           <span class="cbody">
             <span class="crow">
-              <i class="lamp"></i><span class="cname">The Void</span>
+              <i class="lamp"></i><span class="cname">The Underworld</span>
               <span class="cnote" data-note>reloads</span>
             </span>
             <span class="cdesc">A 508 m climb through violet dark. Lit sigils, cut
@@ -1888,6 +1924,7 @@
               <b class="rectime">&mdash;</b>
               <em class="recmode">no time yet</em>
             </span>
+            <ol class="board" data-board></ol>
           </span>
         </button>
       </div>

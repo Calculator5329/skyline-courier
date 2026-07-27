@@ -387,17 +387,68 @@ export class Hud {
    * Written on a mode change and on a finish, never per frame — a record is a
    * fact about a run, not telemetry, exactly like `setMode`.
    */
-  setRecords(times, modeLabel) {
+  /**
+   * Paint both route cards' boards for one mode.
+   *
+   * `lists` is `{ skyline: [entry...], void: [entry...] }`, each already ranked
+   * fastest-first by `recordRun`. The leader goes in the strip and the rest go
+   * in the list below it — see the `.board` note in index.html for why the
+   * leader is not repeated.
+   *
+   * There is no "submit": a finished run is filed the moment the clock stops,
+   * so by the time this menu is on screen the board is already current. That is
+   * the whole reason the boards are local — a submit step would be a second
+   * chance to LOSE a run, and every run here is set by the person reading it.
+   */
+  setRecords(lists, modeLabel) {
     for (const btn of document.querySelectorAll('.mapbtn')) {
       const rec = btn.querySelector('[data-rec]')
       if (!rec) continue
-      const t = times ? times[btn.dataset.map] : null
+      const list = (lists && lists[btn.dataset.map]) || []
+      const t = list.length ? list[0].t : null
       const timeEl = rec.querySelector('.rectime')
       const modeEl = rec.querySelector('.recmode')
       const has = t != null
       rec.classList.toggle('has', has)
       if (timeEl) timeEl.textContent = has ? formatTime(t) : '—'
-      if (modeEl) modeEl.textContent = has ? (modeLabel || '') : 'no time yet'
+      // "FUN · 8/11" — the rules the time was set under, then what it collected.
+      // Both belong on the line for the same reason: a bare number is only a
+      // record if you know what it was a record AT, and a 47.98 that skipped
+      // three parcels is not the same run as a 47.98 that took all of them.
+      if (modeEl) modeEl.textContent = has ? [modeLabel, parcels(list[0])].filter(Boolean).join(' · ') : 'no time yet'
+
+      const board = btn.querySelector('[data-board]')
+      if (!board) continue
+      // Rebuilt rather than diffed: at most four rows, repainted only when the
+      // menu opens or the mode changes.
+      board.replaceChildren()
+      for (let i = 1; i < list.length; i++) {
+        const li = document.createElement('li')
+        const rank = document.createElement('span')
+        rank.className = 'rank'
+        rank.textContent = `${i + 1}`
+        const time = document.createElement('span')
+        time.textContent = formatTime(list[i].t)
+        li.append(rank, time)
+        const got = parcels(list[i])
+        if (got) {
+          const p = document.createElement('span')
+          p.className = 'rparcels'
+          p.textContent = got
+          li.append(p)
+        }
+        // Dates are optional because entries written before the board carried
+        // one are still valid runs, and dropping them to gain a column would be
+        // deleting the player's history to tidy a layout.
+        const when = shortDate(list[i].date)
+        if (when) {
+          const d = document.createElement('span')
+          d.className = 'rdate'
+          d.textContent = when
+          li.append(d)
+        }
+        board.append(li)
+      }
     }
   }
 
@@ -779,6 +830,33 @@ function currentVerb(p) {
   if (!p.grounded) return ''
   if (p.speed > TUNING.walkSpeed + 0.4) return 'sprint'
   return ''
+}
+
+/**
+ * "8/11" for a board entry, or '' if the entry does not know its own total.
+ *
+ * Entries written before `cpsTotal` existed carry `cps` and no denominator, and
+ * a lone "8" is meaningless — so those rows show a time and nothing else rather
+ * than a number that invites the wrong comparison. They are still real runs and
+ * they keep their rank.
+ */
+function parcels(entry) {
+  if (!entry || entry.cps == null || !entry.cpsTotal) return ''
+  return `${entry.cps}/${entry.cpsTotal}`
+}
+
+/**
+ * "12 Jul" for a board row, or '' for anything unparseable.
+ *
+ * Returns '' rather than throwing or printing "Invalid Date" because a board
+ * entry with a bad date is still a legitimate run — the time is the record and
+ * the date is decoration, so a bad date costs its own column and nothing else.
+ */
+function shortDate(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
 export function formatTime(t) {

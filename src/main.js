@@ -35,6 +35,21 @@ const MAX_FRAME = 0.1
 // one click away on the start overlay and is remembered thereafter.
 const MODE_KEY = 'skyline-courier:mode'
 
+/**
+ * The leaderboard storage key, declared UP HERE with the other storage keys
+ * rather than beside the board code at the bottom of the file, because module
+ * init paints the menu's boards long before that point is reached.
+ *
+ * It used to live down there, and the boards were empty on every fresh load —
+ * every time, silently, and correct the instant you touched the mode picker.
+ * `const` is in its temporal dead zone until the declaration EXECUTES, so
+ * `loadBoards()` at boot threw a ReferenceError reaching for this name, and its
+ * `catch` — written for private-mode storage failures — swallowed the error and
+ * returned `{}`. A rescue written for one failure quietly absorbed a different
+ * one, and turned "the code is broken" into "you have no records yet".
+ */
+const BOARD_KEY = 'skyline-courier:boards'
+
 function loadMode() {
   try {
     const v = localStorage.getItem(MODE_KEY)
@@ -467,6 +482,11 @@ function finishRun() {
     mode: getMode(),
     level: theme.name,
     cps: run.checkpointsHit,
+    // The DENOMINATOR travels with the run, because it is not a constant: the
+    // courses have different parcel counts and both are still being extended,
+    // so a board row that read "8" would silently change meaning the next time
+    // a checkpoint is added. Stored per entry, "8/11" stays true forever.
+    cpsTotal: level.checkpoints.length,
     date: new Date().toISOString(),
   })
   if (isBest) run.best = run.time
@@ -615,20 +635,32 @@ window.addEventListener('resize', () => {
 // level- and mode-agnostic — it would show a Skyline best over the Void. That
 // key is left untouched rather than migrated (its value cannot be honestly
 // placed on any one board), and nothing reads it now.
-const BOARD_KEY = 'skyline-courier:boards'
 const BOARD_MAX = 5              // keep the top five per board; the strip shows the top one
 
 function boardKey(level, mode) { return `${level}:${mode}` }
 
 function loadBoards() {
   try { return JSON.parse(localStorage.getItem(BOARD_KEY)) || {} }
-  catch { return {} }            // private mode, or a corrupt value
+  catch (err) {
+    // Still degrades to an empty board — a player in private mode should get a
+    // playable menu, not a crash — but it SAYS SO. The bare `catch` this
+    // replaces hid a ReferenceError for the whole life of the feature (see
+    // BOARD_KEY), and an empty board is indistinguishable from a new one, so
+    // there was nothing to notice. Silence was the bug; the fallback was fine.
+    console.warn('leaderboards unreadable, showing an empty board:', err)
+    return {}
+  }
+}
+
+/** One board's ranked entries, fastest first. Always an array, never null. */
+function boardList(boards, level, mode) {
+  return boards[boardKey(level, mode)] || []
 }
 
 /** Best (lowest) time on one board, or null if it has never been run. */
 function bestTime(boards, level, mode) {
-  const list = boards[boardKey(level, mode)]
-  return list && list.length ? list[0].t : null
+  const list = boardList(boards, level, mode)
+  return list.length ? list[0].t : null
 }
 
 /**
@@ -659,8 +691,11 @@ function recordRun(entry) {
  */
 function updateRecords(boards = loadBoards()) {
   const mode = getMode()
+  // Whole ranked lists, not just the leader: the card shows the record in its
+  // strip and the runs that lost to it underneath, and both come off the same
+  // array. `boardList` never returns null, so the HUD has no empty-board case.
   hud.setRecords(
-    { skyline: bestTime(boards, 'skyline', mode), void: bestTime(boards, 'void', mode) },
+    { skyline: boardList(boards, 'skyline', mode), void: boardList(boards, 'void', mode) },
     MODES[mode]?.label || mode,
   )
 }
