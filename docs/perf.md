@@ -67,6 +67,22 @@ half-resolution contact measured a 16–37% saving, and quartering total pixels
 roughly halves the frame. MSAA and the high-quality pixel-ratio cap were not
 changed by this audit.
 
+### 2026-07-27 handoff
+
+- **Shipped, closed:** checkpoints `2ee7105`, `3d66258`, and `e497570` contain
+  the event-driven scene walk, frozen level matrices, nearest-16 emitter
+  selection, single sun-target update, combined audit switch, and live-rAF
+  instrument described above.
+- **Named, not built:** no MSAA, contact resolution, render scale, or
+  pixel-ratio default changed; those are visible quality-menu decisions, not
+  image-invariant frame-audit work.
+- **Found, unresolved:** this Codex sandbox cannot launch Chromium
+  (`sandbox_host_linux EPERM`). Run `node tools/perfbaseline.mjs`, then
+  `node tools/perfbaseline.mjs --live --headed`, outside the sandbox and paste
+  the emitted old/new CPU, synced, visual, 1080p, and 1440p rows into the
+  2026-07-27 changelog entry. No after value has been inferred from static
+  analysis.
+
 ## The symptom, and what it is not
 
 "The void lags."

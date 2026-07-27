@@ -16,12 +16,6 @@ fragment writes positive view depth and coverage `1`, so the shipped shader
 uses the depth it already fetched. This removes up to 27 dependent reads per
 shaded pixel without changing any ray, threshold, sample count, or expression.
 
-The shipped shader now uses the depth it already fetched as the coverage test.
-That removes one dependent texture read from every one of 8 broad-AO taps, 5
-near-AO taps, and up to 14 contact-ray steps — **up to 27 reads per shaded
-pixel** — without changing a ray position, threshold, sample count, buffer,
-effect, or output expression.
-
 `tools/perfbaseline.mjs` restores all five old paths as one executable
 before-arm. It captures the complete skyline and void baseline first, then the
 shipped arm, reports CPU and GPU-synced ms/f, and fails if luminance or any
