@@ -238,6 +238,12 @@ const KEY_MAP = {
 }
 
 window.addEventListener('keydown', (e) => {
+  // A browser shortcut is never a game action. CTRL+R reloads — it used to
+  // respawn you first, on the way out — and CTRL+W closes the tab. Anything
+  // held with CTRL or META belongs to the browser, so hand it straight over.
+  // SHIFT is ours (sprint) and ALT is left alone deliberately: it opens menus
+  // on some platforms and we do not bind it.
+  if (e.ctrlKey || e.metaKey) return
   if (e.code === 'Space') {
     if (!input.jumpHeld) input.jumpPressed = true
     input.jumpHeld = true
@@ -263,6 +269,17 @@ window.addEventListener('keydown', (e) => {
     // is the worst kind of working.
     if (run.finished) resetRun()
     else respawn()
+    return
+  }
+  if (e.code === 'KeyM') {
+    // THE MENU KEY. Ethan: "menu button being esc is awkward in full screen
+    // mode" — and he is right, because ESCAPE is not ours. In fullscreen the
+    // browser spends it on leaving fullscreen, so the one key that raised the
+    // menu also threw away the window you were playing in. M just drops the
+    // pointer lock, which raises the menu on its own (see pointerlockchange),
+    // and fullscreen is untouched.
+    document.exitPointerLock()
+    e.preventDefault()
     return
   }
   if (e.code === 'KeyP') {
@@ -367,6 +384,7 @@ document.addEventListener('pointerlockchange', () => {
   // Photo mode is the one way to be unlocked WITHOUT the overlay — that is the
   // whole point of it.
   hud.setOverlay(!locked && !photoMode)
+  if (!locked) paintRestart()
   // Whatever raises the panel raises the MENU. Coming back from a run to the
   // records screen you left open ten minutes ago would hide the one control
   // that starts another one.
@@ -931,7 +949,18 @@ function paintPane(name) {
   for (const pane of document.querySelectorAll('.mpane')) {
     pane.classList.toggle('hidden', pane.dataset.pane !== name)
   }
-  for (const tab of document.querySelectorAll('.mtab')) {
+  const restartBtn = document.getElementById('restart')
+restartBtn?.addEventListener('click', () => {
+  resetRun()
+  paintRestart()
+})
+
+/** The restart button only exists once there is something to restart. */
+function paintRestart() {
+  restartBtn?.classList.toggle('hidden', !run.started && !run.finished)
+}
+
+for (const tab of document.querySelectorAll('.mtab')) {
     tab.setAttribute('aria-selected', tab.dataset.pane === name ? 'true' : 'false')
   }
 }
@@ -944,6 +973,17 @@ function showPane(name) {
     paintRecordsScreen()
   }
   paintPane(name)
+}
+
+const restartBtn = document.getElementById('restart')
+restartBtn?.addEventListener('click', () => {
+  resetRun()
+  paintRestart()
+})
+
+/** The restart button only exists once there is something to restart. */
+function paintRestart() {
+  restartBtn?.classList.toggle('hidden', !run.started && !run.finished)
 }
 
 for (const tab of document.querySelectorAll('.mtab')) {
@@ -1063,27 +1103,20 @@ segControl('set-look', LOOK_NAMES, () => readLook(), (n) => {
 
 // ------------------------------------------------------- the CTRL+W problem
 //
-// Ethan: "ctrl W just closed the tab for me we should fix".
+// Ethan: "ctrl W just closed the tab for me we should fix". CTRL+W cannot be
+// blocked — it is reserved by the browser and never reaches the page.
 //
-// It cannot be blocked. CTRL+W is reserved by the browser and never reaches the
-// page — preventDefault on it does nothing, by design, in every engine. So this
-// is defence in depth rather than a fix:
+// The first attempt at mitigation was a `beforeunload` guard during a run, and
+// it was WRONG: beforeunload cannot tell a close from a refresh, so it also
+// blocked reloading the page ("hmm wont let me refresh page"). Guarding against
+// a rare accident by taxing a common deliberate action is a bad trade, and it
+// is gone.
 //
-//   1. C is now the ADVERTISED slide key (it was already bound). CTRL still
-//      works, but the strip and the controls table say C, because CTRL+W is
-//      slide-while-running-forward, which is the single most common input in
-//      the game. A binding that closes the tab during normal play is a bad
-//      binding no matter whose shortcut it is.
-//   2. This guard. An interrupted RUN gets the browser's "leave site?" prompt,
-//      so the reflex costs a dialog instead of the run.
-//
-// Only while a run is actually in progress. A confirm dialog on a menu you were
-// finished with is the kind of thing that makes people close the tab on purpose.
-window.addEventListener('beforeunload', (e) => {
-  if (!run.started || run.finished) return
-  e.preventDefault()
-  e.returnValue = ''        // Chrome still requires this to show the prompt
-})
+// What is left is the part that actually helps: C is the advertised slide key
+// (see KEY_MAP and the controls table), so the common input is no longer
+// CTRL+W. And the handlers below ignore anything held with CTRL or META, so a
+// browser shortcut never doubles as a game action — CTRL+R used to respawn you
+// on its way to reloading.
 
 // --------------------------------------------------------------- debug API
 

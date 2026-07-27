@@ -1358,6 +1358,36 @@
     #finish.nudge .fkeys { animation: none; opacity: 1; }
   }
 
+  #restart {
+    pointer-events: auto;
+    appearance: none;
+    font: inherit;
+    cursor: pointer;
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 7px 14px;
+    font-size: 10px;
+    letter-spacing: .26em;
+    text-transform: uppercase;
+    color: var(--m-dim);
+    background: rgba(0, 0, 0, .22);
+    border: 1px solid var(--m-line);
+    border-radius: 2px;
+    transition: color .16s, border-color .16s;
+  }
+  #restart:hover { color: var(--m-accent-hi); border-color: var(--m-line-on); }
+  #restart em {
+    font-style: normal;
+    display: block;
+    margin-top: 3px;
+    font-size: 8px;
+    letter-spacing: .14em;
+    opacity: .5;
+    text-transform: none;
+  }
+  #restart.hidden { display: none; }
+
   .mpanes { display: grid; }
   .mpanes > .mpane { grid-area: 1 / 1; }
   /* `visibility` also takes the pane's buttons out of the tab order, which
@@ -2100,7 +2130,7 @@
   <div class="fcap">route complete</div>
   <div class="ftime">0.00</div>
   <div class="fmeta"><span id="fverdict"></span><i></i><span id="fparcels"></span></div>
-  <div class="fkeys"><b>R</b> run it again<span>&middot;</span><b>ESC</b> menu</div>
+  <div class="fkeys"><b>R</b> run it again<span>&middot;</span><b>M</b> menu</div>
 </div>
 
 <div id="overlay">
@@ -2429,7 +2459,14 @@
 
     <div class="go">
       <button type="button" id="cta">click to run</button>
-      <div id="esc">escape releases the cursor at any time</div>
+      <!-- A VISIBLE total reset. Ethan: "no button to totally reset?" R does it
+           and the finish plate says so, but a key you have to know is not a
+           control — it is a secret. Hidden until there is a run to throw away,
+           because a restart button on a fresh boot is a button that does
+           nothing. -->
+      <button type="button" id="restart" class="hidden" data-nostart>restart the run
+        <em>from the very beginning</em></button>
+      <div id="esc">M raises this menu &middot; ESCAPE also releases the cursor</div>
     </div>
 
     <div class="ref">
@@ -2518,8 +2555,10 @@
           <b>R</b><span>restart from the last checkpoint</span>
           <b>P</b><span>photo mode &mdash; freeze the frame and free the cursor, without this
             menu. click to resume</span>
+          <b>M</b><span>raise this menu &mdash; without leaving fullscreen, which is
+            what ESCAPE costs you</span>
           <b>F11</b><span>fullscreen</span>
-          <b>ESC</b><span>release the cursor</span>
+          <b>ESC</b><span>release the cursor (and leave fullscreen)</span>
         </div>
         </details>
       </div>
