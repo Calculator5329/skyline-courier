@@ -465,6 +465,21 @@ export class Player {
     // good for. See `wallCoyote`.
     this.wallCoyote = 0
     this.lastWallNormal = new THREE.Vector3()
+    /**
+     * The horizontal normal of the wall we LAST launched off, and whether that
+     * launch is still "hot" — i.e. we have not touched ground, wall-run or climb
+     * since. Together they forbid chaining another wall-jump off the *same* face.
+     *
+     * A wall-jump off a face you just kicked off, over and over, with nothing
+     * else touched in between, is the underside-climb exploit: `_tryJump` finds
+     * the island's vertical face head-on and `velocity.y = max(vy,0)+wallJumpUp`
+     * stacks on the residual lift, so the player walks straight up one side.
+     * docs/course-design.md is explicit that a wall-jump chain is unbounded only
+     * "while walls ALTERNATE"; a chain off a single face is the bug. See the gate
+     * in `_tryJump`.
+     */
+    this.lastWallJumpNormal = new THREE.Vector3()
+    this.wallJumpChain = false
     this.dashTimer = 0
     this.dashCooldown = 0
     this.dashReady = true
@@ -716,6 +731,10 @@ export class Player {
     this.wallCooldown = 0
     this.climbCooldown = 0
     this.wallCoyote = 0
+    // A respawn is fresh contact, so the same-wall guard resets with everything
+    // else in-flight — otherwise the first wall-jump after a checkpoint could be
+    // wrongly refused for matching a wall the previous life had launched off.
+    this.wallJumpChain = false
   }
 
   update(dt, input, yaw, pitch = 0) {
@@ -1183,6 +1202,9 @@ export class Player {
       this.dashReady = true
       this.airJumpsLeft = T.airJumps
       this.airChainLeft = T.grappleAirChain
+      // Real contact ends the wall-jump chain: the next wall-jump is a fresh one
+      // and may fire off any face, including the one you last launched from.
+      this.wallJumpChain = false
     }
 
     if (input.dashPressed && this.dashReady && this.dashCooldown <= 0 && this.dashTimer <= 0) {
@@ -1270,12 +1292,36 @@ export class Player {
         }
       }
 
+      // SAME-WALL GUARD. A chain that ALTERNATES walls is unbounded by design
+      // (docs/course-design.md); a chain off ONE face is the underside-climb
+      // exploit. So while a wall-jump is still hot — no ground, wall-run or
+      // climb contact since it fired — refuse another off a wall whose
+      // horizontal normal still points essentially the same way. Opposing walls
+      // (a chimney, dot ≈ -1) and corners (dot ≈ 0) sail through; only the face
+      // you are trying to walk up (dot ≈ 1) is caught, and the press falls
+      // through to the air jump below rather than being eaten.
+      if (have && this.wallJumpChain) {
+        const hl = Math.hypot(nx, nz) || 1
+        const dot = (nx / hl) * this.lastWallJumpNormal.x + (nz / hl) * this.lastWallJumpNormal.z
+        if (dot > 0.5) have = false
+      }
+
       if (have) {
         this.jumpBuffered = 0
         this.velocity.x += nx * T.wallJumpOut
         this.velocity.z += nz * T.wallJumpOut
         this.velocity.y = Math.max(this.velocity.y, 0) + T.wallJumpUp
         this.wallCooldown = T.wallRegrabCooldown
+        // Remember the face we just launched off (horizontal, unit) and mark the
+        // chain hot, so the guard above can refuse a re-kick off the same wall
+        // until real contact clears it. Cleared in `_updateAbilities` (ground /
+        // wall-run) and `_tryClimb` (climb) — every way the player legitimately
+        // re-touches a surface.
+        {
+          const hl = Math.hypot(nx, nz) || 1
+          this.lastWallJumpNormal.set(nx / hl, 0, nz / hl)
+          this.wallJumpChain = true
+        }
         // One wall, one verb. Kicking off ends a climb as well as a run, or
         // the climb keeps driving the player back into the wall they just
         // left and the jump reads as having done nothing.
@@ -1603,6 +1649,10 @@ export class Player {
     this.wallSide = 0
     this.grounded = false
     this.dashReady = true
+    // A vertical wall-run is genuine wall contact, so it ends the same-wall
+    // chain guard — a climb, then a jump off the wall you climbed, is one clean
+    // sequence and must never be refused.
+    this.wallJumpChain = false
     // A vertical wall-run is contact, so it pays for the cuff like a landing
     // does. Without this, a grapple into a wall-climb — the exact combination
     // docs/course-design.md asks the middle of the course to demand — would
