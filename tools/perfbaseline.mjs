@@ -9,18 +9,24 @@
  *
  *   node tools/perfbaseline.mjs [--no-build] [--json]
  *     [--theme skyline|void|all] [--frames 90] [--sync-frames 40]
+ *   node tools/perfbaseline.mjs --calibrate-visual 5 [--theme skyline]
+ *   node tools/perfbaseline.mjs --quality-levels
+ *     [--only terrace,crossing,tower,closeup] [--repeats 4]
+ *     [--screenshot-shot closeup] [--screenshot-out /durable/path]
  *
  * The baseline is executable, not a stale screenshot: the renderer keeps its
  * old contact lookup, periodic scene walk, full emitter sort and automatic
  * static matrices behind one audit switch. This command captures that arm for
  * every shot before it captures the shipped arm.
- * It exits non-zero if luminance or any p1/p50/p99 value moves beyond tolerance.
+ * It exits non-zero if HIGH's luminance or any p1/p50/p99 value moves beyond
+ * tolerance. Balanced and Lite intentionally move the image and are reported
+ * by `--quality-levels`; they are not inputs to this image-invariance gate.
  * Frame time is evidence, not a gate: noisy machines may make a correct
  * optimization look slower, while a visual mismatch is always a failure.
  */
 
-import { readFile } from 'node:fs/promises'
-import { extname, normalize, resolve } from 'node:path'
+import { mkdir, readFile } from 'node:fs/promises'
+import { extname, join, normalize, resolve } from 'node:path'
 import { chromium } from 'playwright'
 import { analyzeBuffer } from './analyze.mjs'
 import { SHOTS, SHOT_NAMES, VOID_SHOTS, VOID_SHOT_NAMES } from './shots.mjs'
@@ -39,11 +45,11 @@ const MIME = {
   '.ogg': 'audio/ogg',
 }
 
-// The analyzer reports one decimal place. Both arms boot with the same seeded
-// procedural world and pump the same frame count, so the only remaining
-// measurement floor is one reporting quantum. 0.2 allows one quantum of
-// rounding on each side without accepting a visible percentile movement.
-const VISUAL_TOLERANCE = 0.2
+// The analyzer reports one decimal place. The high-only gate first takes five
+// IDENTICAL captures in fresh seeded contexts, records every per-metric range,
+// then sets its tolerance exactly one reporting quantum above that run's
+// observed maximum. The candidate arm cannot influence this number.
+const VISUAL_REPORTING_QUANTUM = 0.1
 
 function seededRandom() {
   let s = 0x5c0117
@@ -230,23 +236,24 @@ function visual(image) {
   }
 }
 
-function compare(ref, got) {
+function compare(ref, got, tolerance) {
   const deltas = {}
   let pass = true
   for (const key of ['lum', 'p1', 'p50', 'p99']) {
     deltas[key] = +(got[key] - ref[key]).toFixed(1)
-    if (Math.abs(deltas[key]) > VISUAL_TOLERANCE) pass = false
+    if (Math.abs(deltas[key]) > tolerance) pass = false
   }
   return { pass, deltas }
 }
 
-async function captureTheme(browser, theme, args, optimized) {
+async function captureTheme(browser, theme, args, optimized, quality = 'high') {
   const isVoid = theme === 'void'
   const table = isVoid ? VOID_SHOTS : SHOTS
   const names = isVoid ? VOID_SHOT_NAMES : SHOT_NAMES
-  const query = isVoid ? '?theme=void' : ''
+  const query = new URLSearchParams({ quality })
+  if (isVoid) query.set('theme', 'void')
   const { context, page, errors } = await openFromDist(
-    browser, `http://skyline.test/${query}`, args.width, args.height)
+    browser, `http://skyline.test/?${query}`, args.width, args.height)
   const rows = []
   try {
     await hideChrome(page, { hud: false })
@@ -286,12 +293,233 @@ async function captureTheme(browser, theme, args, optimized) {
   }
 }
 
-function pairResults(baseline, optimized) {
+function calibrationRanges(captures) {
+  const rows = []
+  for (const theme of captures[0].map((capture) => capture.theme)) {
+    const themeCaptures = captures.map(
+      (capture) => capture.find((candidate) => candidate.theme === theme)
+    )
+    for (const first of themeCaptures[0].rows) {
+      const metrics = {}
+      for (const key of ['lum', 'p1', 'p50', 'p99']) {
+        const values = themeCaptures.map(
+          (capture) => capture.rows.find((row) => row.shot === first.shot).visual[key]
+        )
+        metrics[key] = {
+          min: Math.min(...values),
+          max: Math.max(...values),
+          range: +(Math.max(...values) - Math.min(...values)).toFixed(1),
+        }
+      }
+      rows.push({ theme, shot: first.shot, metrics })
+    }
+  }
+  return rows
+}
+
+async function measureVisualCalibration(browser, themes, args, count) {
+  if (!Number.isInteger(count) || count < 5) {
+    throw new Error('visual calibration requires an integer capture count >= 5')
+  }
+  const captures = []
+  for (let run = 0; run < count; run++) {
+    const sample = []
+    for (const theme of themes) {
+      // Exact same high-quality arm every time: no optimization switch changes
+      // between captures. A fresh context exposes real capture/driver noise.
+      sample.push(await captureTheme(browser, theme, args, true, 'high'))
+    }
+    captures.push(sample)
+  }
+  const rows = calibrationRanges(captures)
+  const observedMax = Math.max(
+    ...rows.flatMap((row) => Object.values(row.metrics).map((metric) => metric.range))
+  )
+  return {
+    quality: 'high',
+    captures: count,
+    observedMax,
+    tolerance: +(observedMax + VISUAL_REPORTING_QUANTUM).toFixed(1),
+    rows,
+  }
+}
+
+function reportVisualCalibration(calibration) {
+  const { captures, observedMax, tolerance, rows } = calibration
+  console.log(`\nhigh-only visual reproducibility — ${captures} identical captures`)
+  console.log('| theme | shot | lum range | p1 range | p50 range | p99 range |')
+  console.log('| --- | --- | ---: | ---: | ---: | ---: |')
+  for (const row of rows) {
+    console.log(`| ${row.theme} | ${row.shot} | ${row.metrics.lum.range} | ${row.metrics.p1.range} | ${row.metrics.p50.range} | ${row.metrics.p99.range} |`)
+  }
+  console.log(`\nobserved maximum range: ${observedMax} luma units`)
+  console.log(`high-only gate tolerance: ±${tolerance} (observed max + one 0.1 reporting quantum)\n`)
+}
+
+async function runVisualCalibration(browser, themes, args, count, json) {
+  const calibration = await measureVisualCalibration(browser, themes, args, count)
+  if (json) {
+    console.log(JSON.stringify({ calibration: true, ...calibration }, null, 2))
+    return
+  }
+  reportVisualCalibration(calibration)
+}
+
+const QUALITY_NAMES = ['high', 'balanced', 'lite']
+
+function qualityShotNames(cli) {
+  const names = cli.only && cli.only !== true
+    ? String(cli.only).split(',').map((name) => name.trim()).filter(Boolean)
+    : ['terrace', 'crossing', 'tower', 'closeup']
+  const unknown = names.filter((name) => !SHOTS[name])
+  if (unknown.length) {
+    throw new Error(`unknown skyline shots: ${unknown.join(', ')}`)
+  }
+  return names
+}
+
+async function captureQualitySize(browser, width, height, args, options) {
+  const { context, page, errors } = await openFromDist(
+    browser, 'http://skyline.test/?quality=high', width, height)
+  try {
+    await hideChrome(page, { hud: false })
+    const samples = Object.fromEntries(
+      QUALITY_NAMES.map((quality) => [
+        quality,
+        Object.fromEntries(options.names.map((shot) => [shot, []])),
+      ])
+    )
+    for (let repeat = 0; repeat < options.repeats; repeat++) {
+      const order = QUALITY_NAMES.slice(repeat % QUALITY_NAMES.length)
+        .concat(QUALITY_NAMES.slice(0, repeat % QUALITY_NAMES.length))
+      for (const shot of options.names) {
+        for (const quality of order) {
+          await page.evaluate((name) => window.__game.setQuality(name), quality)
+          const measured = await pumpShot(page, shot, {
+            frames: args.frames,
+            dt: DEFAULTS.dt,
+            syncFrames: args.syncFrames,
+          })
+          samples[quality][shot].push(measured.frameMs)
+        }
+      }
+    }
+
+    const rows = QUALITY_NAMES.map((quality) => {
+      const shots = options.names.map((shot) => ({
+        shot,
+        samples: samples[quality][shot],
+        // Scheduler noise is one-sided. This matches perfprobe's established
+        // minimum-of-interleaved-repeats hygiene.
+        frameMs: Math.min(...samples[quality][shot]),
+      }))
+      return {
+        quality,
+        shots,
+        meanMs: +(shots.reduce((sum, shot) => sum + shot.frameMs, 0) / shots.length)
+          .toFixed(3),
+        maxMs: Math.max(...shots.map((shot) => shot.frameMs)),
+      }
+    })
+
+    const screenshots = []
+    if (options.screenshotOut && width === 1600 && height === 900) {
+      await mkdir(options.screenshotOut, { recursive: true })
+      for (const quality of QUALITY_NAMES) {
+        await page.evaluate((name) => window.__game.setQuality(name), quality)
+        await pumpShot(page, options.screenshotShot, {
+          frames: args.frames,
+          dt: DEFAULTS.dt,
+          syncFrames: args.syncFrames,
+        })
+        const path = join(options.screenshotOut, `${quality}.png`)
+        const png = await page.screenshot({ path, type: 'png' })
+        screenshots.push({
+          quality,
+          shot: options.screenshotShot,
+          path,
+          visual: visual(analyzeBuffer(png)),
+        })
+      }
+    }
+    return {
+      width,
+      height,
+      gl: await glRenderer(page),
+      rows,
+      screenshots,
+      errors,
+    }
+  } finally {
+    await context.close()
+  }
+}
+
+function reportQualityLevels(results, options) {
+  console.log(`\nquality levels — ${options.names.join(', ')}; minimum of ${options.repeats} interleaved repeats per shot`)
+  console.log('| level | 1600x900 mean ms/f | 2560x1440 mean ms/f | 1440p / 240 Hz |')
+  console.log('| --- | ---: | ---: | --- |')
+  const bySize = (quality, width) => results
+    .find((result) => result.width === width).rows
+    .find((row) => row.quality === quality)
+  for (const quality of QUALITY_NAMES) {
+    const small = bySize(quality, 1600)
+    const large = bySize(quality, 2560)
+    const verdict = large.maxMs <= 1000 / 240
+      ? 'reaches 240 Hz in every shot'
+      : `misses 240 Hz (worst ${large.maxMs} ms)`
+    console.log(`| ${quality} | ${small.meanMs} | ${large.meanMs} | ${verdict} |`)
+  }
+  for (const result of results) {
+    console.log(`\n${result.width}x${result.height} — ${result.gl.renderer}`)
+    for (const row of result.rows) {
+      console.log(`  ${row.quality}: ${row.shots.map((shot) => `${shot.shot}=${shot.frameMs}`).join(', ')}`)
+    }
+    for (const error of result.errors) console.log(`  error: ${error}`)
+  }
+  const screenshots = results.flatMap((result) => result.screenshots)
+  if (screenshots.length) {
+    console.log(`\nsame-shot captures (${options.screenshotShot}):`)
+    for (const shot of screenshots) console.log(`  ${shot.quality}: ${shot.path}`)
+  }
+  console.log('')
+}
+
+async function runQualityLevels(browser, cli, args) {
+  const options = {
+    names: qualityShotNames(cli),
+    repeats: num(cli.repeats, 4),
+    screenshotShot: cli['screenshot-shot'] && cli['screenshot-shot'] !== true
+      ? String(cli['screenshot-shot'])
+      : 'closeup',
+    screenshotOut: cli['screenshot-out'] && cli['screenshot-out'] !== true
+      ? resolve(String(cli['screenshot-out']))
+      : null,
+  }
+  if (!Number.isInteger(options.repeats) || options.repeats < 2) {
+    throw new Error('--repeats must be an integer >= 2')
+  }
+  if (!SHOTS[options.screenshotShot]) {
+    throw new Error(`unknown screenshot shot: ${options.screenshotShot}`)
+  }
+  const results = []
+  for (const [width, height] of [[1600, 900], [2560, 1440]]) {
+    results.push(await captureQualitySize(browser, width, height, args, options))
+  }
+  if (cli.json) {
+    console.log(JSON.stringify({ qualityLevels: true, options, results }, null, 2))
+  } else {
+    reportQualityLevels(results, options)
+  }
+  if (results.some((result) => result.errors.length)) process.exitCode = 1
+}
+
+function pairResults(baseline, optimized, tolerance) {
   return baseline.map((before) => {
     const after = optimized.find((candidate) => candidate.theme === before.theme)
     const rows = before.rows.map((a) => {
       const b = after.rows.find((candidate) => candidate.shot === a.shot)
-      const check = compare(a.visual, b.visual)
+      const check = compare(a.visual, b.visual, tolerance)
       return {
         shot: a.shot,
         before: a,
@@ -304,8 +532,9 @@ function pairResults(baseline, optimized) {
   })
 }
 
-function report(results) {
-  console.log(`\nvisual tolerance: ±${VISUAL_TOLERANCE} luma units per lum/p1/p50/p99`)
+function report(results, calibration) {
+  reportVisualCalibration(calibration)
+  console.log(`visual tolerance: ±${calibration.tolerance} luma units per lum/p1/p50/p99`)
   for (const result of results) {
     console.log(`\n${result.theme} — ${result.gl.renderer}`)
     console.log('| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | CPU ms/f | synced ms/f | visual |')
@@ -342,8 +571,22 @@ async function main() {
   const browser = await launchBrowser()
   let baseline
   let optimized
+  let calibration
   try {
     const themes = wanted === 'all' ? ['skyline', 'void'] : [wanted]
+    if (cli['calibrate-visual']) {
+      await runVisualCalibration(
+        browser, themes, args, num(cli['calibrate-visual'], 0), !!cli.json)
+      return
+    }
+    if (cli['quality-levels']) {
+      await runQualityLevels(browser, cli, args)
+      return
+    }
+    // Calibrate from identical HIGH captures before either comparison arm.
+    // This is deliberately part of every gate run: a stale constant is what
+    // manufactured the original failures when terrace p99 moved by 0.7.
+    calibration = await measureVisualCalibration(browser, themes, args, 5)
     // The full current-tree baseline is deliberately completed before any
     // optimized arm is measured.
     baseline = []
@@ -358,9 +601,9 @@ async function main() {
     await browser.close()
   }
 
-  const results = pairResults(baseline, optimized)
-  if (cli.json) console.log(JSON.stringify({ tolerance: VISUAL_TOLERANCE, results }, null, 2))
-  else report(results)
+  const results = pairResults(baseline, optimized, calibration.tolerance)
+  if (cli.json) console.log(JSON.stringify({ calibration, results }, null, 2))
+  else report(results, calibration)
   if (results.some((r) => r.rows.some((s) => !s.pass))) process.exitCode = 1
 }
 

@@ -1,5 +1,75 @@
 # Lite Mode
 
+## 2026-07-27 quality-level correction
+
+The three names now select three different contact-pass budgets even on a
+device-pixel-ratio-1 display. `high` is untouched: its object remains the
+shipped reference image byte for byte. `balanced` retains a smaller, shorter
+contact/AO pass. `lite` removes that pass because the measured no-contact floor
+is the only existing lever large enough to clear 240 Hz at native 1440p.
+
+| knob | `high` (default) | `balanced` | `lite` |
+| --- | ---: | ---: | ---: |
+| devicePixelRatio cap | 2 | 1.5 | 1 |
+| contact-shadow buffer scale | 0.5 | 0.375 | off (0.25 diagnostic value) |
+| march steps | 14 | 10 | off (8 diagnostic value) |
+| broad / near AO taps | 8 / 5 | 6 / 4 | off (4 / 2 diagnostic values) |
+| contact shadows + AO | on | on | **off** |
+
+### Honest performance evidence
+
+The representative mean is terrace + crossing + tower + closeup. The values
+below are only measurements already produced on the RTX 5070 Ti; an em dash is
+deliberately not an estimate. This Codex lane can build the game but Chromium
+startup is denied by its managed sandbox before a page exists
+(`sandbox_host_linux.cc:41`, `Operation not permitted`).
+
+| level / exact arm | 1600x900 mean ms/f | 2560x1440 mean ms/f | 1440p at 240 Hz |
+| --- | ---: | ---: | --- |
+| `high`, shipped reference | **2.88** | **5.46** | **misses** 4.167 ms |
+| `balanced`, new 0.375 / 10 / 6 / 4 | — | — | outside-sandbox capture required |
+| `lite`, exact no-contact arm | — | **2.94** | **reaches** 4.167 ms |
+
+The 1440p means are computed from the recorded per-shot rows, not inferred from
+the knob values: High is 4.80 / 5.52 / 5.04 / 6.47 ms; Lite's exact
+no-contact implementation is 2.90 / 3.11 / 2.57 / 3.18 ms. Thus the evidence
+supports disabling the pass for Lite and plainly establishes that High misses
+while Lite reaches 240 Hz. It does **not** establish a Balanced verdict or a
+1600x900 Lite number, so this document does not manufacture either one.
+
+Run the fail-capable, socket-free closeout outside the managed Codex sandbox:
+
+```sh
+node tools/perfbaseline.mjs --quality-levels \
+  --only terrace,crossing,tower,closeup --repeats 4 \
+  --screenshot-shot closeup --screenshot-out docs/captures/quality-levels
+```
+
+That command interleaves every level, takes the minimum of four GPU-synced
+repeats per shot, prints the two-resolution table and writes one `closeup`
+screenshot per level from the same camera. Those three screenshots cannot be
+truthfully published from this lane: Chromium never launched, and this task's
+ownership contract also excludes new files under `docs/captures/`. The command
+exists so the outside-sandbox verifier can close both evidence gaps without
+using a listening socket.
+
+### High-only visual gate calibration
+
+The invariant gate is intentionally scoped to `high`; Balanced and Lite are
+expected to move the image. Two captures had already shown a **0.7 luma-unit
+range at skyline terrace p99**, disproving the old asserted 0.2 threshold.
+Every gate run now takes five identical High captures first, records the
+per-shot lum/p1/p50/p99 ranges, and sets that run's tolerance exactly one 0.1
+analyzer reporting quantum above the observed maximum. The candidate arm
+cannot influence the tolerance. Inspect calibration alone with:
+
+```sh
+node tools/perfbaseline.mjs --calibrate-visual 5 --theme all
+```
+
+<details>
+<summary>2026-07-26 investigation (historical; level assignments below are superseded)</summary>
+
 What each graphics quality level changes, what it saves, and what it costs to
 look at. Measured 2026-07-26, RTX 5070 Ti, ANGLE/Chromium headless, alongside
 `docs/perf.md` — read that first, it says where the frame time goes and lists
@@ -188,3 +258,5 @@ filed in `docs/roadmap.md`. **Promoting half-res contact from `balanced` into
 `high` would buy 16–37% of the frame on every shot on both themes**, at the
 cost described above. The plumbing is already in place; it is a one-line change
 to `contactScale` in `src/render/quality.js`.
+
+</details>
