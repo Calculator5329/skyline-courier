@@ -1485,6 +1485,55 @@
     transition: color .16s, border-color .16s, background .16s;
   }
   .seg:hover, .toggle:hover { color: var(--m-ink); border-color: var(--m-line-on); }
+  .setactions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--m-line);
+  }
+  #settings-state {
+    margin-right: auto;
+    font-size: 9px;
+    letter-spacing: .08em;
+    color: var(--m-dim);
+  }
+  #settings-state[data-dirty="true"] {
+    color: var(--m-accent-hi);
+  }
+  #settings-state[data-dirty="true"]::before {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-right: 7px;
+    border-radius: 50%;
+    background: var(--m-accent);
+    box-shadow: 0 0 8px var(--m-accent);
+  }
+  #settings-apply {
+    pointer-events: auto;
+    appearance: none;
+    font: inherit;
+    cursor: pointer;
+    padding: 7px 18px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--m-panel-b);
+    background: linear-gradient(180deg, var(--m-accent-hi), var(--m-accent));
+    border: 1px solid var(--m-accent-hi);
+    border-radius: 2px;
+  }
+  #settings-apply:disabled {
+    cursor: default;
+    color: var(--m-dim);
+    background: rgba(0, 0, 0, .18);
+    border-color: var(--m-line);
+    opacity: .55;
+  }
 
   /* --- settings sliders ---------------------------------------------------
    *
@@ -2511,8 +2560,8 @@
             <b id="set-music-val">38</b>
           </div>
         </div>
-        <div class="setnote">the score follows your speed &mdash; at zero the world
-          keeps its own sound</div>
+        <div class="setnote">previews while dragging; Apply saves it. At zero the
+          world keeps its own sound</div>
 
         <div class="setrow">
           <label for="set-sensitivity">Mouse sensitivity</label>
@@ -2523,8 +2572,7 @@
             <b id="set-sensitivity-val">0.0021</b>
           </div>
         </div>
-        <div class="setnote">applies to the next mouse movement &mdash; no reload
-          or new run</div>
+        <div class="setnote">previews on the next mouse movement; Apply saves it</div>
 
         <div class="setrow">
           <label>Movement</label>
@@ -2543,8 +2591,13 @@
           <label>Quality</label>
           <div class="segs" id="set-quality"></div>
         </div>
-        <div class="setnote">pixel ratio and effect taps. Takes effect on the next
-          frame, no reload</div>
+        <div class="setnote">pixel ratio and effect taps. Apply updates the running
+          game on the next frame, no reload</div>
+
+        <div class="setactions">
+          <span id="settings-state" role="status" aria-live="polite">all changes applied</span>
+          <button type="button" id="settings-apply" data-nostart disabled>Apply</button>
+        </div>
       </div>
 
       <div class="pick">

@@ -101,15 +101,7 @@ setMode(loadMode())
 
 // ----------------------------------------------------------------- quality
 
-/**
- * Graphics quality level. See `src/render/quality.js` and `docs/lite-mode.md`.
- *
- * There is NO UI for this yet, by design — the settings menu is being reworked
- * and this lane is the plumbing. It is settable from the console
- * (`__game.setQuality('lite')`) and it persists, so the level can be evaluated
- * and a menu item can be wired to `setQuality` later without touching the
- * renderer again. `docs/roadmap.md` carries the UI item.
- */
+/** Graphics quality level. See `src/render/quality.js` and `docs/lite-mode.md`. */
 const QUALITY_KEY = 'skyline-courier:quality'
 
 function loadQuality() {
@@ -760,6 +752,25 @@ window.addEventListener('resize', () => {
   pipeline.setSize(window.innerWidth, window.innerHeight)
 })
 
+/**
+ * The one graphics-quality authority, used by both Settings and the debug API.
+ *
+ * Three only recomputes the canvas backing store when setSize runs. Changing
+ * the pixel-ratio cap without this complete resize sequence updates a number
+ * but not the live frame, which is why this must never be copied into a UI
+ * handler piecemeal.
+ */
+function setQuality(name) {
+  quality = resolveQuality(name)
+  try { localStorage.setItem(QUALITY_KEY, quality) } catch { /* private mode */ }
+  applyPixelRatio()
+  renderer.setSize(window.innerWidth, window.innerHeight)
+  speedFX.setSize(window.innerWidth, window.innerHeight)
+  pipeline.setQuality(quality)
+  pipeline.setSize(window.innerWidth, window.innerHeight)
+  return quality
+}
+
 // ------------------------------------------------------------- persistence
 //
 // Per-level, per-mode leaderboards, in localStorage — there is no backend and
@@ -997,13 +1008,18 @@ for (const tab of document.querySelectorAll('.mtab')) {
   }
 }
 
+let currentPane = 'play'
+
 function showPane(name) {
+  if (currentPane === 'settings' && name !== 'settings') cancelSettingsEdit()
   if (name === 'board') {
     // Re-read on every open, never cached: a run filed since the last look is
     // the only reason to be on this pane at all.
     recordsMode = getMode()
     paintRecordsScreen()
   }
+  if (name === 'settings' && currentPane !== 'settings') beginSettingsEdit()
+  currentPane = name
   paintPane(name)
 }
 
@@ -1025,9 +1041,9 @@ showPane('play')
 
 // ------------------------------------------------------------------ settings
 //
-// Quality and look were console-only (`__game.setQuality`) with the menu item
-// sitting in docs/roadmap.md. Ethan asked for a settings tab, so this is that
-// item: the same two levers, in the panel, with the same persistence.
+// Every setting except LOOK is edited as one transaction. Sliders preview
+// because volume and sensitivity cannot be judged without hearing/feeling
+// them; leaving the pane restores the snapshot. Only Apply persists.
 
 const FS_KEY = 'skyline-courier:fullscreen'
 let fullscreenOnRun = (() => {
@@ -1035,18 +1051,52 @@ let fullscreenOnRun = (() => {
 })()
 
 const fsBtn = document.getElementById('set-fs')
+const applySettingsBtn = document.getElementById('settings-apply')
+const settingsState = document.getElementById('settings-state')
+let settingsEdit = null
+let paintMovementControl = () => {}
+let paintQualityControl = () => {}
+
+function activeSettings() {
+  return {
+    fullscreen: fullscreenOnRun,
+    music: musicVol,
+    sensitivity: mouseSensitivity,
+    movement: movementScheme,
+    quality,
+  }
+}
+
+function settingsDiffer(a, b) {
+  return a.fullscreen !== b.fullscreen
+    || a.music !== b.music
+    || a.sensitivity !== b.sensitivity
+    || a.movement !== b.movement
+    || a.quality !== b.quality
+}
+
+function paintSettingsState() {
+  const dirty = !!settingsEdit && settingsDiffer(settingsEdit.staged, settingsEdit.base)
+  applySettingsBtn?.toggleAttribute('disabled', !dirty)
+  if (settingsState) {
+    settingsState.textContent = dirty ? 'unapplied changes' : 'all changes applied'
+    settingsState.dataset.dirty = dirty ? 'true' : 'false'
+  }
+}
 
 function paintFsBtn() {
   if (!fsBtn) return
-  fsBtn.setAttribute('aria-pressed', fullscreenOnRun ? 'true' : 'false')
-  fsBtn.textContent = fullscreenOnRun ? 'on' : 'off'
+  const on = settingsEdit?.staged.fullscreen ?? fullscreenOnRun
+  fsBtn.setAttribute('aria-pressed', on ? 'true' : 'false')
+  fsBtn.textContent = on ? 'on' : 'off'
 }
 paintFsBtn()
 
 fsBtn?.addEventListener('click', () => {
-  fullscreenOnRun = !fullscreenOnRun
-  try { localStorage.setItem(FS_KEY, fullscreenOnRun ? '1' : '0') } catch { /* private mode */ }
+  if (!settingsEdit) beginSettingsEdit()
+  settingsEdit.staged.fullscreen = !settingsEdit.staged.fullscreen
   paintFsBtn()
+  paintSettingsState()
 })
 
 // ------------------------------------------------------------------- music
@@ -1075,10 +1125,13 @@ function applyMusicVol(v, persist) {
 
 if (musicSlider) {
   musicSlider.value = `${musicVol}`
-  // `input`, not `change`: the volume should follow the drag, because the only
-  // way to pick a level is to hear it while you move.
-  musicSlider.addEventListener('input', () => applyMusicVol(+musicSlider.value, false))
-  musicSlider.addEventListener('change', () => applyMusicVol(+musicSlider.value, true))
+  // Preview follows the drag; Apply is the only persistence edge.
+  musicSlider.addEventListener('input', () => {
+    if (!settingsEdit) beginSettingsEdit()
+    settingsEdit.staged.music = +musicSlider.value
+    applyMusicVol(settingsEdit.staged.music, false)
+    paintSettingsState()
+  })
 }
 applyMusicVol(musicVol, false)
 
@@ -1105,8 +1158,12 @@ function applySensitivity(v, persist) {
 
 if (sensitivitySlider) {
   sensitivitySlider.value = `${mouseSensitivity}`
-  sensitivitySlider.addEventListener('input', () => applySensitivity(+sensitivitySlider.value, false))
-  sensitivitySlider.addEventListener('change', () => applySensitivity(+sensitivitySlider.value, true))
+  sensitivitySlider.addEventListener('input', () => {
+    if (!settingsEdit) beginSettingsEdit()
+    settingsEdit.staged.sensitivity = +sensitivitySlider.value
+    applySensitivity(settingsEdit.staged.sensitivity, false)
+    paintSettingsState()
+  })
 }
 applySensitivity(mouseSensitivity, false)
 
@@ -1145,11 +1202,12 @@ function segControl(hostId, names, get, set, label = (n) => n) {
   return paint
 }
 
-segControl('set-quality', QUALITY_NAMES, () => quality, (n) => {
-  quality = resolveQuality(n)
-  try { localStorage.setItem(QUALITY_KEY, quality) } catch { /* private mode */ }
-  applyPixelRatio()
-  pipeline.setQuality?.(quality)
+paintQualityControl = segControl('set-quality', QUALITY_NAMES, () => {
+  return settingsEdit?.staged.quality ?? quality
+}, (n) => {
+  if (!settingsEdit) beginSettingsEdit()
+  settingsEdit.staged.quality = resolveQuality(n)
+  paintSettingsState()
 })
 
 // LOOK changes what the geometry is generated from, which happens once at boot
@@ -1179,14 +1237,74 @@ function setMovementScheme(name) {
   try { localStorage.setItem(MOVEMENT_KEY, movementScheme) } catch { /* private mode */ }
 }
 
-segControl(
+paintMovementControl = segControl(
   'set-movement',
   MOVEMENT_SCHEMES,
-  () => movementScheme,
-  setMovementScheme,
+  () => settingsEdit?.staged.movement ?? movementScheme,
+  (name) => {
+    if (!settingsEdit) beginSettingsEdit()
+    settingsEdit.staged.movement = MOVEMENT_SCHEMES.includes(name) ? name : 'both'
+    paintSettingsState()
+  },
   (n) => (n === 'wasd' ? 'WASD' : n === 'arrows' ? 'Arrows' : 'Both'),
 )
 setMovementScheme(movementScheme)
+
+function paintSettingsControls() {
+  const shown = settingsEdit?.staged ?? activeSettings()
+  if (musicSlider) musicSlider.value = `${shown.music}`
+  if (sensitivitySlider) sensitivitySlider.value = `${shown.sensitivity}`
+  applyMusicVol(shown.music, false)
+  applySensitivity(shown.sensitivity, false)
+  paintFsBtn()
+  paintMovementControl()
+  paintQualityControl()
+  paintSettingsState()
+}
+
+function beginSettingsEdit() {
+  const base = activeSettings()
+  settingsEdit = { base, staged: { ...base } }
+  paintSettingsControls()
+}
+
+function cancelSettingsEdit() {
+  if (!settingsEdit) return
+  const base = settingsEdit.base
+  settingsEdit = { base: { ...base }, staged: { ...base } }
+  // Undo slider previews. The non-slider settings were never applied.
+  applyMusicVol(base.music, false)
+  applySensitivity(base.sensitivity, false)
+  paintSettingsControls()
+  settingsEdit = null
+}
+
+function applySettingsEdit() {
+  if (!settingsEdit || !settingsDiffer(settingsEdit.staged, settingsEdit.base)) return
+  const next = { ...settingsEdit.staged }
+
+  fullscreenOnRun = next.fullscreen
+  try { localStorage.setItem(FS_KEY, fullscreenOnRun ? '1' : '0') } catch { /* private mode */ }
+  applyMusicVol(next.music, true)
+  applySensitivity(next.sensitivity, true)
+  setMovementScheme(next.movement)
+  // Quality goes through the exact same complete authority as __game.
+  setQuality(next.quality)
+
+  const base = activeSettings()
+  settingsEdit = { base, staged: { ...base } }
+  paintSettingsControls()
+}
+
+applySettingsBtn?.addEventListener('click', applySettingsEdit)
+
+// Escape while browsing Settings means Cancel. Pointer-lock Escape still
+// raises the menu through pointerlockchange, where no edit exists yet.
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Escape' || currentPane !== 'settings') return
+  cancelSettingsEdit()
+  showPane('play')
+})
 
 // ------------------------------------------------------- the CTRL+W problem
 //
@@ -1235,25 +1353,13 @@ window.__game = {
   /**
    * Graphics quality. `__game.setQuality('lite' | 'balanced' | 'high')`.
    *
-   * Exposed rather than menu-driven on purpose (see the note by QUALITY_KEY):
-   * this is the evaluation handle and the seam a settings UI will call. It
-   * takes effect on the next frame — the pixel-ratio change resizes the canvas
-   * and the tap counts recompile one shader, both synchronously.
+   * This evaluation handle and the Settings Apply action share the same
+   * authority. It takes effect on the next frame — the pixel-ratio change
+   * resizes the canvas and the tap counts recompile one shader, synchronously.
    */
   QUALITY_LEVELS, QUALITY_NAMES,
   getQuality: () => quality,
-  setQuality(name) {
-    quality = resolveQuality(name)
-    try { localStorage.setItem(QUALITY_KEY, quality) } catch { /* private mode */ }
-    applyPixelRatio()
-    // setSize with the same CSS size but a new pixel ratio: three recomputes
-    // the backing store, and the pipeline re-derives every target from it.
-    renderer.setSize(window.innerWidth, window.innerHeight)
-    speedFX.setSize(window.innerWidth, window.innerHeight)
-    pipeline.setQuality(quality)
-    pipeline.setSize(window.innerWidth, window.innerHeight)
-    return quality
-  },
+  setQuality,
   // Exposed so render passes can be toggled from the console when bisecting a
   // visual bug. Finding which pass owns an artifact by turning them off one at
   // a time is far faster than reading four shaders.
