@@ -11,6 +11,7 @@ function speedAccent(key, fallback) {
 }
 import { TUNING } from '../player.js'
 import { disposeMoteField, sharedMoteField } from './motes.js'
+import { OverdriveFX } from './overdrive.js'
 
 /**
  * The speed layer.
@@ -330,6 +331,13 @@ export class SpeedFX {
     this._decayShake = 0
     this.shake = 0
     this.time = 0
+
+    // The overdrive rim. A SEPARATE effect from everything above — cold, a
+    // border not a field, and a readout of the band draining rather than of raw
+    // speed (see overdrive.js). Owned here rather than in main.js so it is
+    // guaranteed to be updated and rendered by a layer that already is; it is
+    // drawn last in `render`, on top of the warm speed overlay.
+    this.overdrive = new OverdriveFX()
   }
 
   /** Deterministic uniform [0,1). Same LCG as the mote field, own stream. */
@@ -347,6 +355,7 @@ export class SpeedFX {
   setSize(width, height) {
     this.uniforms.uAspect.value = width / height
     this.motes.setSize(width, height)
+    this.overdrive.setSize(width, height)
   }
 
   update(dt, player, camera) {
@@ -388,6 +397,7 @@ export class SpeedFX {
     this._updateStreaks(h, player, camera)
     this._updateImpacts(h, player, camera)
     this.motes.update(dt, camera)
+    this.overdrive.update(dt, player)
   }
 
   /**
@@ -674,6 +684,9 @@ export class SpeedFX {
     renderer.autoClear = false
     renderer.render(this.scene, this.camera)
     renderer.autoClear = prevAutoClear
+    // The overdrive rim composites on top of the warm speed overlay — the two
+    // are meant to read as different layers, and the cold frame belongs above.
+    this.overdrive.render(renderer)
   }
 
   dispose() {
@@ -684,5 +697,6 @@ export class SpeedFX {
     // The pool is shared, and this class is the one that drives it, so tearing
     // the speed layer down tears the pool down with it.
     disposeMoteField(this.scene3d)
+    this.overdrive.dispose()
   }
 }

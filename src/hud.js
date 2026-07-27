@@ -176,6 +176,7 @@ export class Hud {
     this._lastKmh = -1
     this._lastFrac = -1
     this._hot = null
+    this._od = -1              // quantised overdrive band, for the speed readout
     this._dashReady = null
     this._airLeft = null
     this._hookReady = null
@@ -597,6 +598,29 @@ export class Hud {
     // look lives in CSS and the per-frame cost is a cached boolean compare.
     const hot = player.speed > TUNING.sprintSpeed
     if (hot !== this._hot) { this._hot = hot; this.speedbar.classList.toggle('hot', hot) }
+
+    // OVERDRIVE on the number. The speed readout is the thing a player watches,
+    // so the band drains ON it — distinct from `hot`, which is a warm CSS class
+    // for merely-past-sprint. This is a cold electric glow whose brightness
+    // tracks the band, so the number visibly cools as the band empties. Driven
+    // by inline style (not a class) so it reads on both themes without needing a
+    // CSS rule, and quantised so the steady state writes nothing. `speednum` is
+    // the <b> holding the digits; `getMode`-agnostic — every mode has the band.
+    const odq = Math.round(Math.min(1, player.overdrive || 0) * 20)
+    if (odq !== this._od) {
+      this._od = odq
+      if (odq > 0) {
+        const f = odq / 20
+        const g = (200 + 55 * f) | 0
+        this.speednum.style.color = `rgb(${(120 + 90 * f) | 0}, ${g}, 255)`
+        this.speednum.style.textShadow =
+          `0 0 ${(5 + 16 * f).toFixed(1)}px rgba(90,205,255,${(0.45 + 0.45 * f).toFixed(2)})`
+      } else {
+        // Back to the stylesheet's colour — the band is spent.
+        this.speednum.style.color = ''
+        this.speednum.style.textShadow = ''
+      }
+    }
 
     const retHot = player.wallRunning || !!player.aimedAnchor
     if (retHot !== this._reticleHot) {

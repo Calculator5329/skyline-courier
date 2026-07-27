@@ -317,6 +317,38 @@ const BASE_TUNING = {
   bankFill: 1.0,           // global scalar on every deposit (mode-scaled)
   bankDashStretch: 0.014,  // extra dashTime per m/s spent — a flatter, longer burst
 
+  // --- overdrive: an earned speed band ABOVE the cap ------------------------
+  // A brief ceiling ABOVE `maxSpeed`, entered only through an earned source and
+  // spent down on a timer. It is not a state you can hold: releasing a slide
+  // down a steep slope, or releasing a grapple at speed (the "launch"), opens
+  // the band; a dash chained into either is the third way in, because a dash is
+  // how you manufacture the speed those two gates demand. Holding W never earns
+  // it — the entry threshold sits well above cruising speed.
+  //
+  // MOMENTUM IS SACRED (CLAUDE.md #3). Every number here only ever RAISES the
+  // clamp; nothing in the overdrive path multiplies a velocity down. Entry adds
+  // headroom the boost that triggered it (the slide-hop / the grapple release
+  // multiplier) can now live in; exit lets that headroom sink back to
+  // `maxSpeed` over `overdriveDecay` seconds so the clamp reclaims the excess
+  // gradually — a descending ceiling, never a step change in velocity.
+  //
+  // FUN is the empty overlay, so the base numbers ARE FUN: the longest,
+  // gentlest band and the lowest ceiling. NORMAL and HARDCORE override the two
+  // knobs that differ (see MODES) — HARDCORE gets the shortest band but the
+  // highest ceiling, because it is the mode with no winch and the tether swing
+  // is where a launch is most earned.
+  overdriveCeiling: 1.35,  // ceiling as a multiple of maxSpeed while the band is full
+  overdriveDecay: 3.0,     // seconds to drain a full band to empty (FUN: longest)
+  overdriveEntry: 26,      // m/s at the moment of release required to open the band
+  // Downward velocity (m/s) that marks a slide as being down a slope "steeper
+  // than the walkable limit". A gentle ramp leaves a small `velocity.y`; a real
+  // descent at speed leaves a large negative one. Read only — see `slideSteep`.
+  overdriveSlideDrop: 4.0,
+  // How much of the band a hard landing or a wall impact spends at once. The
+  // landing scales this by impact; a wall-jump takes a flat share. It is a
+  // spend, so cashing your momentum into a surface costs you the band faster.
+  overdriveHitDrain: 0.6,
+
   maxSpeed: 34,
 }
 
@@ -368,6 +400,9 @@ export const MODES = {
       bankFill: 0.7,
       bankMax: 14,
       bankSpend: 5,
+      // The middle band: a higher ceiling than FUN, drained a little faster.
+      overdriveCeiling: 1.40,
+      overdriveDecay: 2.4,
     },
   },
   fun: {
@@ -406,6 +441,11 @@ export const MODES = {
       bankMax: 32,
       bankSpend: 13,              // a full bank pays a dash to the 34 m/s clamp
       bankDashStretch: 0.02,
+      // The highest ceiling of the three, and the shortest band: no winch means
+      // the tether swing is where a launch is most earned, so the payout is the
+      // biggest — but it drains fastest and is the hardest to hold.
+      overdriveCeiling: 1.50,
+      overdriveDecay: 1.8,
     },
   },
 }
@@ -516,6 +556,21 @@ export class Player {
      * reset with the body on a respawn like every other in-flight resource.
      */
     this.momentumBank = 0
+    /**
+     * OVERDRIVE — how much of the earned speed band above the cap is live,
+     * 0..1. While positive it raises the clamp above `maxSpeed` (see the clamp
+     * in `update`); it drains on a timer and is cleared outright by a respawn.
+     * This is the contract other lanes code against — do not rename it. See the
+     * overdrive block in the tuning table for the whole argument.
+     */
+    this.overdrive = 0
+    /**
+     * True while the current slide is running down a slope steep enough to earn
+     * the band — a read-only flag set in `_resolveTransitions`, consumed by the
+     * slide-release gates in `_updateStance` and `_tryJump`. It never touches
+     * velocity, so slide feel is untouched (CLAUDE.md #3).
+     */
+    this.slideSteep = false
     /**
      * Why the line last came off, and every reason so far this session.
      *
@@ -668,6 +723,30 @@ export class Player {
     return Math.hypot(this.velocity.x, this.velocity.z)
   }
 
+  /** Convenience boolean for the contract: true while any band is live. */
+  get inOverdrive() {
+    return this.overdrive > 0
+  }
+
+  /**
+   * Open (or top up) the overdrive band, IF the release was fast enough.
+   *
+   * Called at the moment of an earned release — a slide off a steep slope, or a
+   * grapple launch — with the speed the player is leaving at. Below the entry
+   * threshold nothing happens, which is what keeps holding W out of it: only a
+   * genuinely fast exit crosses the line. It sets the band to full and adds NO
+   * velocity of its own; the boost that triggered the release (the slide-hop,
+   * the grapple release multiplier) is what fills the headroom this opens.
+   */
+  _enterOverdrive(speed) {
+    if (speed < TUNING.overdriveEntry) return
+    const fresh = this.overdrive <= 0.001
+    this.overdrive = 1
+    // Emit once on a fresh entry so audio/FX can punch the "engaged" moment.
+    // Unknown event types are ignored by every consumer, so this is safe.
+    if (fresh) this.events.push({ type: 'overdrive', speed })
+  }
+
   /**
    * Deposit into the momentum bank for a clean, fast piece of contact.
    *
@@ -729,6 +808,10 @@ export class Player {
     // resets with everything else in-flight. Carrying it across a death would
     // pay the player for the fall.
     this.momentumBank = 0
+    // The band is a spend against a run; a respawn is the run failing, so it
+    // clears outright with everything else in-flight. Instant, per the contract.
+    this.overdrive = 0
+    this.slideSteep = false
     this.dashTimer = 0
     this.climbTimer = 0
     this.airJumpsLeft = TUNING.airJumps
@@ -782,6 +865,13 @@ export class Player {
     this.wallCooldown = Math.max(0, this.wallCooldown - dt)
     // Decayed before `_updateStance`, which is what re-arms it on slide exit.
     this.slideGrace = Math.max(0, this.slideGrace - dt)
+    // The band drains on a timer. A hard landing and a wall impact spend it
+    // faster (handled where those are detected); a respawn clears it in
+    // `teleport`. This only ever LOWERS `overdrive` toward 0, which lowers the
+    // ceiling below — it never touches a velocity directly.
+    if (this.overdrive > 0) {
+      this.overdrive = Math.max(0, this.overdrive - dt / T.overdriveDecay)
+    }
 
     this._updateStance(input)
     this._updateAbilities(dt, input, wishing)
@@ -814,8 +904,15 @@ export class Player {
     // Captured before collision flattens it — the climb check needs to know
     // how fast the player *arrived*, not what survived the impact.
     this._preSpeed = horiz
-    if (horiz > T.maxSpeed) {
-      const s = T.maxSpeed / horiz
+    // The ceiling is normally `maxSpeed`, but overdrive raises it — up to
+    // `overdriveCeiling`× while the band is full, sinking back to `maxSpeed` as
+    // the band drains. Because the excess is only ever shaved off ABOVE this
+    // (rising, then gradually falling) ceiling, entering the band adds headroom
+    // and never scrubs speed, and exiting it lets drag reclaim the excess over
+    // the decay window rather than in a step (CLAUDE.md #3, the contract).
+    const ceiling = T.maxSpeed * (1 + (T.overdriveCeiling - 1) * this.overdrive)
+    if (horiz > ceiling) {
+      const s = ceiling / horiz
       this.velocity.x *= s
       this.velocity.z *= s
     }
@@ -861,6 +958,12 @@ export class Player {
         this.sliding = false
         this.height = T.standHeight
         this.slideGrace = T.slideHopGrace
+        // Releasing a slide that was running down a steep slope opens the band
+        // if you leave it fast enough — one of the two earned entries. Standing
+        // up and slide-hopping are both "releasing the slide"; the hop path in
+        // `_tryJump` is the other.
+        if (this.slideSteep) this._enterOverdrive(this.speed)
+        this.slideSteep = false
       }
     }
   }
@@ -1141,6 +1244,20 @@ export class Player {
       this.grappleTimer -= dt
       this.grappleArm = Math.max(0, this.grappleArm - dt)
       this.grappleHeldTime += dt
+      // THE LAUNCH, wound up. A pendulum swing (FUN + HARDCORE) that is already
+      // near the cap arms the band WHILE STILL ON THE LINE, so the swing can
+      // carry its earned tangential speed past `maxSpeed` and the release fires
+      // you off inside the band. Without this the clamp holds the swing at 34
+      // for the whole arc and a boost-less tether (HARDCORE, NORMAL) could never
+      // launch above the cap at all — the band would open empty. This is where
+      // HARDCORE earns its highest ceiling: no winch, so the swing IS the
+      // payout. Topped every fast frame (after the decay above) so it stays full
+      // through the wind-up and only starts draining once you let go. NORMAL's
+      // winch does not run the pendulum, so it never arms here — it delivers you
+      // to the anchor rather than launching, exactly as it always has.
+      if (T.grapplePendulum && this.speed >= T.maxSpeed * 0.9) {
+        this._enterOverdrive(this.speed)
+      }
       const dist = this.position.distanceTo(this.grappleAnchor)
       // Reaching the arrival radius makes the line slack, permanently for this
       // shot. Latched rather than re-tested every step on purpose: a player who
@@ -1277,6 +1394,11 @@ export class Player {
           this.velocity.x *= k
           this.velocity.z *= k
         }
+        // A slide-hop off a steep slope is the classic overdrive entry: the hop
+        // boost above already added the speed, and opening the band here is what
+        // lets it survive the clamp instead of being shaved back to `maxSpeed`.
+        if (this.slideSteep) this._enterOverdrive(this.speed)
+        this.slideSteep = false
       }
       this.events.push({ type: 'jump', speed: this.speed })
       return
@@ -1353,6 +1475,11 @@ export class Player {
         this._detachWall()
         this.events.push({ type: 'walljump', speed: this.speed })
         this._bankFill(2.5, this.speed)
+        // A wall impact spends a flat share of the band — kicking off a wall is
+        // energy going into the wall, not carried forward down the line.
+        if (this.overdrive > 0) {
+          this.overdrive = Math.max(0, this.overdrive - T.overdriveHitDrain * 0.5)
+        }
         return
       }
     }
@@ -1552,6 +1679,12 @@ export class Player {
       // scales by speed, so face-planting to a stop pays nothing and sailing
       // through pays in full.
       this._bankFill(3.0, this.speed)
+      // A hard landing spends the band faster — you cashed the momentum into
+      // the deck rather than carrying it on. Scaled by impact, so a feather
+      // touchdown barely dents it and a real slam takes most of it.
+      if (this.overdrive > 0) {
+        this.overdrive = Math.max(0, this.overdrive - this.landImpact * T.overdriveHitDrain)
+      }
     }
 
     // --- vault / step-up -------------------------------------------------
@@ -1616,6 +1749,16 @@ export class Player {
         if (s > 0.01 && this.velocity.y < -0.5) {
           accelerate(this.velocity, this._wish, s + T.slideDownhillPull, 6, 0.016)
         }
+        // Is this a slope "steeper than the walkable limit", taken at real
+        // speed? A gentle ramp leaves only a small downward velocity; a genuine
+        // steep descent leaves a large one. This is a pure read of state used by
+        // the slide-release gates — it changes no motion, so slide feel is
+        // untouched (CLAUDE.md #3). The actual slopes are authored by the course
+        // lane; `overdriveSlideDrop` is the boundary they have to clear.
+        this.slideSteep = this.velocity.y < -T.overdriveSlideDrop &&
+                          s > T.overdriveEntry * 0.7
+      } else {
+        this.slideSteep = false
       }
       return
     }
@@ -1765,6 +1908,12 @@ export class Player {
         this._bankFill(3.0, this.speed)
       }
     }
+    // THE LAUNCH: releasing the line airborne at speed opens the overdrive band.
+    // Airborne-only, so a 'landed' release (the cuff putting you on your feet)
+    // never triggers it; the entry threshold gates the rest. The release boost
+    // above (arrival, or a pendulum let-go) has already been applied, so the
+    // speed tested — and the headroom this opens — is the launch speed itself.
+    if (!this.grounded) this._enterOverdrive(this.speed)
     this.releaseTally[reason] = (this.releaseTally[reason] || 0) + 1
     const info = {
       type: 'grapplerelease',
