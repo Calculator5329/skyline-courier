@@ -56,10 +56,12 @@ using a listening socket.
 ### High-only visual gate calibration
 
 The invariant gate is intentionally scoped to `high`; Balanced and Lite are
-expected to move the image. The lane's five identical-capture calibration
-observed a maximum **0.7 luma-unit range at skyline terrace p99**. The gate is
-therefore **0.8**, one analyzer reporting quantum above that observed maximum,
-not a tolerance tuned until an optimization passed. Reproduce it with:
+expected to move the image. Two captures had already shown a **0.7 luma-unit
+range at skyline terrace p99**, disproving the old asserted 0.2 threshold.
+Every gate run now takes five identical High captures first, records the
+per-shot lum/p1/p50/p99 ranges, and sets that run's tolerance exactly one 0.1
+analyzer reporting quantum above the observed maximum. The candidate arm
+cannot influence the tolerance. Inspect calibration alone with:
 
 ```sh
 node tools/perfbaseline.mjs --calibrate-visual 5 --theme all

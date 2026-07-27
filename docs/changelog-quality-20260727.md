@@ -6,11 +6,12 @@ the contact-shadow/AO pass; its dormant diagnostic values are 0.25 scale,
 8 steps and 4/2 taps.
 
 The visual-invariance gate in `tools/perfbaseline.mjs` now boots explicitly at
-`quality=high`. Its tolerance is 0.8 luma units, derived from the supplied
-N=5 identical-capture calibration whose maximum observed range was 0.7 at
-skyline terrace p99. `--calibrate-visual 5` recomputes per-shot, per-metric
-min/max/range values. Balanced and Lite are intentionally excluded because a
-quality change is expected to change the image.
+`quality=high`. Before either comparison arm, it takes five identical High
+captures, records per-shot and per-metric min/max/range values, and derives the
+run's tolerance as the observed maximum plus one 0.1 analyzer reporting
+quantum. The optimization arm cannot tune that value. `--calibrate-visual 5`
+runs the reproducibility measurement alone. Balanced and Lite are intentionally
+excluded because a quality change is expected to change the image.
 
 `--quality-levels` adds a socket-free, interleaved quality benchmark at
 1600x900 and 2560x1440. It measures terrace, crossing, tower and closeup by

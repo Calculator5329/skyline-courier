@@ -418,6 +418,7 @@ async function captureQualitySize(browser, width, height, args, options) {
         shots,
         meanMs: +(shots.reduce((sum, shot) => sum + shot.frameMs, 0) / shots.length)
           .toFixed(3),
+        maxMs: Math.max(...shots.map((shot) => shot.frameMs)),
       }
     })
 
@@ -464,7 +465,9 @@ function reportQualityLevels(results, options) {
   for (const quality of QUALITY_NAMES) {
     const small = bySize(quality, 1600)
     const large = bySize(quality, 2560)
-    const verdict = large.meanMs <= 1000 / 240 ? 'reaches 240 Hz' : 'misses 240 Hz'
+    const verdict = large.maxMs <= 1000 / 240
+      ? 'reaches 240 Hz in every shot'
+      : `misses 240 Hz (worst ${large.maxMs} ms)`
     console.log(`| ${quality} | ${small.meanMs} | ${large.meanMs} | ${verdict} |`)
   }
   for (const result of results) {
