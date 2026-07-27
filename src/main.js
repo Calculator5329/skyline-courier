@@ -1169,6 +1169,8 @@ const movementKeys = document.getElementById('movement-keys')
 function setMovementScheme(name) {
   movementScheme = MOVEMENT_SCHEMES.includes(name) ? name : 'both'
   keys.clear()
+  input.forward = 0
+  input.right = 0
   if (movementKeys) {
     movementKeys.textContent = movementScheme === 'wasd'
       ? 'WASD'
