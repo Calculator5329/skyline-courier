@@ -10,9 +10,10 @@
  *   node tools/perfbaseline.mjs [--no-build] [--json]
  *     [--theme skyline|void|all] [--frames 90] [--sync-frames 40]
  *
- * The baseline is executable, not a stale screenshot: the contact shader keeps
- * its old normal-buffer coverage lookup behind a compile-time define, and this
- * command captures that arm for every shot before it captures the shipped arm.
+ * The baseline is executable, not a stale screenshot: the renderer keeps its
+ * old contact lookup, periodic scene walk, full emitter sort and automatic
+ * static matrices behind one audit switch. This command captures that arm for
+ * every shot before it captures the shipped arm.
  * It exits non-zero if luminance or any p1/p50/p99 value moves beyond tolerance.
  * Frame time is evidence, not a gate: noisy machines may make a correct
  * optimization look slower, while a visual mismatch is always a failure.
@@ -127,11 +128,11 @@ async function captureTheme(browser, theme, args, optimized) {
   try {
     await hideChrome(page, { hud: false })
     await page.evaluate((enabled) => {
-      const contact = window.__game.pipeline.contact
-      if (!contact || typeof contact.setDepthCoverageOptimization !== 'function') {
-        throw new Error('contact baseline switch is unavailable')
+      const pipeline = window.__game.pipeline
+      if (!pipeline || typeof pipeline.setFrameAuditOptimizations !== 'function') {
+        throw new Error('frame-audit baseline switch is unavailable')
       }
-      contact.setDepthCoverageOptimization(enabled)
+      pipeline.setFrameAuditOptimizations(enabled)
     }, optimized)
     for (const shot of names) {
       const before = errors.length
@@ -151,6 +152,7 @@ async function captureTheme(browser, theme, args, optimized) {
         draws: render.drawCalls,
         tris: render.triangles,
         frameMs: render.frameMs,
+        cpuMs: render.cpuMsPerFrame,
         pass: !image.uniform && shotErrors.length === 0,
         errors: shotErrors,
       })
@@ -183,12 +185,12 @@ function report(results) {
   console.log(`\nvisual tolerance: ±${VISUAL_TOLERANCE} luma units per lum/p1/p50/p99`)
   for (const result of results) {
     console.log(`\n${result.theme} — ${result.gl.renderer}`)
-    console.log('| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | ms/f | visual |')
-    console.log('| --- | ---: | --- | --- | ---: | ---: | ---: | --- |')
+    console.log('| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | CPU ms/f | synced ms/f | visual |')
+    console.log('| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | --- |')
     for (const r of result.rows) {
       const a = r.before
       const b = r.after
-      console.log(`| ${r.shot} | ${a.visual.lum} -> ${b.visual.lum} | ${a.visual.p1}/${a.visual.p50}/${a.visual.p99} -> ${b.visual.p1}/${b.visual.p50}/${b.visual.p99} | ${a.clip}% -> ${b.clip}% | ${a.draws} -> ${b.draws} | ${a.tris} -> ${b.tris} | ${a.frameMs} -> ${b.frameMs} | ${r.pass ? 'PASS' : 'FAIL'} |`)
+      console.log(`| ${r.shot} | ${a.visual.lum} -> ${b.visual.lum} | ${a.visual.p1}/${a.visual.p50}/${a.visual.p99} -> ${b.visual.p1}/${b.visual.p50}/${b.visual.p99} | ${a.clip}% -> ${b.clip}% | ${a.draws} -> ${b.draws} | ${a.tris} -> ${b.tris} | ${a.cpuMs} -> ${b.cpuMs} | ${a.frameMs} -> ${b.frameMs} | ${r.pass ? 'PASS' : 'FAIL'} |`)
       for (const error of [...a.errors, ...b.errors]) console.log(`  ${r.shot}: ${error}`)
     }
   }

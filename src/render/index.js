@@ -836,6 +836,39 @@ export class RenderPipeline {
     return resolved
   }
 
+  /**
+   * Executable before/after switch for tools/perfbaseline.mjs.
+   *
+   * `true` is the shipped path. `false` restores the old redundant contact
+   * fetch, periodic whole-scene walk, full emitter sort, and automatic matrix
+   * work on the tagged static level. It exists only so one build can prove
+   * both image identity and frame/CPU deltas without comparing different
+   * procedural worlds.
+   */
+  setFrameAuditOptimizations(enabled) {
+    const on = !!enabled
+    if (this.contact) this.contact.setDepthCoverageOptimization(on)
+    this._periodicSceneWalk = !on
+    this._partialEmitterSelection = on
+    this._walkDirty = true
+    this._walkCountdown = 0
+
+    const roots = []
+    this.scene.traverse((object) => {
+      if (object.userData && object.userData.scStaticRoot === true) roots.push(object)
+    })
+    for (const root of roots) {
+      // Resolve the current transforms before freezing. When restoring the old
+      // arm, three will recompute the same matrices on the next render.
+      root.updateMatrixWorld(true)
+      root.traverse((object) => {
+        object.matrixAutoUpdate = !on
+        object.matrixWorldAutoUpdate = !on
+        object.matrixWorldNeedsUpdate = !on
+      })
+    }
+  }
+
   // --- contact shadows -----------------------------------------------------
 
   /** Master switch. Reads false on a context that cannot support them. */
