@@ -255,7 +255,24 @@ export const LOOK_LEVELS = {
 }
 
 /** The look applied when nobody has chosen one. Must equal today's look. */
-export const DEFAULT_LOOK = 'modern'
+/**
+ * LEGACY IS THE DEFAULT, and that is a design decision rather than a fallback.
+ *
+ * Ethan, after A/B-ing them: "I say we make legacy the default mode and only
+ * have the enhanced as a option in settings (enhanced=current)... thats the
+ * perfect balance of graphics where it looks good enough and we can iterate
+ * well."
+ *
+ * The second half is the reason and it is worth stating plainly, because it
+ * will look like a downgrade to anyone reading the diff: the cheaper look is
+ * not a compromise, it is the ITERATION SPEED the project runs at. Vegetation
+ * and curved prefabs make every frame slower to render, every capture slower
+ * to judge, and every change slower to attribute — and they buy less than the
+ * lighting, the palette and the composition do. See docs/taste.md.
+ *
+ * `modern` remains complete and is one setting away; nothing is deleted.
+ */
+export const DEFAULT_LOOK = 'legacy'
 
 export const LOOK_NAMES = Object.keys(LOOK_LEVELS)
 
