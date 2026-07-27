@@ -142,9 +142,15 @@ float scAmbientOcclusion( vec3 P, vec3 N, float depth, float jitter, vec4 ao, fl
     float r = min( 1.0, sqrt( ( fi + 0.5 ) / taps ) );
     vec2 suv = vUv + vec2( cos( a ), sin( a ) ) * r * uvR;
     if ( suv.x <= 0.0 || suv.x >= 1.0 || suv.y <= 0.0 || suv.y >= 1.0 ) continue;
-    if ( texture2D( tNormal, suv ).z < 0.5 ) continue;   // sky occludes nothing
+    // Linear depth is cleared to 0 and every covered surface writes a positive
+    // value, so it is also the coverage test. Reading tNormal.z here used to
+    // spend a second dependent texture fetch only to rediscover the same bit.
+    // Keep the sample in a local: this is both the sky test and the depth used
+    // by scViewPos, with exactly the same accept/reject boundary as before.
+    float sampleDepth = texture2D( tDepth, suv ).r;
+    if ( sampleDepth <= 0.0 ) continue;   // sky occludes nothing
 
-    vec3 S = scViewPos( suv, texture2D( tDepth, suv ).r, uProjInv );
+    vec3 S = scViewPos( suv, sampleDepth, uProjInv );
     vec3 v = S - P;
     float d = sqrt( max( dot( v, v ), 1e-8 ) );
     float range = clamp( 1.0 - ( d - radius ) / max( radius, 1e-3 ), 0.0, 1.0 );
@@ -245,8 +251,13 @@ void main() {
     // side of the frame.
     if ( suv.x <= 0.0 || suv.x >= 1.0 || suv.y <= 0.0 || suv.y >= 1.0 ) break;
 
+    // The depth target and normal target are drawn and cleared together. Depth
+    // 0 therefore means the old normal.z coverage test would have failed; a
+    // positive depth means it would have passed. Reusing this already-required
+    // fetch removes one dependent normal-buffer read from every march step
+    // without changing the ray, thresholds, or output arithmetic.
     float sceneDepth = texture2D( tDepth, suv ).r;
-    if ( texture2D( tNormal, suv ).z < 0.5 ) continue;   // sky occludes nothing
+    if ( sceneDepth <= 0.0 ) continue;   // sky occludes nothing
 
     float diff = -sp.z - sceneDepth;
     // Same two-part bias as the ray origin, for the same two reasons.
