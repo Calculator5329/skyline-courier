@@ -1135,7 +1135,21 @@ export function drumPlatform(L, x, y, z, opts = {}) {
   // Cap collider: unchanged in extent and height, so the surface the player
   // lands on is the surface it always was. When there is a mesh channel the
   // boxes are hidden and `mossCapGeometry` draws the mat instead.
-  n += disc(S, x, y - capThickness / 2, z, radius, capThickness, capKind, facets, squash,
+  //
+  // THE LEGACY SETTLE. `mossCapGeometry` (modern) dips the drawn crown BELOW the
+  // walking plane — a third of it flat at `y`, the rest sunk by up to `relief`.
+  // The legacy box has no such dip: it is one flat plane at exactly `y`. Where
+  // level.js lays a raw stone slab flush at the same deck top — the tower court,
+  // `L.solid(222, 6.15, …, 0.5, …, 'porcelain')`, whose top face is also `y` —
+  // the two coincident planes z-fight as a hard tearing band. The curved path
+  // had them offset; the box path does not, which is why this reads only in
+  // `legacy`. Sinking the whole flat cap 2 cm (collider AND surface together, so
+  // no floating-turf bug) puts it cleanly BEHIND any such slab, which then
+  // occludes it at every distance. 2 cm is deep inside the modern crown's own
+  // relief range and is imperceptible as a landing height or as a step where a
+  // cap meets bare stone.
+  const capSettle = curves ? 0 : 0.02
+  n += disc(S, x, y - capSettle - capThickness / 2, z, radius, capThickness, capKind, facets, squash,
     { hidden: curves }, shape)
   if (curves) {
     L.mesh(capKind,
@@ -1382,9 +1396,18 @@ export function drumPlatform(L, x, y, z, opts = {}) {
       })
   }
 
-  if (vines) {
+  if (vines && foliageEnabled()) {
     // Hero vines: real swept tubes on a catenary, for the two or three the
     // player runs within arm's reach of. A card seen from 40 cm is a card.
+    //
+    // GATED ON THE FOLIAGE CHANNEL. A hero vine is vegetation, so a look with
+    // `foliage: false` must not draw it — and in the `legacy` look, where there
+    // is no mesh channel, the box FALLBACK below drew a fat 0.28 m green post
+    // hanging straight down off the rim: half a dozen of them per moss island,
+    // "green baluster boxes dangling below the deck edge with nothing above
+    // them" (Ethan). The rim ivy above already routes through the gated
+    // `plant()`; the hero vines skipped that gate and so leaked into legacy.
+    // `modern` keeps `foliageEnabled()` true, so it is unchanged.
     const strands = 2 + ((rand() * 2) | 0)
     for (let i = 0; i < strands; i++) {
       const a = rand() * Math.PI * 2
@@ -1914,7 +1937,14 @@ export function gearWheel(L, x, y, z, opts = {}) {
     for (const q of discRects(radius * 0.9, cf, 1)) {
       const a = q.hx * 2, b = q.hz * 2
       const size = XY ? [a, b, thickness] : ZY ? [thickness, b, a] : [a, thickness, b]
-      S(x, y, z, size[0], size[1], size[2], kind, { hidden: true })
+      // Hidden ONLY when the real wheel below is drawn as a mesh. In the legacy
+      // look there is no mesh channel, so this plate is the wheel's visible face
+      // — without it the wheel was nothing but the handle stubs at line ~1978
+      // hanging in a ring around empty air (Ethan's "floating brass boxes"), and
+      // a solid rim collider with no drawn surface over it is also the exact
+      // coverage bug this repo has found six times. `!!L.mesh` flips the same way
+      // `{ hidden: curves }` does elsewhere: hidden in `modern`, drawn in `legacy`.
+      S(x, y, z, size[0], size[1], size[2], kind, { hidden: !!L.mesh })
       n += 1
     }
   }
@@ -1969,6 +1999,29 @@ export function gearWheel(L, x, y, z, opts = {}) {
     L.mesh(kind, mergeGeometries(parts, { dispose: true }),
       place(x, y, z, planeQuat(plane, (radius * 7.3) % 1)), { shade: 1.0 })
     n += 1
+  } else {
+    // LEGACY / no mesh channel: build the wheel out of boxes so it reads as a
+    // toothed disc rather than a ring of disembodied handle stubs. The
+    // `solidRim` plate above is drawn here (its `{ hidden: !!L.mesh }` flips to
+    // visible), so it is the wheel's face; the teeth, spokes and hub boss below
+    // dress it. All decor — a gear is mounted above head height or flush on a
+    // wall — so none of this adds a collider the plate has not already declared.
+    const put = (cx, cy, cz, bx, by, bz, k) => D(cx, cy, cz, bx, by, bz, k)
+    // Teeth: a box per tooth around the tip circle, tangentially stretched by
+    // `ringOfBoxes` so the run reads as a hoop the stubs sit on, not a dotted
+    // line. Through-plane depth matches the plate thickness.
+    n += ringOfBoxes(put, x, y, z, radius * 0.95, Math.max(0.16, radius * 0.09),
+      teeth, plane, kind, thickness)
+    if (detail >= 1 && spokes >= 3) {
+      for (let i = 0; i < spokes; i++) {
+        const a = (2 * Math.PI * i) / spokes
+        const H = dirs(Math.cos(a) * radius * 0.72, Math.sin(a) * radius * 0.72)
+        n += strut(put, x, y, z, x + H[0], y + H[1], z + H[2],
+          Math.max(0.12, radius * 0.07), 3, kind)
+      }
+    }
+    // Hub boss.
+    n += boxAt([0, 0, 0], flat(hubR * 2.2), kind, D)
   }
 
   // Ship's-wheel handles poking past the rim: still boxes, because a 16 cm
