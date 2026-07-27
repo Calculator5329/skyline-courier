@@ -1255,7 +1255,114 @@
    * `.hidden` is NOT a global utility in this file, it is declared per element.
    * The first version of the swap toggled it on an element nothing styled and
    * hid nothing, stacking two panels on top of each other. Hence this rule. */
-  .mpane.hidden { display: none; }
+  /* ONE CELL, THREE PANES. Every pane is stacked in the same grid cell, so the
+     grid is as tall as the tallest pane and the plate never changes height when
+     you switch tabs. The hidden ones are taken out of PAINT and out of hit
+     testing, but deliberately left in LAYOUT — that is the whole mechanism.
+     `display: none` is what made the panel jump. */
+  /* --- the finish plate --------------------------------------------------- */
+  #finish {
+    position: fixed;
+    left: 50%;
+    top: 38%;
+    transform: translate(-50%, -50%);
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 54px 110px 46px;
+    text-align: center;
+    pointer-events: none;          /* the run is over, not paused — never eat a click */
+    /* The scrim must reach ZERO inside the box or its own rectangle shows, which
+       is exactly what the first version did — a grey card floating over the
+       world. The stops are tuned so the fade completes well before the padding
+       runs out, in both axes. */
+    background: radial-gradient(closest-side at 50% 46%,
+      rgba(8, 6, 4, .96), rgba(8, 6, 4, .86) 40%, rgba(8, 6, 4, .42) 70%, rgba(8, 6, 4, 0) 92%);
+    animation: fin-in .5s cubic-bezier(.16, 1, .3, 1) both;
+  }
+  #finish.hidden { display: none; }
+  @keyframes fin-in {
+    from { opacity: 0; transform: translate(-50%, -46%) scale(.97); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+  #finish .fcap {
+    text-shadow: 0 1px 6px rgba(0, 0, 0, .9);
+    font-size: 12px;
+    letter-spacing: .52em;
+    text-indent: .52em;
+    text-transform: uppercase;
+    color: var(--h-accent, #d9a441);
+    opacity: .9;
+  }
+  /* The number IS the moment. Everything else on this plate is a caption. */
+  #finish .ftime {
+    font-size: clamp(46px, 7.4vw, 88px);
+    font-weight: 300;
+    line-height: 1;
+    letter-spacing: .02em;
+    font-variant-numeric: tabular-nums;
+    color: #fff6e2;
+    text-shadow: 0 0 34px rgba(217, 164, 65, .5), 0 2px 0 rgba(0, 0, 0, .4);
+  }
+  #finish .fmeta {
+    text-shadow: 0 1px 6px rgba(0, 0, 0, .9);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 11px;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: #e7d6b4;
+    opacity: .85;
+  }
+  #finish .fmeta i { width: 3px; height: 3px; background: currentColor; opacity: .5; }
+  #finish.best .fmeta { color: #ffe6ae; }
+  /* Shadowed hard, because this plate floats over whatever the player happened
+     to be looking at — and the finish is usually a bright skyline. A caption
+     that is legible on the dark half of the frame and gone on the light half is
+     not a caption. */
+  #finish .fkeys {
+    text-shadow: 0 1px 6px rgba(0, 0, 0, .95);
+    /* Its own dark backing, because it sits at the BOTTOM of the plate where
+       the scrim has already faded to nothing — the prompt was legible in the
+       middle of the frame and invisible where it actually lives. */
+    background: rgba(8, 6, 4, .74);
+    border: 1px solid rgba(217, 164, 65, .22);
+    border-radius: 2px;
+    padding: 6px 14px;
+    margin-top: 8px;
+    font-size: 10px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: #cbbb98;
+    opacity: 0;                    /* revealed by .nudge — see src/main.js */
+    transition: opacity .5s;
+  }
+  #finish .fkeys b {
+    color: #ffdf9f;
+    border: 1px solid rgba(217, 164, 65, .5);
+    border-radius: 2px;
+    padding: 1px 6px;
+    margin-right: 5px;
+  }
+  #finish .fkeys span { margin: 0 9px; opacity: .4; }
+  /* The prompt arrives after the moment has landed, not on top of it — and once
+     it is there it breathes, because a static line in the corner of a frozen
+     screen is exactly what someone stops seeing. */
+  #finish.nudge .fkeys { opacity: 1; animation: fin-breathe 2.4s ease-in-out infinite; }
+  @keyframes fin-breathe { 0%, 100% { opacity: .78; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    #finish { animation: none; }
+    #finish.nudge .fkeys { animation: none; opacity: 1; }
+  }
+
+  .mpanes { display: grid; }
+  .mpanes > .mpane { grid-area: 1 / 1; }
+  /* `visibility` also takes the pane's buttons out of the tab order, which
+     `opacity: 0` would not — an invisible tab stop is worse than a visible one. */
+  .mpane.hidden { visibility: hidden; pointer-events: none; }
   .mtabs {
     display: flex;
     gap: 6px;
@@ -1267,22 +1374,49 @@
     appearance: none;
     font: inherit;
     cursor: pointer;
+    position: relative;
     flex: 1;
-    padding: 8px 10px;
+    padding: 9px 10px;
     font-size: 10px;
     letter-spacing: .28em;
     text-transform: uppercase;
     color: var(--m-dim);
-    background: rgba(0, 0, 0, .22);
+    /* Unselected tabs sit BEHIND the plate's surface — darker than the panel,
+       not lighter. A raised inactive tab reads as the live one. */
+    background: linear-gradient(180deg, rgba(0, 0, 0, .34), rgba(0, 0, 0, .18));
     border: 1px solid var(--m-line);
-    border-radius: 2px;
+    border-bottom-color: transparent;
+    border-radius: 2px 2px 0 0;
     transition: color .16s, border-color .16s, background .16s;
   }
-  .mtab:hover { color: var(--m-ink); border-color: var(--m-line-on); }
+  .mtab:hover { color: var(--m-ink); border-color: var(--m-line-on); border-bottom-color: transparent; }
   .mtab[aria-selected="true"] {
     color: var(--m-accent-hi);
     border-color: var(--m-line-on);
-    background: rgba(217, 164, 65, .10);
+    border-bottom-color: transparent;
+    background: linear-gradient(180deg, rgba(217, 164, 65, .16), rgba(217, 164, 65, .04));
+  }
+  /* The lit edge under the selected tab BREAKS the rule beneath it, so the tab
+     and its pane read as one continuous surface — the thing that makes a tab a
+     tab rather than three buttons in a row. */
+  .mtab[aria-selected="true"]::after {
+    content: '';
+    position: absolute;
+    left: -1px;
+    right: -1px;
+    bottom: -11px;
+    height: 1px;
+    background: var(--m-panel-a);
+  }
+  .mtab[aria-selected="true"]::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -1px;
+    height: 2px;
+    background: var(--m-accent);
+    opacity: .85;
   }
   .mpane { display: flex; flex-direction: column; gap: clamp(12px, 1.9vh, 19px); }
 
@@ -1296,6 +1430,7 @@
   }
   .setrow label { font-size: 11px; color: var(--m-ink); letter-spacing: .06em; }
   .setnote {
+    text-align: left;
     font-size: 9px;
     color: var(--m-dim);
     opacity: .5;
@@ -1320,6 +1455,69 @@
     transition: color .16s, border-color .16s, background .16s;
   }
   .seg:hover, .toggle:hover { color: var(--m-ink); border-color: var(--m-line-on); }
+
+  /* --- the music slider ---------------------------------------------------
+   *
+   * Drawn as a machined track with a brass slug, in the same language as the
+   * HUD's speed bar rather than the browser's default control — the default is
+   * the one piece of chrome that would announce this is a web page. */
+  .slidewrap { display: flex; align-items: center; gap: 10px; }
+  .slidewrap b {
+    width: 22px;
+    text-align: right;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--m-accent-hi);
+    opacity: .85;
+  }
+  .slider {
+    pointer-events: auto;
+    appearance: none;
+    -webkit-appearance: none;
+    width: 150px;
+    height: 14px;
+    background: none;
+    cursor: pointer;
+  }
+  /* The track shows the LEVEL, not just the position: everything left of the
+     slug is lit. A bare rail with a slug on it reads as a scrollbar; a filled
+     one reads as a quantity, which is what a volume is. `--v` is the 0..1 fill
+     and is written by src/main.js as the slider moves. */
+  .slider::-webkit-slider-runnable-track {
+    height: 4px;
+    background:
+      linear-gradient(90deg, var(--m-accent) calc(var(--v, .38) * 100%),
+                             rgba(255, 255, 255, .10) calc(var(--v, .38) * 100%));
+    border: 1px solid var(--m-line);
+    border-radius: 2px;
+  }
+  .slider::-moz-range-track {
+    height: 4px;
+    background:
+      linear-gradient(90deg, var(--m-accent) calc(var(--v, .38) * 100%),
+                             rgba(255, 255, 255, .10) calc(var(--v, .38) * 100%));
+    border: 1px solid var(--m-line);
+    border-radius: 2px;
+  }
+  .slider::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 9px;
+    height: 13px;
+    margin-top: -6px;
+    background: linear-gradient(180deg, var(--m-accent-hi), var(--m-accent-lo));
+    border: 0;
+    border-radius: 1px;
+  }
+  .slider::-moz-range-thumb {
+    width: 9px;
+    height: 13px;
+    background: linear-gradient(180deg, var(--m-accent-hi), var(--m-accent-lo));
+    border: 0;
+    border-radius: 1px;
+  }
+  .slider:hover::-webkit-slider-thumb { background: var(--m-accent-hi); }
+  .slider:hover::-moz-range-thumb { background: var(--m-accent-hi); }
   .seg[aria-pressed="true"], .toggle[aria-pressed="true"] {
     color: var(--m-accent-hi);
     border-color: var(--m-line-on);
@@ -1370,11 +1568,31 @@
   /* Two routes, side by side, because comparing them is the point of putting
      them on one screen. They stack below the breakpoint where five columns of
      numbers stop fitting. */
-  .rcols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  /* The plate is a fixed height (see .mpanes), so a short board would leave a
+     hole under it. The columns take the slack instead: they stretch to the
+     plate and the footnote pins to the bottom edge, which reads as a panel with
+     room in it rather than a panel with a gap in it. */
+  .mpane[data-pane="board"] { height: 100%; }
+  /* The controls disclosure keeps its own styling; inside Settings it just
+     needs the section heading's weight rather than a link's. */
+  .mpane[data-pane="settings"] #keysbox > summary {
+    font-size: 10px;
+    letter-spacing: .34em;
+    text-transform: uppercase;
+    color: var(--m-accent);
+  }
+  .rcols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 1; align-items: stretch; }
+  #rnote { margin-top: auto; }
   .rcol {
     border: 1px solid var(--m-line);
     border-radius: 2px;
-    background: rgba(0, 0, 0, .18);
+    /* A hairline of light along the top edge — the same "milled plate" cue the
+       cards and the HUD bezels use. It is one gradient and it is the difference
+       between a box and a fitting. */
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, 0) 42%),
+      rgba(0, 0, 0, .22);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
     padding: 10px 12px 12px;
   }
   .rcol h2 {
@@ -1867,6 +2085,24 @@
   </div>
 </div>
 
+<!-- THE FINISH PLATE. Ethan: "make a winning indication more present and visible
+     to the user", and "need a way to reset round after beating (esc gets me out
+     of game)".
+
+     The finish used to be a HUD toast, which is the same furniture a checkpoint
+     split uses — so the biggest moment in the game announced itself in the
+     vocabulary of its smallest one, in a corner, at 11px. This is a plate in
+     the middle of the screen with the time at display size.
+
+     It is NOT the pause menu: the pointer stays locked and the world stays live
+     behind it, because the run is over, not interrupted. R clears it. -->
+<div id="finish" class="hidden" aria-live="polite">
+  <div class="fcap">route complete</div>
+  <div class="ftime">0.00</div>
+  <div class="fmeta"><span id="fverdict"></span><i></i><span id="fparcels"></span></div>
+  <div class="fkeys"><b>R</b> run it again<span>&middot;</span><b>ESC</b> menu</div>
+</div>
+
 <div id="overlay">
   <div id="menu">
     <div class="title">
@@ -1891,6 +2127,13 @@
       <button type="button" class="mtab" data-pane="settings" data-nostart aria-selected="false">Settings</button>
     </div>
 
+    <!-- All three panes share ONE grid cell, so the plate is always as tall as
+         the tallest of them and switching tabs cannot resize it. Ethan: "make
+         sure the menu doesnt go up and down in vertical size please." A menu
+         that changes height under the cursor moves the button you were aiming
+         at. Hiding with `display: none` is what caused it — the pane left the
+         layout entirely and the plate collapsed to whatever was left. -->
+    <div class="mpanes">
     <div class="mpane" data-pane="play">
     <div class="pick">
       <div class="sec-h"><i>1</i>Route <em>&mdash; which world</em></div>
@@ -2224,6 +2467,17 @@
           and gives it back on Escape</div>
 
         <div class="setrow">
+          <label for="set-music">Music</label>
+          <div class="slidewrap">
+            <input type="range" id="set-music" class="slider" min="0" max="100" step="1"
+                   value="38" data-nostart aria-label="music volume">
+            <b id="set-music-val">38</b>
+          </div>
+        </div>
+        <div class="setnote">the score follows your speed &mdash; at zero the world
+          keeps its own sound</div>
+
+        <div class="setrow">
           <label>Look</label>
           <div class="segs" id="set-look"></div>
         </div>
@@ -2239,7 +2493,14 @@
       </div>
 
       <div class="pick">
-        <div class="sec-h">Controls</div>
+        <!-- Collapsed by default, and that is a layout decision as much as an
+             editorial one: every pane shares one grid cell and the plate is as
+             tall as the TALLEST of them, so an expanded 14-row table here would
+             have set the height of the Records tab too, and left it looking
+             like a panel with a hole in it. Collapsed, PLAY is the tallest pane
+             — which is the right thing for the plate to be sized by. -->
+        <details id="keysbox" data-nostart>
+          <summary>Controls</summary>
         <div id="keys">
           <div class="sec">movement</div>
           <b>WASD</b><span>run</span>
@@ -2260,8 +2521,11 @@
           <b>F11</b><span>fullscreen</span>
           <b>ESC</b><span>release the cursor</span>
         </div>
+        </details>
       </div>
     </div>
+
+    </div><!-- /mpanes -->
 
     <!-- Shown only while a world change is reloading the page: the same plate,
          the same size, a different face. -->

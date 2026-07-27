@@ -55,6 +55,19 @@ const BOARD_KEY = 'skyline-courier:boards'
 // temporal dead zone when the menu first draws.
 const SIG_KEY = 'skyline-courier:sigs'
 
+const MUSIC_KEY = 'skyline-courier:music'
+const MUSIC_DEFAULT = 38          // matches Music's own starting volume
+
+function loadMusicVol() {
+  try {
+    const v = parseInt(localStorage.getItem(MUSIC_KEY), 10)
+    return Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : MUSIC_DEFAULT
+  } catch { return MUSIC_DEFAULT }
+}
+
+let musicVol = loadMusicVol()
+
+
 function loadMode() {
   try {
     const v = localStorage.getItem(MODE_KEY)
@@ -243,7 +256,13 @@ window.addEventListener('keydown', (e) => {
     return
   }
   if (e.code === 'KeyR') {
-    respawn()
+    // AFTER A FINISH, R RESTARTS THE WHOLE RUN; during one it returns you to the
+    // last checkpoint. Both used to be bound — in two separate listeners, both
+    // of which fired, so a post-finish R respawned you at the finish AND reset
+    // the run, in that order. It happened to end up in the right place, which
+    // is the worst kind of working.
+    if (run.finished) resetRun()
+    else respawn()
     return
   }
   if (e.code === 'KeyP') {
@@ -325,6 +344,10 @@ hud.overlay.addEventListener('click', (e) => {
   // possible moment, not a lazy choice.
   if (!music && audio.ctx) {
     music = new Music(audio.ctx, audio.master)
+    // The graph is born here, long after the setting was read, so the stored
+    // level is applied to it the moment it exists — otherwise the slider would
+    // read one number and the first track would play at another.
+    music.setVolume(musicVol / 100)
     music.load()
   }
   music?.playMenu()
@@ -523,13 +546,52 @@ function finishRun() {
   // The menu is hidden now, but the run register's strips are repainted so the
   // new record is already there the instant Escape raises the panel again.
   updateRecords(currentBoards(boards))
-  hud.holdToast(
-    'route complete',
-    `${formatTime(run.time)}${isBest ? '  — new best' : `   best ${formatTime(run.best)}`}   ·   R to run it again`,
-  )
+  showFinish(isBest)
+}
+
+// ---------------------------------------------------------- the finish plate
+//
+// Ethan: "make a winning indication more present and visible to the user" and
+// "need a way to reset round after beating".
+//
+// The finish used to be a HUD toast — the same furniture a checkpoint split
+// uses, in a corner, at 11px. The biggest moment in the game was announcing
+// itself in the vocabulary of its smallest one. This is a plate in the middle
+// of the screen with the time at display size.
+const finishEl = document.getElementById('finish')
+const NUDGE_AFTER = 15000       // ms; Ethan asked for "like 15 seconds after winning"
+let nudgeTimer = 0
+
+function showFinish(isBest) {
+  if (!finishEl) return
+  // The last checkpoint's split is usually still on screen; two announcements
+  // stacked on one moment read as a glitch.
+  hud.clearToast()
+  finishEl.querySelector('.ftime').textContent = formatTime(run.time)
+  document.getElementById('fverdict').textContent =
+    isBest ? 'new best' : `best ${formatTime(run.best)}`
+  document.getElementById('fparcels').textContent =
+    `${run.checkpointsHit}/${level.checkpoints.length} parcels`
+  finishEl.classList.toggle('best', isBest)
+  finishEl.classList.remove('nudge', 'hidden')
+  // The key prompt is held back so it does not compete with the time for the
+  // first read. It arrives once the moment has landed — and it has to arrive,
+  // because R is not discoverable and ESCAPE was the only exit anyone found.
+  clearTimeout(nudgeTimer)
+  nudgeTimer = setTimeout(() => finishEl.classList.add('nudge'), NUDGE_AFTER)
+}
+
+function hideFinish() {
+  hud.clearToast()
+  clearTimeout(nudgeTimer)
+  finishEl?.classList.add('hidden')
 }
 
 function resetRun() {
+  // Clearing the plate is not cosmetic: without it the banner stayed up through
+  // the reset, so pressing R looked like it had done nothing at all. That is
+  // most of why the finish felt like it had no way out.
+  hideFinish()
   for (const cp of level.checkpoints) cp.reached = false
   run.time = 0
   run.started = false
@@ -541,10 +603,6 @@ function resetRun() {
   rig.yaw = level.spawnYaw
   rig.pitch = 0
 }
-
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyR' && run.finished) resetRun()
-})
 
 // ------------------------------------------------------------------- loop
 
@@ -918,6 +976,39 @@ fsBtn?.addEventListener('click', () => {
   try { localStorage.setItem(FS_KEY, fullscreenOnRun ? '1' : '0') } catch { /* private mode */ }
   paintFsBtn()
 })
+
+// ------------------------------------------------------------------- music
+//
+// Ethan: "I think the music should be adjustable as a slider in settings for
+// volume." Stored 0..100 and applied as 0..1, because the number on the row is
+// the thing being remembered and a stored float would round-trip badly.
+//
+// The music graph does not exist until the first click (an AudioContext needs a
+// gesture), so this both applies live when there IS a graph and is re-applied
+// at construction when there is not — see where Music is built.
+const musicSlider = document.getElementById('set-music')
+const musicVal = document.getElementById('set-music-val')
+
+function applyMusicVol(v, persist) {
+  musicVol = Math.min(100, Math.max(0, v | 0))
+  if (musicVal) musicVal.textContent = `${musicVol}`
+  // The lit portion of the track. CSS cannot read an input's value, so the fill
+  // is handed to it as a custom property (see `.slider` in index.html).
+  musicSlider?.style.setProperty('--v', `${musicVol / 100}`)
+  music?.setVolume(musicVol / 100)
+  if (persist) {
+    try { localStorage.setItem(MUSIC_KEY, `${musicVol}`) } catch { /* private mode */ }
+  }
+}
+
+if (musicSlider) {
+  musicSlider.value = `${musicVol}`
+  // `input`, not `change`: the volume should follow the drag, because the only
+  // way to pick a level is to hear it while you move.
+  musicSlider.addEventListener('input', () => applyMusicVol(+musicSlider.value, false))
+  musicSlider.addEventListener('change', () => applyMusicVol(+musicSlider.value, true))
+}
+applyMusicVol(musicVol, false)
 
 /**
  * Take the screen for the run.

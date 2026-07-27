@@ -702,6 +702,19 @@ export class Hud {
     this._toastUntil = now + duration
   }
 
+  /**
+   * Take any toast off the screen immediately.
+   *
+   * `holdToast` sets no expiry by design, so before this existed the only way a
+   * held toast left was another toast replacing it — a checkpoint split was
+   * still sitting under the finish plate seconds later, and a reset left the
+   * finish text up as though nothing had happened.
+   */
+  clearToast() {
+    this.toast.className = ''
+    this._toastUntil = 0
+  }
+
   holdToast(big, sub) {
     this._setToast(big, sub, 'hold')
     this._toastUntil = 0

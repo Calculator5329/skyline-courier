@@ -73,7 +73,7 @@ const FRAG = /* glsl */`
     glow *= glow;                               // bias the light toward the edge
     float lip = smoothstep(0.012, 0.0, edge);
 
-    // A pulse travelling around the perimeter. `perim` is a coordinate that
+    // A pulse travelling around the perimeter. 'perim' is a coordinate that
     // runs continuously along the border; the sine sweeps along it so the rim
     // has moving energy rather than being a static outline. The pulse rate
     // RISES as the band drains (2..7 Hz-ish), which is the "running out" read.
@@ -82,7 +82,7 @@ const FRAG = /* glsl */`
     float pulse = 0.6 + 0.4 * sin((perim * 6.0) - uTime * rate * 6.2831853);
 
     // Corners run a touch hotter, which reads as a targeting frame snapping on
-    // — reinforcing "past the cap" over "merely fast". `min(ax,ay)` is small
+    // — reinforcing "past the cap" over "merely fast". 'min(ax,ay)' is small
     // only near a corner (both edges close at once), so this lights the four
     // corners and nothing else.
     float cornerBoost = smoothstep(0.22, 0.0, min(ax, ay)) * 0.5;
