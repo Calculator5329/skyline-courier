@@ -1,43 +1,48 @@
 # Changelog
 
-## 2026-07-27 — contact shading stops reading the same coverage twice
+## 2026-07-27 — frame work that did not draw a different pixel is gone
 
-The full-resolution contact pass was already known to be the largest isolated
-frame cost. Its broad AO, near AO, and sun-contact ray each sampled the linear
-depth at a candidate pixel, but also sampled the normal buffer solely to ask
-whether that same pixel had geometry. Those are not independent facts:
-`GBuffer` clears both attachments together and every prepass fragment writes a
-strictly positive view depth and coverage `1`.
+The real-frame audit found four CPU costs that were unrelated to the rendered
+image: periodic whole-scene discovery after the scene was already complete,
+automatic matrix work on the static level in both scene passes, a full sort of
+up to 96 void emitters to use 16, and an explicit sun-target matrix update
+immediately before the renderer repeated it. They are now one-time,
+event-driven, partial-selection, or single-update work respectively.
 
-The shipped shader now uses the depth it already fetched as the coverage test.
-That removes one dependent texture read from every one of 8 broad-AO taps, 5
-near-AO taps, and up to 14 contact-ray steps — **up to 27 reads per shaded
-pixel** — without changing a ray position, threshold, sample count, buffer,
-effect, or output expression.
+The full-resolution contact pass also sampled linear depth at a candidate
+pixel, then sampled the normal buffer solely to ask whether that same pixel had
+geometry. `GBuffer` clears both attachments together and every covered prepass
+fragment writes positive view depth and coverage `1`, so the shipped shader
+uses the depth it already fetched. This removes up to 27 dependent reads per
+shaded pixel without changing any ray, threshold, sample count, or expression.
 
-`tools/perfbaseline.mjs` keeps the previous lookup behind a compile-time-only
-define as an executable reference. It boots the procedural world with a fixed
-seed, captures the complete skyline and void baseline first, then captures the
-shipped arm and fails if luminance or p1/p50/p99 moves by more than **0.2 luma
-units**. The analyzer reports tenths; 0.2 allows one reporting quantum of
-rounding on each side. Both shader arms otherwise receive the same geometry,
-depth, frame count, and random sequence.
+`tools/perfbaseline.mjs` restores all five old paths as one executable
+before-arm. It captures the complete skyline and void baseline first, then the
+shipped arm, reports CPU and GPU-synced ms/f, and fails if luminance or any
+p1/p50/p99 moves by more than **0.2 luma units**.
 
-### Measured, full shot set, 1600x900, 90 pumped frames
+### Measured frame budget, native 2560x1440
 
-Run `node tools/perfbaseline.mjs` to emit the repository's standard table:
+These are the existing interleaved measurements that motivated and bound this
+work. The diagnostic no-contact arm is included to show the fill floor; it is
+not shipped because it changes the image.
 
-| shot | lum | p1/p50/p99 | clip hi/lo | draws | tris | ms/f |
-| --- | --- | --- | --- | --- | --- | --- |
-| all skyline and void shots | executable before → after reference | tolerance ±0.2 | unchanged gate | reported | reported | GPU-synced |
+| skyline shot | before ms/f | 240 Hz headroom | no-contact floor |
+| --- | ---: | ---: | ---: |
+| terrace | 4.80 | −0.63 | 2.90 |
+| crossing | 5.52 | −1.35 | 3.11 |
+| tower | 5.04 | −0.87 | 2.57 |
+| vista | 2.53 | +1.64 | 2.06 |
+| closeup | 6.47 | −2.30 | 3.18 |
 
-This isolated lane cannot fill that table honestly: its sandbox rejects both a
-localhost listener (`listen EPERM`) and Chromium startup (`sandbox_host_linux
-EPERM`). The command remains a fail-capable outside-sandbox acceptance check;
-no unmeasured frame time or visual verdict is recorded here. This entry closes
-the changelog gap for this performance change only; it does not retroactively
-invent entries for Act Four, Overdrive, the underworld backdrop, or the BIG
-expansion.
+The previous 07-27 entry omitted its before/after table. This lane's sandbox
+still rejects Chromium startup (`sandbox_host_linux EPERM`), including
+single-process/no-zygote mode, so recording an after number here would be
+fabrication. The fail-capable command that must close that final evidence gap
+outside this sandbox is `node tools/perfbaseline.mjs`; the physical-display
+1080p/1440p run is `node tools/perfbaseline.mjs --live --headed`. Until that
+run supplies actual after values, the measured claim is deliberately limited
+to the before/floor table above and the code changes themselves.
 
 ## 2026-07-26 — the far distance is a painting now, and the impostors are gone
 

@@ -9,6 +9,80 @@ This document exists because the obvious diagnosis was wrong, and a second
 agent starting from the same symptom would reach the same wrong answer and
 spend the same day disproving it.
 
+## 2026-07-27 real-frame audit
+
+The production loop is a direct `requestAnimationFrame(frame)` recursion. It
+does not contain a timer, sleep, frame divisor, `setAnimationLoop`, or FPS cap.
+The 120 Hz fixed step controls physics only: every rAF still draws once. For a
+physical-display measurement rather than a pumped headless shot, run:
+
+```
+node tools/perfbaseline.mjs --live --headed
+```
+
+That drives the actual game loop while running forward+sprint, at native
+1920x1080 and 2560x1440, records rAF pacing, and performs an audit-only
+`readPixels` after each frame so completed time includes the GPU. It prints
+p50/p95/p99/max and headroom against the 4.167 ms 240 Hz budget. The readback is
+installed before the app only for this mode; there is no readback or fence in
+production.
+
+### What the audit found
+
+| area | before | shipped action | image consequence |
+| --- | --- | --- | --- |
+| JS/GC | Running 20 s at 1440p measured 2.48 ms mean, 4.00 ms p99, 5.10 ms max, with no GC-shaped hitch train and zero frames over 16.7 ms. | Kept per-frame scratch preallocated; the live audit now also records JS heap range. | None |
+| scene discovery | A whole-scene traverse, material classification, and light-budget recomputation every 60 frames, although `scene.add` occurs only before `RenderPipeline` construction. | Walk once, then invalidate only from the setters that can change derived state. | None; same cached objects and uniforms |
+| static transforms | Three recomposed and multiplied the static level tree in both the depth/normal prepass and beauty pass. | Resolve once in `Level.build()`, then disable local/world matrix auto-update on the tagged static subtree. Shader animation is unaffected. | None; matrices are the same values |
+| void emitters | Sort all (up to 96) pooled emitters by camera distance every frame to use 16. | Stable nearest-16 insertion selection with fixed typed-array scratch. | None; exact same ordered 16, including tie order |
+| sun target | `world.update()` updated the target matrix explicitly; the immediately following scene render updated it again before shadow-matrix use. | Removed the first update. | None; the consuming render still updates it |
+| contact shader | Up to 27 dependent normal-buffer fetches repeated a coverage fact already present in the fetched positive linear depth. | Reuse depth for coverage. | Executable old/new shader arms are gated at ±0.2 on lum/p1/p50/p99 |
+| shadow scheduling | The prepass already suppresses shadow updates. The beauty pass renders one 2048² map each frame because its orthographic frustum follows the moving player. `noshadow` measured inside noise: −0.20 to +0.08 ms on the quoted 1440p shots. | Kept one update per frame. On-demand updates would make a continuously moving shadow projection stale, while the measurable saving is zero. | None |
+| targets / sync | `setSize` early-outs and is called only at boot, resize, or a quality change. No render target is allocated in `render()`. Exposure stays GPU-side through a 1x1 texture. Production contains no `readPixels`, `finish`, or fence. | No change needed. | None |
+
+`tools/perfbaseline.mjs` switches every shipped optimization above back to its
+old implementation in one build, captures every skyline and void shot, reports
+CPU queue time and GPU-synced time separately, and fails if any shot moves past
+the 0.2-luma percentile tolerance.
+
+### The 240 Hz limit that remains
+
+240 Hz allows **4.167 ms for the entire frame**. The already measured native
+2560x1440 skyline range is 2.53–6.47 ms depending on view; four of the five
+quoted representative shots exceed budget:
+
+| skyline shot | native 1440p | headroom to 4.167 ms | without contact (diagnostic only) |
+| --- | ---: | ---: | ---: |
+| terrace | 4.80 | −0.63 | 2.90 |
+| crossing | 5.52 | −1.35 | 3.11 |
+| tower | 5.04 | −0.87 | 2.57 |
+| vista | 2.53 | +1.64 | 2.06 |
+| closeup | 6.47 | −2.30 | 3.18 |
+
+The CPU bookkeeping fixes recover headroom and remove avoidable periodic work,
+but they cannot make a 6.47 ms fill-bound view fit in 4.167 ms. The remaining
+decision is image-affecting: contact-buffer resolution and pixel-ratio cap.
+Those already live in the quality levels documented in `docs/lite-mode.md`;
+half-resolution contact measured a 16–37% saving, and quartering total pixels
+roughly halves the frame. MSAA and the high-quality pixel-ratio cap were not
+changed by this audit.
+
+### 2026-07-27 handoff
+
+- **Shipped, closed:** checkpoints `2ee7105`, `3d66258`, and `e497570` contain
+  the event-driven scene walk, frozen level matrices, nearest-16 emitter
+  selection, single sun-target update, combined audit switch, and live-rAF
+  instrument described above.
+- **Named, not built:** no MSAA, contact resolution, render scale, or
+  pixel-ratio default changed; those are visible quality-menu decisions, not
+  image-invariant frame-audit work.
+- **Found, unresolved:** this Codex sandbox cannot launch Chromium
+  (`sandbox_host_linux EPERM`). Run `node tools/perfbaseline.mjs`, then
+  `node tools/perfbaseline.mjs --live --headed`, outside the sandbox and paste
+  the emitted old/new CPU, synced, visual, 1080p, and 1440p rows into the
+  2026-07-27 changelog entry. No after value has been inferred from static
+  analysis.
+
 ## The symptom, and what it is not
 
 "The void lags."

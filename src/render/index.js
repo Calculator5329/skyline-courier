@@ -327,8 +327,11 @@ export class RenderPipeline {
     this._ambientAuto = true
 
     // --- scene walk state --------------------------------------------------
-    // Rebuilt periodically rather than per frame; see _walk().
-    this._walkCountdown = 0
+    // The scene is complete before this pipeline is constructed. Walk it once,
+    // then only when a setter explicitly invalidates the derived state.
+    this._walkDirty = true
+    // Executable old arm for tools/perfbaseline.mjs.
+    this._periodicSceneWalk = false
     this._prepassHidden = []
     this._prepassHiddenVis = []
     this._sunLight = null
@@ -370,6 +373,10 @@ export class RenderPipeline {
     // Preallocated scratch for the per-frame nearest-N selection, so render()
     // allocates nothing. Holds indices + squared distances into the pool.
     this._emitterOrder = []
+    this._emitterBestIndices = new Int16Array(EMIT_MAX)
+    this._emitterBestDistances = new Float64Array(EMIT_MAX)
+    // Executable old arm for tools/perfbaseline.mjs.
+    this._partialEmitterSelection = true
     this._emitScratch = new THREE.Vector3()
 
     /**
@@ -394,11 +401,10 @@ export class RenderPipeline {
    * Re-scan the scene: patch new materials, find the sun and the hemisphere
    * light, and rebuild the list of objects the prepass must skip.
    *
-   * Every 60 frames rather than every frame. The level is built once and the
-   * only thing that changes is which decorative props exist, so a per-frame
-   * traverse of a merged-geometry scene would be pure overhead. Everything the
-   * walk discovers is cached in preallocated fields, so render() itself never
-   * touches the scene graph.
+   * The scene is complete before RenderPipeline is constructed, so this runs
+   * once at boot and thereafter only when a public setter invalidates the
+   * derived light/material state. Everything the walk discovers is cached in
+   * preallocated fields.
    */
   _walk() {
     this._prepassHidden.length = 0
@@ -691,15 +697,42 @@ export class RenderPipeline {
       o.i = i
       o.d = dx * dx + dy * dy + dz * dz
     }
-    order.sort((a, b) => a.d - b.d)
-
     const n = Math.min(EMIT_MAX, order.length)
     const posU = SHARED.scEmitPos.value
     const colU = SHARED.scEmitCol.value
-    for (let k = 0; k < n; k++) {
-      const p = pool[order[k].i]
-      posU[k].set(p.x, p.y, p.z, p.radius)
-      colU[k].set(p.r, p.g, p.b)
+    if (this._partialEmitterSelection) {
+      // Keep only the nearest EMIT_MAX entries while scanning. Sorting all
+      // ~96 candidates to discard 80 of them did several hundred comparator
+      // calls per frame. Strict `<` preserves the old stable-sort tie order.
+      const bestI = this._emitterBestIndices
+      const bestD = this._emitterBestDistances
+      let used = 0
+      for (let i = 0; i < order.length; i++) {
+        const d = order[i].d
+        let at = used
+        while (at > 0 && d < bestD[at - 1]) at--
+        if (at >= n) continue
+        const end = Math.min(used, n - 1)
+        for (let j = end; j > at; j--) {
+          bestD[j] = bestD[j - 1]
+          bestI[j] = bestI[j - 1]
+        }
+        bestD[at] = d
+        bestI[at] = order[i].i
+        if (used < n) used++
+      }
+      for (let k = 0; k < n; k++) {
+        const p = pool[bestI[k]]
+        posU[k].set(p.x, p.y, p.z, p.radius)
+        colU[k].set(p.r, p.g, p.b)
+      }
+    } else {
+      order.sort((a, b) => a.d - b.d)
+      for (let k = 0; k < n; k++) {
+        const p = pool[order[k].i]
+        posU[k].set(p.x, p.y, p.z, p.radius)
+        colU[k].set(p.r, p.g, p.b)
+      }
     }
     SHARED.scEmitCount.value = n
   }
@@ -801,6 +834,39 @@ export class RenderPipeline {
       }
     }
     return resolved
+  }
+
+  /**
+   * Executable before/after switch for tools/perfbaseline.mjs.
+   *
+   * `true` is the shipped path. `false` restores the old redundant contact
+   * fetch, periodic whole-scene walk, full emitter sort, and automatic matrix
+   * work on the tagged static level. It exists only so one build can prove
+   * both image identity and frame/CPU deltas without comparing different
+   * procedural worlds.
+   */
+  setFrameAuditOptimizations(enabled) {
+    const on = !!enabled
+    if (this.contact) this.contact.setDepthCoverageOptimization(on)
+    this._periodicSceneWalk = !on
+    this._partialEmitterSelection = on
+    this._walkDirty = true
+    this._walkCountdown = 0
+
+    const roots = []
+    this.scene.traverse((object) => {
+      if (object.userData && object.userData.scStaticRoot === true) roots.push(object)
+    })
+    for (const root of roots) {
+      // Resolve the current transforms before freezing. When restoring the old
+      // arm, three will recompute the same matrices on the next render.
+      root.updateMatrixWorld(true)
+      root.traverse((object) => {
+        object.matrixAutoUpdate = !on
+        object.matrixWorldAutoUpdate = !on
+        object.matrixWorldNeedsUpdate = !on
+      })
+    }
   }
 
   // --- contact shadows -----------------------------------------------------
@@ -913,7 +979,7 @@ export class RenderPipeline {
   /** Re-arm the automatic 20% budget after a manual ambientTrim. */
   autoAmbient() {
     this._ambientAuto = true
-    this._walkCountdown = 0
+    this._walkDirty = true
   }
 
   // --- sky -----------------------------------------------------------------
@@ -925,7 +991,7 @@ export class RenderPipeline {
   setSunDirection(x, y, z) {
     if (x === undefined) {
       this._sunAuto = true
-      this._walkCountdown = 0
+      this._walkDirty = true
       return
     }
     this._sunAuto = false
@@ -1103,15 +1169,15 @@ export class RenderPipeline {
 
     this._time += dt
 
-    // --- 0. scene walk (amortised) -----------------------------------------
-    if (this._walkCountdown <= 0) {
+    // --- 0. scene walk (event-driven) --------------------------------------
+    if (this._walkDirty) {
       this._walk()
-      // 60 frames ~ 1 second. New geometry picks up its patch within a second
-      // of appearing, which is imperceptible, and the traverse cost disappears
-      // into the noise.
+      this._walkDirty = false
       this._walkCountdown = 60
+    } else if (this._periodicSceneWalk) {
+      this._walkCountdown--
+      if (this._walkCountdown <= 0) this._walkDirty = true
     }
-    this._walkCountdown--
 
     // Re-rank the emitter pool by distance to the camera and hand the nearest
     // few to the shader. Cheap (a ~100-entry partial sort) and off entirely
