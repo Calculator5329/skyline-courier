@@ -1353,10 +1353,9 @@ window.__game = {
   /**
    * Graphics quality. `__game.setQuality('lite' | 'balanced' | 'high')`.
    *
-   * Exposed rather than menu-driven on purpose (see the note by QUALITY_KEY):
-   * this is the evaluation handle and the seam a settings UI will call. It
-   * takes effect on the next frame — the pixel-ratio change resizes the canvas
-   * and the tap counts recompile one shader, both synchronously.
+   * This evaluation handle and the Settings Apply action share the same
+   * authority. It takes effect on the next frame — the pixel-ratio change
+   * resizes the canvas and the tap counts recompile one shader, synchronously.
    */
   QUALITY_LEVELS, QUALITY_NAMES,
   getQuality: () => quality,
