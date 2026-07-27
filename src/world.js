@@ -1010,7 +1010,9 @@ export function buildWorld(scene, renderer, theme = getTheme()) {
       sky.position.copy(playerPos)
       sun.target.position.copy(playerPos)
       sun.position.copy(playerPos).addScaledVector(sunDir, 70)
-      sun.target.updateMatrixWorld()
+      // The renderer updates the whole scene (including this target) before
+      // both the prepass and the shadow matrices consume it. Updating it here
+      // did the same matrix work a second time every frame.
     },
   }
 }

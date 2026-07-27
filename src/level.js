@@ -887,6 +887,19 @@ export class Level {
     if (this.beaconAt) this.group.add(this._beacon())
     if (this.checkpoints.length) this.group.add(this._gates())
 
+    // Everything in the level moves in shaders (foliage wind, gate/beacon
+    // clocks), never by changing an Object3D transform. Freeze the already
+    // resolved matrices so the prepass and beauty pass do not re-compose and
+    // re-multiply the same static transform tree every frame. The tag lets the
+    // executable before/after gate restore three's default behaviour.
+    this.group.userData.scStaticRoot = true
+    this.group.updateMatrixWorld(true)
+    this.group.traverse((object) => {
+      object.matrixAutoUpdate = false
+      object.matrixWorldAutoUpdate = false
+      object.matrixWorldNeedsUpdate = false
+    })
+
     return this.group
   }
 
