@@ -8,9 +8,10 @@
  *
  * Coordinates are read off `src/level.js`, not invented. The TAUGHT SPINE runs
  * along +X from the terrace at x=4 to the tower at x=222 — those coordinates are
- * frozen and every shot below except `reach` sits on them. Past the tower the
- * course now extends (Act two, x 244..380, up to y=40) with grapple-mandatory
- * crossings; `reach` is the one shot that lives out there. Useful facts:
+ * frozen and every shot below through `tower` sits on them. Past the tower the
+ * course extends east and up: Act Two (x 244..380, to y=40) and then Act Three
+ * (x 404..712, to y=66), both grapple-mandatory. `reach`, `skybridge`, `fly`,
+ * `greatwall` and `zenith` are the shots that live out there. Useful facts:
  *   - `position` is FEET (see collision.js resolve()); the eye sits
  *     `standHeight - eyeDrop` = 1.53 m above it.
  *   - Every section's deck is declared as `solid(cx, -0.5, cz, w, 1, d)`, so
@@ -128,6 +129,50 @@ export const SHOTS = {
     pitch: -0.05,
     vel: [12, 0, 0],
     note: 'ACT TWO: the first grapple reach — 23 m of void, the anchor across it',
+  },
+
+  // ACT THREE opens: on sky-1's far lip (deck top y=34, x 398..410) looking down
+  // the route at sky-2 and the anchor slung on its near rim across ~19 m of void.
+  // The frame that proves the fly gauntlet is real geometry, not a backdrop.
+  skybridge: {
+    pos: [408, 34 + DECK, -37],
+    yaw: yawTo(28, 14),
+    pitch: -0.09,
+    vel: [12, 0, 1],
+    note: 'ACT THREE: the skybridge — the first big reach out into the archipelago',
+  },
+
+  // ACT THREE, the fly. Mid-air over the reach-b -> gulf crossing (a ~20 m void),
+  // dropping and fast — the frame that has to sell "I can FLY on the later parts".
+  // reach-b deck top y=26 at x=514; gulf at x=546, y=23. Feet mid-gap, descending,
+  // so the void opens below and the far anchor sits ahead.
+  fly: {
+    pos: [530, 25, 17],
+    yaw: yawTo(32, -6),
+    pitch: -0.24,
+    vel: [15, -2, -2],
+    note: 'ACT THREE: airborne over a big grapple void, carrying speed downhill',
+  },
+
+  // ACT THREE, the giant walls. On wall-2 (deck top y=41, x 626..638) looking back
+  // and down at wall-1 and the tapered brass shaft plunging ~46 m into the cloud
+  // under it — the "row of brass slabs climbing into the sky" read.
+  greatwall: {
+    pos: [629, 41 + DECK, -20],
+    yaw: yawTo(-25, 10),
+    pitch: -0.20,
+    note: 'ACT THREE: a giant brass wall falling into cloud under the climb',
+  },
+
+  // ACT THREE, the finish. On wall-4 (deck top y=58, x 678..690) looking up the
+  // last reach at the zenith 8 m higher, its observatory dome and the goal beacon
+  // standing over it — the top of the world, now genuinely at the far end.
+  zenith: {
+    pos: [686, 58 + DECK, -40],
+    yaw: yawTo(28, -8),
+    pitch: 0.06,
+    vel: [10, 0, 0],
+    note: 'ACT THREE: the last reach to the zenith, dome and beacon crowning it',
   },
 
   // High and off the route, looking back across the archipelago roughly into
