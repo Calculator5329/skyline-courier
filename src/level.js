@@ -1700,24 +1700,24 @@ export function buildCourse(collision) {
   const p5 = K.lanternPost(L, 347.7, 30.0, -27.4, { height: 4.0 }).flame
   const p6 = K.lanternPost(L, 373.1, 40.0, -42.0, { height: 4.0 }).flame
 
-  // THE SUMMIT. The observatory dome and the armillary now live here — no other
-  // section places them since the old observatory was cut — plus the finish
-  // court and the beacon that names the top of the world from the spawn.
-  K.observatoryDome(L, 382, 40.0, -46, { radius: 4.5, wallHeight: 6 })
-  K.armillary(L, 378, 40.0, -50, { radius: 2.8 })
-  K.waterfall(L, 380, 39.6, -53.6, { height: 46, width: 2.6, rand: re })
-  K.vineCurtain(L, 376, 39.5, -53.8, { length: 6, drop: 7, rand: re })
+  // THE OBSERVATORY SUMMIT — a waypoint now, not the finish. Act Three carries
+  // the route on past it (below), so the observatory dome, the armillary and the
+  // goal beacon have MOVED to the new zenith at the far end: leaving the "top of
+  // the world" marker in the middle of the course would lie about where the run
+  // ends. The summit keeps a cypress and a standard so it still reads as
+  // somewhere you arrive and pause before the long reach out.
+  K.cypress(L, 385, 40.0, -42, { height: 6.5, rand: re })
+  K.lanternPost(L, 374, 40.0, -50, { height: 3.4 })
 
-  // Checkpoints for the extension. NOT part of the safe-line spine — the
-  // extension is grapple-gated by design (see the receipt) — but each stands on
-  // its own deck so the trigger is somewhere a body actually fits.
+  // Checkpoints for Act Two. NOT part of the safe-line spine — grapple-gated by
+  // design (see the receipt) — but each stands on its own deck so the trigger is
+  // somewhere a body actually fits. 'the skyline' is the OLD finish and is now a
+  // mid-course checkpoint; the run continues into Act Three below, where
+  // L.finish and L.beaconAt are set at the new zenith.
   L.checkpoint(280, 9.1, 0, 'the first reach')
   L.checkpoint(300, 20.7, 6, 'the great wall')
   L.checkpoint(352, 30.7, -30, 'the long reach')
   L.checkpoint(375, 40.8, -44, 'the skyline')
-
-  L.finish = new THREE.Vector3(375, 40.6, -44)
-  L.beaconAt = { x: 382, y: 48, z: -46, height: 130, radius: 4.4 }
 
   // THE EXTENSION GRAPH. tower -> far-1 is a committed dash (the stakes rise
   // before the cuff is needed); everything past far-1 is grapple-only, each
@@ -1729,6 +1729,130 @@ export function buildCourse(collision) {
   A.link('far-3', 'far-4', 'grapple', { anchor: p4, note: 'across and up, turning off the +X axis' })
   A.link('far-4', 'far-5', 'grapple', { anchor: p5, note: 'the long reach, out over the deep cloud' })
   A.link('far-5', 'summit', 'grapple', { anchor: p6, note: 'the last swing onto the skyline, ~34 m above the tower' })
+
+  // ========================================================= ACT THREE =====
+  // THE BIG SKYLINE — the fly gauntlet. Ethan, 2026-07-26: *"extend the original
+  // course farther ... I really want to be able to FLY on some of the later
+  // parts ... giant walls, cool sliding things, nice anchors so I can LAUNCH
+  // myself. big spaces between platforms."* So the route leaves the observatory
+  // summit on a downhill double-jump launch and weaves out across a long chain
+  // of BIG grapple crossings — 15-21 m of open void each, every anchor slung on
+  // the far rim so the swing bottoms out pointing on down the route — drops
+  // through a low slide span, then climbs a colonnade of giant brass walls to a
+  // new zenith ~26 m above the old summit and 330 m farther east.
+  //
+  // Horizontal stays the through-line (+X, x 380..712, per Ethan: "main travel
+  // direction is horizontal overall"); the LINE weaves z from -48 out to +20 and
+  // back, and undulates y 40 -> 23 -> 66 ("okay with rising falling sections"),
+  // so it reads as a place rather than the flat straight ladder it was. Each
+  // section asks for something new: the descent is downhill flow, the reaches are
+  // pure launch-and-swing, the span is a slide beat, the great walls are a
+  // vertical grapple climb. Difficulty is a curve — Acts 1-2 are unchanged and
+  // Act Three assumes the full move set (grapple opens at 'the tower', long
+  // before here). Per the brief it is allowed to be hard; the owner playtests the
+  // ceiling. Every crossing is proven at load by `Archipelago.verify` against the
+  // real engine numbers (the grapple shots all land at 18-23 m, inside the
+  // 5-32 m window with margin; the one jump is a downhill double at 75% of reach).
+  //
+  // MODES: grappleRange is 34 m in FUN, NORMAL and HARDCORE alike, so every
+  // anchor is in reach of all three. The uphill great-wall crossings are a winch
+  // fantasy in FUN/NORMAL; in HARDCORE (a tether that holds distance and never
+  // reels) the giant brass wall under each high deck is a runnable face — swing
+  // to it on the tether, wall-run up onto the deck. That HARDCORE line is
+  // by-hand reasoning, NOT a validated per-mode gate — this lane cannot run the
+  // harness — so it is flagged for a manual HARDCORE playtest.
+  const t3 = [
+    { id: 'sky-1',   x: 404, y: 34, z: -38, w: 12, style: WILD },
+    { id: 'sky-2',   x: 432, y: 31, z: -24, w: 12, style: BUILT },
+    { id: 'span',    x: 460, y: 28, z: -8,  w: 14, style: BUILT },
+    { id: 'reach-a', x: 486, y: 27, z: 8,   w: 12, style: WILD },
+    { id: 'reach-b', x: 514, y: 26, z: 20,  w: 12, style: BUILT },
+    { id: 'gulf',    x: 546, y: 23, z: 14,  w: 12, style: WILD },
+    { id: 'rise',    x: 576, y: 27, z: 2,   w: 12, style: BUILT },
+    { id: 'wall-1',  x: 604, y: 33, z: -10, w: 12, style: BUILT },
+    { id: 'wall-2',  x: 632, y: 41, z: -22, w: 12, style: WILD },
+    { id: 'wall-3',  x: 658, y: 50, z: -32, w: 12, style: BUILT },
+    { id: 'wall-4',  x: 684, y: 58, z: -40, w: 12, style: WILD },
+    { id: 'zenith',  x: 712, y: 66, z: -48, w: 18, style: BUILT },
+  ]
+  for (const s of t3) {
+    deck(s.x, s.y, s.z, s.w, s.w, s.style,
+      { id: s.id, detail: 2, bodyDepth: 3.2, seed: (re() * 0xffffff) | 0 })
+  }
+  // Light dressing on the new islands, off the same seeded stream as Act Two.
+  // 'span' is skipped — its slide lintel occupies the middle, where the cypress
+  // would otherwise grow — and the zenith gets its own dressing below.
+  for (let i = 0; i < t3.length - 1; i++) {
+    const s = t3[i]
+    if (s.id !== 'span') dressReach(s.x, s.y, s.z, s.w, i % 2 === 0)
+  }
+
+  // THE GIANT WALLS. Each high deck of the climb stands on a tapered brass
+  // ashlar shaft falling ~46 m into the cloud — the "row of brass slabs climbing
+  // into the sky" the brief asks for, and (crown always narrower than the deck it
+  // carries, so the drum overhangs it) never a standable face of its own. In
+  // HARDCORE the shaft face is the wall-run route up onto the deck above it.
+  wall(604, -10, -14, 32.5, 5.0)   // under wall-1
+  wall(632, -22, -14, 40.5, 5.0)   // under wall-2
+  wall(658, -32, -12, 49.5, 5.0)   // under wall-3
+  wall(684, -40, -10, 57.5, 5.0)   // under wall-4
+  wall(712, -48, -8,  65.5, 6.0)   // under the zenith
+
+  // THE SLIDE SPAN. A ceiling too low to run under, dropped over the middle of
+  // 'span' — the same read as Section 5, out here as a beat of rhythm between two
+  // big reaches. Underside at deck + 1.35, the mouldings stacked above it, so
+  // nothing the slide passes through is solid. The checkpoint sits on the near
+  // rim, clear of the lintel.
+  L.solid(462, 30.15, -8, 10, 1.6, 12, 'terracotta')     // lintel, underside 1.35
+  L.solid(462, 29.50, -8, 10.6, 0.3, 12.4, 'porcelain')  // impost band
+  L.solid(462, 31.10, -8, 9.4, 0.3, 11.4, 'porcelain')   // upper band
+  K.balustrade(L, 456, 28, -13.5, { length: 12, height: 1.2, thickness: 0.5, kind: 'brass', detail: 1 })
+
+  // THE ANCHORS + THE GRAPH. summit -> sky-1 is a downhill double-jump launch;
+  // every crossing after it is grapple, each anchor computed onto the far deck's
+  // near rim (foot on the deck, flame 4 m up) so the shot is 18-23 m — inside the
+  // 5-32 m window with margin — and the swing exit points on down the route. The
+  // anchors are computed rather than hand-placed so the shot the verifier checks
+  // is exactly the shot the geometry produces.
+  const chain = [{ id: 'summit', x: 380, y: 40, z: -46, w: 16 }, ...t3]
+  for (let i = 1; i < chain.length; i++) {
+    const a = chain[i - 1], b = chain[i]
+    if (i === 1) {
+      A.link(a.id, b.id, 'standard',
+        { note: 'off the observatory summit, a downhill double-jump launch into Act Three' })
+      continue
+    }
+    const dx = a.x - b.x, dz = a.z - b.z
+    const len = Math.hypot(dx, dz) || 1
+    const inb = b.w / 2 - 1
+    const anchor = K.lanternPost(L, b.x + (dx / len) * inb, b.y, b.z + (dz / len) * inb,
+      { height: 4.0 }).flame
+    A.link(a.id, b.id, 'grapple', { anchor, note: `Act Three: the big reach onto ${b.id}` })
+  }
+
+  // THE ZENITH. The observatory dome, the armillary, the finish and the goal
+  // beacon, relocated here from the old summit — the true top of the world now.
+  // The dome sits off to the side so the finish trigger and the beacon are not
+  // inside it (`assertTriggersClear`).
+  K.observatoryDome(L, 716, 66.0, -50, { radius: 4.5, wallHeight: 6 })
+  K.armillary(L, 713, 66.0, -53, { radius: 2.8 })
+  K.waterfall(L, 712, 65.6, -56.6, { height: 46, width: 2.6, rand: re })
+  K.vineCurtain(L, 708, 65.5, -56.8, { length: 6, drop: 7, rand: re })
+  K.cypress(L, 705, 66.0, -43, { height: 6.5, rand: re })
+  K.lanternPost(L, 704.5, 66.0, -54.5, { height: 3.6 })
+
+  // Act Three checkpoints. Grapple-gated by design, so out of the safe-line
+  // spine — but each stands clear on its own deck ('the low span' on the near
+  // rim away from the lintel; 'the zenith' beside the dome, never under it).
+  L.checkpoint(404, 34.7, -38, 'the descent')
+  L.checkpoint(454, 28.7, -8, 'the low span')
+  L.checkpoint(546, 23.7, 14, 'the gulf')
+  L.checkpoint(632, 41.7, -22, 'the buttress')
+  L.checkpoint(708, 66.7, -46, 'the zenith')
+
+  L.finish = new THREE.Vector3(708, 66.6, -46)
+  L.beaconAt = { x: 718, y: 74, z: -50, height: 130, radius: 4.4 }
+
   // ---- The receipt -------------------------------------------------------
   //
   // Everything above is a claim. This is where it is checked, at load, in the
@@ -1739,6 +1863,8 @@ export function buildCourse(collision) {
     'terrace', 'gap-1', 'gap-2', 'gap-3', 'viaduct', 'crossing', 'underpass',
     'chain-foot', 'chain-head', 'tower',
     'far-1', 'far-2', 'far-3', 'far-4', 'far-5', 'summit',
+    'sky-1', 'sky-2', 'span', 'reach-a', 'reach-b', 'gulf', 'rise',
+    'wall-1', 'wall-2', 'wall-3', 'wall-4', 'zenith',
   ]
   // THE SAFE-LINE SPINE IS THE ORIGINAL TEACHING COURSE ONLY. course-design.md
   // makes the sunset course a teaching course whose no-dash/no-grapple line is
@@ -1757,7 +1883,7 @@ export function buildCourse(collision) {
   const SPINE = [
     'terrace', 'gap-1', 'viaduct', 'crossing', 'underpass', 'chain-head', 'tower',
   ]
-  const report = A.verify('terrace', 'summit', SPINE)
+  const report = A.verify('terrace', 'zenith', SPINE)
   Archipelago.assertTriggersClear(collision, [
     ...L.checkpoints.map((c) => [c.label, c.position.x, c.position.z, c.position.y]),
     ['finish', L.finish.x, L.finish.z, L.finish.y],
