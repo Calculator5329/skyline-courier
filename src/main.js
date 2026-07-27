@@ -49,6 +49,10 @@ const MODE_KEY = 'skyline-courier:mode'
  * one, and turned "the code is broken" into "you have no records yet".
  */
 const BOARD_KEY = 'skyline-courier:boards'
+// Up here for the same reason BOARD_KEY is, and it is not a coincidence: the
+// boot paint reads BOTH, so a key declared beside its own code is a key in its
+// temporal dead zone when the menu first draws.
+const SIG_KEY = 'skyline-courier:sigs'
 
 function loadMode() {
   try {
@@ -123,6 +127,19 @@ const collision = new CollisionWorld()
 const level = theme.name === 'void' ? buildVoidCourse(collision) : buildCourse(collision)
 scene.add(level.build())
 
+// The layout this session's times will be set against, remembered before the
+// menu paints anything — every board read below filters on it. See
+// `courseSignature`. Only the loaded course can compute its own, so the map is
+// updated one level at a time, as you visit them.
+const courseSig = courseSignature(level)
+try {
+  const sigs = loadSigs()
+  if (sigs[theme.name] !== courseSig) {
+    sigs[theme.name] = courseSig
+    localStorage.setItem(SIG_KEY, JSON.stringify(sigs))
+  }
+} catch { /* private mode */ }
+
 const player = new Player(collision, level.spawn)
 player.anchors = level.anchors
 const rig = new CameraRig(camera)
@@ -177,7 +194,7 @@ const run = {
   // The best on THIS course under the rules booted with. Reloaded when the mode
   // changes (see `applyMode`) so the finish toast never compares against a time
   // set under different rules.
-  best: bestTime(loadBoards(), theme.name, getMode()),
+  best: bestTime(currentBoards(), theme.name, getMode()),
 }
 rig.yaw = level.spawnYaw
 
@@ -371,7 +388,7 @@ function applyMode(name) {
   resetRun()
   // A new rule set means a different board: the toast must now compare against
   // this mode's best, and the menu strips re-read to that mode's records.
-  run.best = bestTime(loadBoards(), theme.name, getMode())
+  run.best = bestTime(currentBoards(), theme.name, getMode())
   hud.setMode(getMode(), MODES)
   updateRecords()
 }
@@ -491,12 +508,15 @@ function finishRun() {
     // so a board row that read "8" would silently change meaning the next time
     // a checkpoint is added. Stored per entry, "8/11" stays true forever.
     cpsTotal: level.checkpoints.length,
+    // Which layout this was run on. Without it the entry is a number with no
+    // course attached, which is what every pre-expansion record now is.
+    sig: courseSig,
     date: new Date().toISOString(),
   })
   if (isBest) run.best = run.time
   // The menu is hidden now, but the run register's strips are repainted so the
   // new record is already there the instant Escape raises the panel again.
-  updateRecords(boards)
+  updateRecords(currentBoards(boards))
   hud.holdToast(
     'route complete',
     `${formatTime(run.time)}${isBest ? '  — new best' : `   best ${formatTime(run.best)}`}   ·   R to run it again`,
@@ -641,6 +661,60 @@ window.addEventListener('resize', () => {
 // placed on any one board), and nothing reads it now.
 const BOARD_MAX = 5              // keep the top five per board; the strip shows the top one
 
+/**
+ * The COURSE SIGNATURE — what a time was actually set against.
+ *
+ * Ethan, 2026-07-27, the morning the big expansion shipped: "on map change
+ * leaderboard needs to reset." He is right, and the reason is sharper than
+ * housekeeping: his 47.98 was set on a course that no longer exists. Left on
+ * the board it is not a record, it is a claim about a route nobody can run, and
+ * every honest run on the new layout loses to it forever.
+ *
+ * DERIVED, NOT DECLARED. A version constant somebody has to remember to bump is
+ * a version constant that will not get bumped — the expansion lane had no idea
+ * a leaderboard existed. This hashes the things a time is actually run against:
+ * where you start, where you finish, and every checkpoint between. A lane that
+ * moves the route invalidates the board by moving the route.
+ *
+ * It deliberately does NOT hash the geometry. Re-texturing an island, fixing a
+ * balustrade or relighting the sky does not change what the run IS, and a board
+ * that reset on a paint job would train everyone to ignore it.
+ */
+function courseSignature(lv) {
+  // FNV-1a over rounded coordinates. Rounded to 10 cm because float noise from
+  // a refactor is not a route change; 10 cm of checkpoint drift is not either,
+  // and anything that actually moves a checkpoint moves it much further.
+  let h = 0x811c9dc5
+  const eat = (v) => {
+    if (!v) return
+    for (const n of [v.x, v.y, v.z]) {
+      const s = String(Math.round(n * 10))
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i)
+        h = Math.imul(h, 0x01000193)
+      }
+    }
+  }
+  eat(lv.spawn)
+  eat(lv.finish)
+  for (const cp of lv.checkpoints) eat(cp.position)
+  return (h >>> 0).toString(36)
+}
+
+/**
+ * Signatures seen per level, so the records screen can judge the board of a
+ * course that is not currently loaded.
+ *
+ * Only the loaded course can compute its own signature — the other course is
+ * not built. Remembering the last one seen for each level means both boards can
+ * be filtered on the records screen instead of only the one you happen to be
+ * standing in.
+ */
+function loadSigs() {
+  try { return JSON.parse(localStorage.getItem(SIG_KEY)) || {} }
+  catch (err) { console.warn('course signatures unreadable:', err); return {} }
+}
+
 function boardKey(level, mode) { return `${level}:${mode}` }
 
 function loadBoards() {
@@ -654,6 +728,36 @@ function loadBoards() {
     console.warn('leaderboards unreadable, showing an empty board:', err)
     return {}
   }
+}
+
+/**
+ * Every board, filtered to runs set on the layout that is live NOW.
+ *
+ * Retired entries are FILTERED, NEVER DELETED — they stay in storage exactly as
+ * written. If a course is ever reverted, or a signature turns out to be too
+ * eager, the runs are still there; a leaderboard that quietly destroys somebody's
+ * history to tidy itself up is worse than one that shows a stale number.
+ *
+ * An entry with no `sig` at all predates this and is retired by definition: it
+ * was set before the expansion, on a course that is now provably different.
+ */
+function currentBoards(raw = loadBoards(), sigs = loadSigs()) {
+  const out = {}
+  for (const [k, list] of Object.entries(raw)) {
+    const want = sigs[k.split(':')[0]]
+    out[k] = want ? list.filter((e) => e.sig === want) : list
+  }
+  return out
+}
+
+/** How many runs are being held back as set on an older layout. */
+function retiredCount(raw = loadBoards(), sigs = loadSigs()) {
+  let n = 0
+  for (const [k, list] of Object.entries(raw)) {
+    const want = sigs[k.split(':')[0]]
+    if (want) n += list.filter((e) => e.sig !== want).length
+  }
+  return n
 }
 
 /** One board's ranked entries, fastest first. Always an array, never null. */
@@ -680,7 +784,17 @@ function recordRun(entry) {
   const list = boards[k] || (boards[k] = [])
   list.push(entry)
   list.sort((a, b) => a.t - b.t)
-  list.length = Math.min(list.length, BOARD_MAX)
+  // Trimmed PER LAYOUT, not across the whole list. A flat top-five would let
+  // five untouchable times from the old course evict every run on the new one,
+  // so the board would show nothing you could actually beat — which is the
+  // exact failure this feature exists to prevent, arriving through the back
+  // door. Each layout keeps its own five.
+  const kept = new Map()
+  boards[k] = list.filter((e) => {
+    const n = (kept.get(e.sig) || 0) + 1
+    kept.set(e.sig, n)
+    return n <= BOARD_MAX
+  })
   try { localStorage.setItem(BOARD_KEY, JSON.stringify(boards)) }
   catch { /* private mode */ }
   return boards
@@ -693,7 +807,7 @@ function recordRun(entry) {
  * both are looked up — the other world's board lives in the same storage even
  * though its course is not loaded.
  */
-function updateRecords(boards = loadBoards()) {
+function updateRecords(boards = currentBoards()) {
   const mode = getMode()
   // Whole ranked lists, not just the leader: the card shows the record in its
   // strip and the runs that lost to it underneath, and both come off the same
@@ -734,7 +848,8 @@ function paintRecordsScreen() {
     // whatever the world calls itself — the reason the menu card spent a day
     // saying "The Void" is that its name was written in a second place.
     levels: Object.keys(THEMES).map((key) => ({ key, label: THEMES[key].label || key })),
-    boards: loadBoards(),
+    boards: currentBoards(),
+    retired: retiredCount(),
   }, (key) => { recordsMode = key; paintRecordsScreen() })
 }
 

@@ -485,7 +485,21 @@ export class Hud {
    * costs somebody a time. The tab picks what you are LOOKING at, nothing more.
    */
   renderRecords(view, onPick) {
-    const { mode, modes, levels, boards } = view
+    const { mode, modes, levels, boards, retired } = view
+
+    // Say when runs are being held back, and why. A course that grows retires
+    // the times set on the shorter one — they are not comparable and they would
+    // sit unbeatable at the top forever — but a board that silently drops your
+    // record is a board you stop trusting. They are filtered, never deleted.
+    const note = $('rnote')
+    if (note) {
+      note.textContent = retired
+        ? `a run is filed the moment you cross the finish — there is nothing to submit. `
+          + `${retired} earlier ${retired === 1 ? 'run is' : 'runs are'} set aside: the course has been `
+          + `extended since, so those times are not comparable. They are kept, not deleted.`
+        : 'a run is filed the moment you cross the finish — there is nothing to submit. '
+          + 'Times live in this browser.'
+    }
 
     this.rtabs.replaceChildren()
     for (const m of modes) {
