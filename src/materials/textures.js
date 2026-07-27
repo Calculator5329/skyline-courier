@@ -2060,6 +2060,110 @@ const PAINTERS = {
     }
 
     /**
+     * --- the inscription --------------------------------------------------
+     *
+     * §4.1 and §8: the reference's great walls read as AUTHORED and ANCIENT,
+     * not merely cut — "carved detail, inscriptions, deliberate ornament". The
+     * panels, grooves and index ticks above make the face read as MACHINED;
+     * what makes it read as a RUIN someone built and inscribed is a band of
+     * glyphs cut into it. Ethan's standing note on the build is "not mythical
+     * enough, not detailed enough in some areas", and a blank cut face at the
+     * range a wall-run reads it is exactly the flat area he means.
+     *
+     * Deliberately NOT a sigil ring. §4.1 reserves the concentric rings for
+     * geometry (`voidkit.js`), and a ring painted here would repeat every 2.38 m
+     * and fight the real one. This is a LINE of angular rune-marks on a shared
+     * baseline — the one ancient-ornament read a tiling texture can carry
+     * honestly: writing runs ALONG a wall, so a band of it repeating along the
+     * wall is what writing looks like, where a repeating rosette is wallpaper.
+     *
+     * INCISED, never drawn bright. The marks are cut into the HEIGHT field, so
+     * they catch the rim the same way the grooves do and the dust pass below
+     * settles violet mote-dust into them (a recess collects dust because it is a
+     * recess — the letters fill with it, which is most of the ancient read).
+     * Only a slight albedo darken and a roughness bump ride along. They carry NO
+     * emissive and no light of their own: §4.1 keeps the wall's light budget for
+     * its sigil ring, and §2's "under 5% of the frame bright" is not spent on
+     * text. So this pass CANNOT move the value-structure table — it is pure
+     * surface relief, free at bake time and invisible to the bloom pass.
+     *
+     * A LOCAL rng, seeded from a constant, draws the layout. The shared `rand()`
+     * feeds the dust, damage and glow-vein passes below, all of which are
+     * rendered-verified; consuming it here would shift their PRNG stream and
+     * move every one of their features. This pass therefore perturbs nothing
+     * downstream — only the new incised pixels change.
+     */
+    {
+      let s = 0x1a2b3c4d
+      const rnd = () => {
+        s = (s + 0x6d2b79f5) | 0
+        let t = Math.imul(s ^ (s >>> 15), 1 | s)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+
+      /**
+       * Precompute the strokes ONCE, then paint the same list into all three
+       * channels — rnd() is stateful, so drawing per-channel would desynchronise
+       * height, albedo and roughness and smear the glyphs apart.
+       */
+      const strokes = []   // each: [x0, y0, x1, y1]
+      // Two bands per tile, off the panel's own mid-line so the row is never a
+      // single ruled feature bisecting the face.
+      for (let b = 0; b < 2; b++) {
+        const gh = 26 + rnd() * 14                  // ~12-19 cm glyphs
+        const by = 108 + b * 170 + rnd() * 44       // baseline down the tile
+        const gw = gh * 0.62
+        const pitch = gw * 1.7
+        const margin = 66                            // clear of the border grooves
+        const count = Math.max(1, Math.floor((SIZE - margin * 2) / pitch))
+        const x0 = margin + (SIZE - margin * 2 - count * pitch) * 0.5 + pitch * 0.5
+        const half = gh / 2
+        for (let g = 0; g < count; g++) {
+          const cx = x0 + g * pitch
+          strokes.push([cx, by - half, cx, by + half])  // the stem
+          // 2-4 straight arms off the stem at rune angles — machine-cut, not
+          // organic, so the row reads as script and not as cracks.
+          const arms = 2 + ((rnd() * 3) | 0)
+          for (let k = 0; k < arms; k++) {
+            const ay = by + (-0.7 + rnd() * 1.4) * half
+            const dir = rnd() < 0.5 ? -1 : 1
+            const len = gw * (0.42 + rnd() * 0.5)
+            const drop = (rnd() - 0.5) * gh * 0.45
+            strokes.push([cx, ay, cx + dir * len, ay + drop])
+          }
+          // an occasional foot or crossbar — the mark that makes a glyph look
+          // composed rather than scratched.
+          if (rnd() < 0.45) {
+            const fy = by + (rnd() < 0.5 ? -half : half)
+            strokes.push([cx - gw * 0.5, fy, cx + gw * 0.5, fy])
+          }
+        }
+      }
+
+      const render = (ctx, style, lw) => wrapped(ctx, () => {
+        ctx.strokeStyle = style
+        ctx.lineWidth = lw
+        ctx.lineCap = 'square'
+        ctx.lineJoin = 'miter'
+        ctx.beginPath()
+        for (const st of strokes) { ctx.moveTo(st[0], st[1]); ctx.lineTo(st[2], st[3]) }
+        ctx.stroke()
+      })
+      // HEIGHT: cut ~40 below the panel face (which stands at ~176), so the mark
+      // is a groove the normal breaks over rather than a painted line — and well
+      // above the deep groove floor at 64, because an inscription is shallower
+      // than the structural grooves that separate the panels.
+      render(h, hg(136), 3.4)
+      // ALBEDO: a touch darker and cooler, the inside of a fresh cut — the same
+      // move the panel grooves make, and far under the emissive budget.
+      render(a, `rgba(${(VOID_CARVED[0] * 0.72) | 0},${(VOID_CARVED[1] * 0.72) | 0},${(VOID_CARVED[2] * 0.80) | 0},0.85)`, 3.0)
+      // ROUGHNESS: matte, like every recess in this painter; dust lives in a cut
+      // and never gets polished.
+      render(m, mg(0.95, 0.0, 0.85), 3.0)
+    }
+
+    /**
      * --- dust in the grooves ----------------------------------------------
      *
      * Driven by the cavity of the height field just painted, exactly as brass's
