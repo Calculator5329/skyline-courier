@@ -37,7 +37,7 @@ try {
     const STEP = 1 / 120
     // INSTA = the line dies within 10 fixed steps (0.083 s) while F is HELD.
     const INSTA = 10
-    const anchors = p.anchors || []
+    const anchors = g.level.anchors || []
     const rows = []
     // Sample across the whole course rather than one spot: the bug was reported
     // as intermittent, and an intermittent bug measured in one place is a bug
@@ -49,6 +49,16 @@ try {
         for (const speed of [0, 11, 20]) {
           g.respawn()
           p.wallCooldown = 0; p.grappleCooldown = 0
+          // Grant every verb. Progressive unlocks gate the grapple behind course
+          // progress, which is correct for a PLAYER and wrong for a probe whose
+          // whole job is to exercise the grapple. Unlock explicitly rather than
+          // teleporting far enough along to earn it.
+          // Progressive unlocks enforce the grapple by emptying `player.anchors`
+          // until checkpoint 7 (src/hud.js `gate`/`release`). Correct for a
+          // player; wrong for a probe whose entire job is the grapple, which
+          // spawns at checkpoint 0 and would otherwise measure a locked ability
+          // and call it a pass. Hand the list back explicitly.
+          p.anchors = g.level.anchors
           // Stand off the anchor along -X, level with it, aimed at it.
           p.teleport(new V(a.x - back, a.y, a.z))
           p.velocity.set(speed, 0, 0)
@@ -105,7 +115,19 @@ try {
     for (const s of out.sample) console.log(`    held ${s.held} back ${s.back}m speed ${s.speed} -> ${s.reason}`)
   }
   console.log('')
-  console.log(out.insta === 0 ? 'PASS — no latch died while F was held'
-    : `FAIL — ${out.insta} latches died within 0.083 s with F held`)
-  process.exitCode = out.insta === 0 ? 0 : 1
+  // ZERO LATCHES IS A FAILURE, NOT A PASS. This bit twice: first when a yaw
+  // bug meant 9 attempts in 225 ever fired, and again the moment progressive
+  // unlocks gated the grapple at spawn — the probe cheerfully reported
+  // "0 / 0 = 0.0% PASS" while measuring nothing at all. A check that cannot
+  // fail is not a check.
+  if (out.latches === 0) {
+    console.log('FAIL — NOTHING LATCHED. The probe measured nothing, which is not a pass.')
+    console.log('  Likely: the grapple is not unlocked yet (see progressive unlocks in')
+    console.log('  src/level.js / src/hud.js), the aim missed, or no anchor was in range.')
+    process.exitCode = 1
+  } else {
+    console.log(out.insta === 0 ? 'PASS — no latch died while F was held'
+      : `FAIL — ${out.insta} latches died within 0.083 s with F held`)
+    process.exitCode = out.insta === 0 ? 0 : 1
+  }
 } finally { await browser.close(); await server.close() }
