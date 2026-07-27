@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-07-27 — performance receipts now preserve the slow frames
+
+`tools/hitch.mjs` now owns the shared frame-time summary used by the running
+hitch audit, `shotset`, and every `perfbaseline` mode. Their default output
+includes mean, p99, 1% low FPS, population standard deviation, hitch count, and
+worst hitch. Parked captures time every GPU-synchronized pumped frame instead
+of reducing the entire pump to one mean.
+
+Quality-level repeats remain interleaved, but now select one complete repeat by
+its mean and preserve that repeat's tail. The 240 Hz verdict requires both a
+p99 at or below 4.167 ms and zero frames beyond the existing 16.667 ms hitch
+threshold. Empty, negative, or non-finite timing samples fail closed.
+
+The required RTX 5070 Ti quality capture was attempted after a clean build, but
+this managed Codex lane again failed at Chromium startup
+(`sandbox_host_linux.cc:41`, `Operation not permitted`) before any page or
+frame existed. Therefore the Balanced values, 1600x900 Lite value, and all
+per-level consistency verdicts remain explicitly unmeasured rather than being
+inferred from the existing means. The exact socket-free closeout command is in
+`docs/lite-mode.md`.
+
 ## 2026-07-27 — the frame audit measured, and the quality menu is a placebo
 
 Ethan played the deployed build: *"graphics lite doesn't change anything, and

@@ -9,6 +9,32 @@ This document exists because the obvious diagnosis was wrong, and a second
 agent starting from the same symptom would reach the same wrong answer and
 spend the same day disproving it.
 
+## 2026-07-27 consistency receipts
+
+A mean is no longer a performance receipt in this repository. `shotset`,
+`perfbaseline`, its live-rAF audit, and `hitch` now use the same frame-time
+summary from `tools/hitch.mjs`:
+
+- mean and p99 frame time;
+- 1% low FPS (`1000 / p99 frame time`);
+- population standard deviation across every synchronized pumped frame;
+- hitch count above the existing 60 Hz budget (16.667 ms), plus the worst
+  hitch; and
+- max frame time, retained in JSON and the running-course report.
+
+The parked-shot tools settle the exposure and pipeline first, then time every
+GPU-synchronized frame individually. Interleaved quality repeats select the
+complete repeat with the lowest mean; the p99, deviation, and hitch fields all
+come from that same repeat. Selecting each statistic from a different repeat
+would manufacture a distribution that never occurred.
+
+For a 240 Hz verdict, zero 16.667 ms hitches is necessary but not sufficient:
+p99 must also fit inside 4.167 ms. Thus a 3 ms mean with a 7 ms p99 is reported
+as **not consistent at 240 Hz**, even if it never crosses the broader hitch
+threshold. Infrastructure failures and missing/non-finite samples fail closed.
+`node tools/hitch.mjs --self-test` exercises both accepted steady/hitched
+samples and rejected empty/non-finite inputs.
+
 ## 2026-07-27 real-frame audit
 
 The production loop is a direct `requestAnimationFrame(frame)` recursion. It
@@ -22,10 +48,10 @@ node tools/perfbaseline.mjs --live --headed
 
 That drives the actual game loop while running forward+sprint, at native
 1920x1080 and 2560x1440, records rAF pacing, and performs an audit-only
-`readPixels` after each frame so completed time includes the GPU. It prints
-p50/p95/p99/max and headroom against the 4.167 ms 240 Hz budget. The readback is
-installed before the app only for this mode; there is no readback or fence in
-production.
+`readPixels` after each frame so completed time includes the GPU. It prints the
+same consistency fields as the parked-shot tools plus headroom against the
+4.167 ms 240 Hz budget. The readback is installed before the app only for this
+mode; there is no readback or fence in production.
 
 ### What the audit found
 
@@ -36,14 +62,14 @@ production.
 | static transforms | Three recomposed and multiplied the static level tree in both the depth/normal prepass and beauty pass. | Resolve once in `Level.build()`, then disable local/world matrix auto-update on the tagged static subtree. Shader animation is unaffected. | None; matrices are the same values |
 | void emitters | Sort all (up to 96) pooled emitters by camera distance every frame to use 16. | Stable nearest-16 insertion selection with fixed typed-array scratch. | None; exact same ordered 16, including tie order |
 | sun target | `world.update()` updated the target matrix explicitly; the immediately following scene render updated it again before shadow-matrix use. | Removed the first update. | None; the consuming render still updates it |
-| contact shader | Up to 27 dependent normal-buffer fetches repeated a coverage fact already present in the fetched positive linear depth. | Reuse depth for coverage. | Executable old/new shader arms are gated at ±0.2 on lum/p1/p50/p99 |
+| contact shader | Up to 27 dependent normal-buffer fetches repeated a coverage fact already present in the fetched positive linear depth. | Reuse depth for coverage. | Executable old/new shader arms use the recalibrated High-only lum/p1/p50/p99 gate described in `docs/lite-mode.md`. |
 | shadow scheduling | The prepass already suppresses shadow updates. The beauty pass renders one 2048² map each frame because its orthographic frustum follows the moving player. `noshadow` measured inside noise: −0.20 to +0.08 ms on the quoted 1440p shots. | Kept one update per frame. On-demand updates would make a continuously moving shadow projection stale, while the measurable saving is zero. | None |
 | targets / sync | `setSize` early-outs and is called only at boot, resize, or a quality change. No render target is allocated in `render()`. Exposure stays GPU-side through a 1x1 texture. Production contains no `readPixels`, `finish`, or fence. | No change needed. | None |
 
 `tools/perfbaseline.mjs` switches every shipped optimization above back to its
 old implementation in one build, captures every skyline and void shot, reports
-CPU queue time and GPU-synced time separately, and fails if any shot moves past
-the 0.2-luma percentile tolerance.
+CPU queue time and the full GPU-synced consistency distribution separately,
+and fails if any shot moves past the run's measured High-only visual tolerance.
 
 ### The 240 Hz limit that remains
 

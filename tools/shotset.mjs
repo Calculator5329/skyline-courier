@@ -24,6 +24,7 @@ import {
   DEFAULTS, REPO, buildDist, glRenderer, hideChrome, launchBrowser, num,
   openGame, parseArgs, pumpShot, startStaticServer,
 } from './harness.mjs'
+import { measurePumpedFrames } from './hitch.mjs'
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
@@ -32,6 +33,7 @@ async function main() {
   const width = num(args.width, DEFAULTS.width)
   const height = num(args.height, DEFAULTS.height)
   const frames = num(args.frames, DEFAULTS.frames)
+  const syncFrames = num(args['sync-frames'], 40)
 
   // A shot table belongs to a LEVEL, not to the harness. `--theme void`
   // selects the void course (src/main.js picks the course from the theme), so
@@ -77,6 +79,13 @@ async function main() {
       const file = join(outDir, `${name}.png`)
       const before = errors.length
       const info = await pumpShot(page, name, { frames, dt: DEFAULTS.dt })
+      const measured = await measurePumpedFrames(page, name, {
+        frames: syncFrames,
+        dt: DEFAULTS.dt,
+      })
+      info.frameMs = measured.consistency.meanMs
+      info.fps = Math.round(1000 / measured.consistency.meanMs)
+      info.consistency = measured.consistency
       await page.screenshot({ path: file, type: 'png' })
 
       const bytes = (await stat(file)).size
@@ -99,15 +108,17 @@ async function main() {
   }
 
   if (args.json) {
-    console.log(JSON.stringify({ outDir, width, height, frames, gl, results }, null, 2))
+    console.log(JSON.stringify({
+      outDir, width, height, frames, syncFrames, gl, results,
+    }, null, 2))
   } else {
-    report(outDir, width, height, frames, gl, results)
+    report(outDir, width, height, frames, syncFrames, gl, results)
   }
   if (results.some((r) => !r.pass)) process.exitCode = 1
 }
 
-function report(outDir, width, height, frames, gl, results) {
-  console.log(`\nshot set → ${outDir}   ${width}x${height}, ${frames} pumped frames`)
+function report(outDir, width, height, frames, syncFrames, gl, results) {
+  console.log(`\nshot set → ${outDir}   ${width}x${height}, ${frames} settle + ${syncFrames} measured pumped frames`)
   console.log(`GL: ${gl ? gl.renderer : 'unknown'}\n`)
   // `spread` is the 3x3 REGION spread (max region mean - min region mean) and
   // `dyn` is p99 - p1 over the whole frame. They answer different questions and
@@ -116,7 +127,10 @@ function report(outDir, width, height, frames, gl, results) {
   // which sets an acceptance target of >200 against a statistic that would need
   // a ninth of the frame to average pure white. Printing both is cheaper than
   // arguing about which one a target meant.
-  const head = ['shot', 'ok', 'lum', 'sat', 'p1/p50/p99', 'spread', 'dyn', 'clip hi/lo', 'draws', 'tris', 'ms/f']
+  const head = [
+    'shot', 'ok', 'lum', 'sat', 'p1/p50/p99', 'spread', 'dyn', 'clip hi/lo',
+    'draws', 'tris', 'mean ms', 'p99 ms', '1% low', 'σ ms', 'hitches', 'worst',
+  ]
   const rows = results.map((r) => [
     r.shot,
     r.pass ? 'yes' : `NO(${r.fail.join(',')})`,
@@ -128,7 +142,14 @@ function report(outDir, width, height, frames, gl, results) {
     `${r.image.clipped.highPct}%/${r.image.clipped.lowPct}%`,
     String(r.render.drawCalls),
     String(r.render.triangles),
-    String(r.render.frameMs),
+    String(r.render.consistency.meanMs),
+    String(r.render.consistency.p99Ms),
+    `${r.render.consistency.onePctLowFps} fps`,
+    String(r.render.consistency.stddevMs),
+    String(r.render.consistency.hitchCount),
+    r.render.consistency.worstHitchMs
+      ? `${r.render.consistency.worstHitchMs} ms`
+      : '—',
   ])
   const w = head.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)))
   const line = (cells) => cells.map((c, i) => c.padEnd(w[i])).join('  ')
