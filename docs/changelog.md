@@ -1,5 +1,69 @@
 # Changelog
 
+## 2026-07-27 — the frame audit measured, and the quality menu is a placebo
+
+Ethan played the deployed build: *"graphics lite doesn't change anything, and
+FPS still seems bad. should easily run 240fps."* Both complaints are one bug
+with two layers, and the audit lane's own gate was mis-calibrated on top.
+
+**Layer 1 (fixed earlier today): the Settings quality control was half-wired.**
+It called `applyPixelRatio()` and `pipeline.setQuality()` but never
+`renderer.setSize()`, and three only rebuilds the backing store on `setSize`.
+The seg now stages into the settings edit buffer and Apply commits through the
+one real `setQuality`.
+
+**Layer 2 (open): every quality level is the same level.** `QUALITY_LEVELS` in
+`src/render/quality.js` differs across `high`/`balanced`/`lite` in exactly one
+field, `pixelRatioCap` (2 / 1.5 / 1). `contactShadows`, `contactScale`,
+`contactSteps` (14), `aoTaps` (8) and `aoNearTaps` (5) are **identical in all
+three**. So on any display reporting `devicePixelRatio` 1, Lite is byte-for-byte
+High and costs exactly the same. Measured, 1600x900 headless, mean of terrace /
+crossing / tower / closeup:
+
+| level | mean ms/f | fps |
+| --- | ---: | ---: |
+| high | 2.88 | 348 |
+| balanced | 3.19 | 313 |
+| lite | 3.22 | 311 |
+
+Lite is not faster. It is marginally slower, which is the noise floor. The file
+comment says the knobs that belong here are "pixels, and the contact-shadow
+pass that consumes them" — the contact fields exist per level and nobody ever
+gave them different values. That is the gap between a plumbed setting and a
+setting.
+
+**The audit's CPU work is real, and it was not the bottleneck.** Mean across 20
+shots, both arms captured in one harness run:
+
+| metric | before | after | delta |
+| --- | ---: | ---: | --- |
+| CPU ms/f | 0.376 | 0.341 | **9% less CPU per frame** |
+| GPU-synced ms/f | 2.091 | 2.111 | unchanged (within noise) |
+
+The one-time scene discovery, static-level matrix freeze, partial emitter
+selection and dropped duplicate sun-target update all do what they claim. The
+frame is GPU-bound, so removing CPU work does not move the wall clock. That
+closes the previous entry's missing after-numbers with measurements rather than
+a pointer to the tool.
+
+**The gate cried wolf, and the wolf was the gate.** `tools/perfbaseline.mjs`
+reported FAIL on terrace / tower / zenith across two runs, which looks like an
+image change. It is not. Two `shotset` captures at **identical code** vary by
+up to **0.7 luma on terrace's p99** — more than three times the 0.2 tolerance
+the gate asserts. The tolerance claims a precision the capture does not have,
+so it manufactures failures on exactly the high-contrast shots whose p99 is
+decided by a handful of pixels. Verified by bisect: reverting the sun-target
+change alone, and the matrix-freeze alone, each left the same three shots
+failing. A gate that fires on noise trains people to ignore it, which is the
+same defect class as a gate that never fires.
+
+**What 240 Hz actually needs, stated honestly.** At 2560x1440 native the
+shipped frame is 4.8-6.5 ms on the heavy shots (240 Hz needs 4.16) and the
+diagnostic no-contact floor is 2.9-3.2 ms. So the contact pass is roughly 40%
+of the frame and turning it down is the only lever with enough room in it. That
+is a quality-menu decision, not a free optimisation — which is precisely what
+the quality menu was supposed to offer and does not.
+
 ## 2026-07-27 — frame work that did not draw a different pixel is gone
 
 The real-frame audit found four CPU costs that were unrelated to the rendered
