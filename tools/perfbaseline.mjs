@@ -39,10 +39,13 @@ const MIME = {
   '.ogg': 'audio/ogg',
 }
 
-// The analyzer reports one decimal place. Both arms boot with the same seeded
-// procedural world and pump the same frame count, so the only remaining
-// measurement floor is one reporting quantum. 0.2 allows one quantum of
-// rounding on each side without accepting a visible percentile movement.
+// Reproducibility calibration (2026-07-27): five IDENTICAL high-quality
+// captures per shot, each in a fresh seeded browser context, are compared by
+// `--calibrate-visual 5`. Keep this value above the largest observed range,
+// and record that run here before changing it. This gate is for HIGH only:
+// balanced/lite intentionally move the image and are measured separately.
+//
+// Calibration pending; run the command above before replacing this value.
 const VISUAL_TOLERANCE = 0.2
 
 function seededRandom() {
@@ -240,13 +243,14 @@ function compare(ref, got) {
   return { pass, deltas }
 }
 
-async function captureTheme(browser, theme, args, optimized) {
+async function captureTheme(browser, theme, args, optimized, quality = 'high') {
   const isVoid = theme === 'void'
   const table = isVoid ? VOID_SHOTS : SHOTS
   const names = isVoid ? VOID_SHOT_NAMES : SHOT_NAMES
-  const query = isVoid ? '?theme=void' : ''
+  const query = new URLSearchParams({ quality })
+  if (isVoid) query.set('theme', 'void')
   const { context, page, errors } = await openFromDist(
-    browser, `http://skyline.test/${query}`, args.width, args.height)
+    browser, `http://skyline.test/?${query}`, args.width, args.height)
   const rows = []
   try {
     await hideChrome(page, { hud: false })
@@ -284,6 +288,69 @@ async function captureTheme(browser, theme, args, optimized) {
   } finally {
     await context.close()
   }
+}
+
+function calibrationRanges(captures) {
+  const rows = []
+  for (const theme of captures[0].map((capture) => capture.theme)) {
+    const themeCaptures = captures.map(
+      (capture) => capture.find((candidate) => candidate.theme === theme)
+    )
+    for (const first of themeCaptures[0].rows) {
+      const metrics = {}
+      for (const key of ['lum', 'p1', 'p50', 'p99']) {
+        const values = themeCaptures.map(
+          (capture) => capture.rows.find((row) => row.shot === first.shot).visual[key]
+        )
+        metrics[key] = {
+          min: Math.min(...values),
+          max: Math.max(...values),
+          range: +(Math.max(...values) - Math.min(...values)).toFixed(1),
+        }
+      }
+      rows.push({ theme, shot: first.shot, metrics })
+    }
+  }
+  return rows
+}
+
+async function runVisualCalibration(browser, themes, args, count, json) {
+  if (!Number.isInteger(count) || count < 5) {
+    console.error('--calibrate-visual requires an integer capture count >= 5')
+    process.exitCode = 2
+    return
+  }
+  const captures = []
+  for (let run = 0; run < count; run++) {
+    const sample = []
+    for (const theme of themes) {
+      // Exact same high-quality arm every time: no optimization switch changes
+      // between captures. A fresh context exposes real capture/driver noise.
+      sample.push(await captureTheme(browser, theme, args, true, 'high'))
+    }
+    captures.push(sample)
+  }
+  const rows = calibrationRanges(captures)
+  const observedMax = Math.max(
+    ...rows.flatMap((row) => Object.values(row.metrics).map((metric) => metric.range))
+  )
+  if (json) {
+    console.log(JSON.stringify({
+      calibration: true,
+      quality: 'high',
+      captures: count,
+      observedMax,
+      rows,
+    }, null, 2))
+    return
+  }
+  console.log(`\nhigh-only visual reproducibility — ${count} identical captures`)
+  console.log('| theme | shot | lum range | p1 range | p50 range | p99 range |')
+  console.log('| --- | --- | ---: | ---: | ---: | ---: |')
+  for (const row of rows) {
+    console.log(`| ${row.theme} | ${row.shot} | ${row.metrics.lum.range} | ${row.metrics.p1.range} | ${row.metrics.p50.range} | ${row.metrics.p99.range} |`)
+  }
+  console.log(`\nobserved maximum range: ${observedMax} luma units\n`)
 }
 
 function pairResults(baseline, optimized) {
@@ -344,6 +411,11 @@ async function main() {
   let optimized
   try {
     const themes = wanted === 'all' ? ['skyline', 'void'] : [wanted]
+    if (cli['calibrate-visual']) {
+      await runVisualCalibration(
+        browser, themes, args, num(cli['calibrate-visual'], 0), !!cli.json)
+      return
+    }
     // The full current-tree baseline is deliberately completed before any
     // optimized arm is measured.
     baseline = []
