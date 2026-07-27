@@ -159,7 +159,10 @@ const run = {
   checkpointsHit: 0,
   respawn: level.spawn.clone(),
   respawnYaw: level.spawnYaw,
-  best: loadBest(),
+  // The best on THIS course under the rules booted with. Reloaded when the mode
+  // changes (see `applyMode`) so the finish toast never compares against a time
+  // set under different rules.
+  best: bestTime(loadBoards(), theme.name, getMode()),
 }
 rig.yaw = level.spawnYaw
 
@@ -347,7 +350,11 @@ function applyMode(name) {
   setMode(name)
   try { localStorage.setItem(MODE_KEY, getMode()) } catch { /* private mode */ }
   resetRun()
+  // A new rule set means a different board: the toast must now compare against
+  // this mode's best, and the menu strips re-read to that mode's records.
+  run.best = bestTime(loadBoards(), theme.name, getMode())
   hud.setMode(getMode(), MODES)
+  updateRecords()
 }
 
 for (const btn of document.querySelectorAll('.modebtn')) {
@@ -381,6 +388,8 @@ const THEME_KEY = 'skyline-courier:theme'
 // which stays brass in both (it is an instrument panel, not chrome).
 document.documentElement.dataset.theme = theme.name
 hud.setMap(theme.name)
+// Paint the best-time strips once at boot, for whichever mode is remembered.
+updateRecords()
 
 let switchingMap = false
 
@@ -451,10 +460,19 @@ function finishRun() {
   run.finished = true
   audio.finish()
   const isBest = run.best == null || run.time < run.best
-  if (isBest) {
-    run.best = run.time
-    saveBest(run.time)
-  }
+  // File it on this course's board for the mode it was run under, storing more
+  // than the finish line shows so the record survives to feed a richer view.
+  const boards = recordRun({
+    t: run.time,
+    mode: getMode(),
+    level: theme.name,
+    cps: run.checkpointsHit,
+    date: new Date().toISOString(),
+  })
+  if (isBest) run.best = run.time
+  // The menu is hidden now, but the run register's strips are repainted so the
+  // new record is already there the instant Escape raises the panel again.
+  updateRecords(boards)
   hud.holdToast(
     'route complete',
     `${formatTime(run.time)}${isBest ? '  — new best' : `   best ${formatTime(run.best)}`}   ·   R to run it again`,
@@ -585,13 +603,66 @@ window.addEventListener('resize', () => {
 })
 
 // ------------------------------------------------------------- persistence
+//
+// Per-level, per-mode leaderboards, in localStorage — there is no backend and
+// none is wanted. A time is only comparable to another time set on the SAME
+// course under the SAME rules: a Hardcore run up the Void and a Fun run across
+// the Skyline are different games, and one board that mixed them would be worse
+// than none. So every board is keyed `<level>:<mode>` and holds its own ranked
+// list.
+//
+// This supersedes the old single `skyline-courier:best` scalar, which was
+// level- and mode-agnostic — it would show a Skyline best over the Void. That
+// key is left untouched rather than migrated (its value cannot be honestly
+// placed on any one board), and nothing reads it now.
+const BOARD_KEY = 'skyline-courier:boards'
+const BOARD_MAX = 5              // keep the top five per board; the strip shows the top one
 
-function loadBest() {
-  const v = localStorage.getItem('skyline-courier:best')
-  return v == null ? null : parseFloat(v)
+function boardKey(level, mode) { return `${level}:${mode}` }
+
+function loadBoards() {
+  try { return JSON.parse(localStorage.getItem(BOARD_KEY)) || {} }
+  catch { return {} }            // private mode, or a corrupt value
 }
-function saveBest(t) {
-  try { localStorage.setItem('skyline-courier:best', String(t)) } catch { /* private mode */ }
+
+/** Best (lowest) time on one board, or null if it has never been run. */
+function bestTime(boards, level, mode) {
+  const list = boards[boardKey(level, mode)]
+  return list && list.length ? list[0].t : null
+}
+
+/**
+ * File a finished run onto its board and return the updated boards.
+ *
+ * The entry stores more than the strip shows — time, mode, level, checkpoints
+ * and an ISO date — so a richer board (splits, dated history) can be built later
+ * without a data migration.
+ */
+function recordRun(entry) {
+  const boards = loadBoards()
+  const k = boardKey(entry.level, entry.mode)
+  const list = boards[k] || (boards[k] = [])
+  list.push(entry)
+  list.sort((a, b) => a.t - b.t)
+  list.length = Math.min(list.length, BOARD_MAX)
+  try { localStorage.setItem(BOARD_KEY, JSON.stringify(boards)) }
+  catch { /* private mode */ }
+  return boards
+}
+
+/**
+ * Repaint the menu's best-time strips for the mode currently picked.
+ *
+ * Both route cards are always on screen regardless of which world is booted, so
+ * both are looked up — the other world's board lives in the same storage even
+ * though its course is not loaded.
+ */
+function updateRecords(boards = loadBoards()) {
+  const mode = getMode()
+  hud.setRecords(
+    { skyline: bestTime(boards, 'skyline', mode), void: bestTime(boards, 'void', mode) },
+    MODES[mode]?.label || mode,
+  )
 }
 
 // --------------------------------------------------------------- debug API
