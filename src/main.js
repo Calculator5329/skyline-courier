@@ -321,6 +321,10 @@ document.addEventListener('pointerlockchange', () => {
   // Photo mode is the one way to be unlocked WITHOUT the overlay — that is the
   // whole point of it.
   hud.setOverlay(!locked && !photoMode)
+  // Whatever raises the panel raises the MENU. Coming back from a run to the
+  // records screen you left open ten minutes ago would hide the one control
+  // that starts another one.
+  if (locked) openRecords(false)
   if (locked) {
     // A menu button keeps DOM focus after the click that dismissed the menu, so
     // an Enter mid-run would re-fire it — and on a map card that is a page
@@ -699,6 +703,53 @@ function updateRecords(boards = loadBoards()) {
     MODES[mode]?.label || mode,
   )
 }
+
+// ------------------------------------------------------- the records screen
+//
+// A separate screen rather than more of the card strip, because six boards is
+// more than a card can hold and the interesting question is comparative: how
+// the same route reads under a different cuff. The strip on the menu card stays
+// — it answers "what is my time here", which is a glance, not a read.
+//
+// `recordsMode` is deliberately NOT `getMode()`. It is which board you are
+// looking at, and reading the Hardcore board must not re-rule the run you are
+// about to start.
+let recordsMode = getMode()
+
+// Read off the rules row in the DOM rather than restated here, so the two
+// cannot drift: the menu is the thing the player learned the order from.
+const MODE_ORDER = [...document.querySelectorAll('.modebtn')]
+  .map((b) => b.dataset.mode)
+  .filter((k) => MODES[k])
+
+function paintRecordsScreen() {
+  hud.renderRecords({
+    mode: recordsMode,
+    // Tabs in the menu's order — FUN, NORMAL, HARDCORE, ascending — not the
+    // order the MODES table happens to declare them in. The player has already
+    // learned that row on the way in; a second, different order for the same
+    // three things is a small lie about which one is harder.
+    modes: MODE_ORDER.map((key) => ({ key, label: MODES[key].label || key })),
+    // Labels come from the theme descriptors, so the screen calls the world
+    // whatever the world calls itself — the reason the menu card spent a day
+    // saying "The Void" is that its name was written in a second place.
+    levels: Object.keys(THEMES).map((key) => ({ key, label: THEMES[key].label || key })),
+    boards: loadBoards(),
+  }, (key) => { recordsMode = key; paintRecordsScreen() })
+}
+
+function openRecords(open) {
+  if (open) {
+    // Re-read on open, never cached: a run filed since the last look is the
+    // only reason to be on this screen at all.
+    recordsMode = getMode()
+    paintRecordsScreen()
+  }
+  hud.showRecords(open)
+}
+
+document.getElementById('recbtn')?.addEventListener('click', () => openRecords(true))
+document.getElementById('recback')?.addEventListener('click', () => openRecords(false))
 
 // --------------------------------------------------------------- debug API
 

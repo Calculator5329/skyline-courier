@@ -148,6 +148,10 @@ export class Hud {
     this.toastBig = this.toast.querySelector('.big')
     this.toastSub = this.toast.querySelector('.sub')
     this.overlay = $('overlay')
+    this.menu = $('menu')
+    this.records = $('records')
+    this.rtabs = $('rtabs')
+    this.rcols = $('rcols')
     this.chipDash = $('chip-dash')
     this.chipAir = $('chip-air')
     this.chipHook = $('chip-hook')
@@ -449,6 +453,98 @@ export class Hud {
         }
         board.append(li)
       }
+    }
+  }
+
+  /**
+   * Swap the panel between the menu and the records screen.
+   *
+   * One at a time, never both: they are the same plate showing a different
+   * face. Returning always lands back on the menu, so there is no state to get
+   * lost in — the records screen has exactly one exit and it is a button.
+   */
+  showRecords(visible) {
+    this.records.classList.toggle('hidden', !visible)
+    this.menu.classList.toggle('hidden', visible)
+  }
+
+  get recordsOpen() { return !this.records.classList.contains('hidden') }
+
+  /**
+   * Draw every board on the records screen for ONE rule set.
+   *
+   * `view` is `{ mode, modes: [{key,label}], levels: [{key,label}], boards }`,
+   * where `boards` is the raw storage object keyed `<level>:<mode>`. The HUD
+   * does no lookups of its own beyond that key — scoping, ranking and
+   * persistence all belong to src/main.js, and this method only renders what it
+   * is handed, exactly like `setRecords`.
+   *
+   * `onPick(modeKey)` is called when a rule tab is chosen. It does NOT switch
+   * the game's difficulty: reading the Hardcore board should not silently
+   * re-rule the run you are about to start, which is the kind of surprise that
+   * costs somebody a time. The tab picks what you are LOOKING at, nothing more.
+   */
+  renderRecords(view, onPick) {
+    const { mode, modes, levels, boards } = view
+
+    this.rtabs.replaceChildren()
+    for (const m of modes) {
+      const tab = document.createElement('button')
+      tab.type = 'button'
+      tab.className = 'rtab'
+      tab.dataset.nostart = ''
+      tab.setAttribute('role', 'tab')
+      tab.setAttribute('aria-selected', m.key === mode ? 'true' : 'false')
+      tab.textContent = m.label
+      tab.addEventListener('click', () => onPick(m.key))
+      this.rtabs.append(tab)
+    }
+
+    this.rcols.replaceChildren()
+    for (const lv of levels) {
+      const col = document.createElement('div')
+      col.className = 'rcol'
+      const h = document.createElement('h2')
+      h.textContent = lv.label
+      col.append(h)
+
+      const list = boards[`${lv.key}:${mode}`] || []
+      if (!list.length) {
+        const empty = document.createElement('div')
+        empty.className = 'rempty'
+        empty.textContent = 'no runs under these rules yet'
+        col.append(empty)
+      } else {
+        const table = document.createElement('table')
+        table.className = 'rtable'
+        const head = document.createElement('tr')
+        for (const [text, cls] of [['', 'rk'], ['time', ''], ['parcels', 'cr'], ['set', 'cr']]) {
+          const th = document.createElement('th')
+          th.textContent = text
+          if (cls) th.className = cls
+          head.append(th)
+        }
+        table.append(head)
+        list.forEach((e, i) => {
+          const tr = document.createElement('tr')
+          if (i === 0) tr.className = 'lead'
+          const cells = [
+            [`${i + 1}`, 'rk'],
+            [formatTime(e.t), ''],
+            [parcels(e) || '—', 'cr'],
+            [shortDate(e.date) || '—', 'cr dt'],
+          ]
+          for (const [text, cls] of cells) {
+            const td = document.createElement('td')
+            td.textContent = text
+            if (cls) td.className = cls
+            tr.append(td)
+          }
+          table.append(tr)
+        })
+        col.append(table)
+      }
+      this.rcols.append(col)
     }
   }
 

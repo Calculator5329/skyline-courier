@@ -1244,6 +1244,148 @@
      rank would shove one row's time out of alignment with the others. */
   .board .rank { width: 8px; text-align: right; opacity: .6; }
   .board .rparcels { opacity: .7; }
+
+  /* --- the records screen ------------------------------------------------
+   *
+   * Same plate as #menu — same width, border, brackets and gradient — because
+   * it is the same panel showing a different face, exactly like #loadnote. A
+   * second visual language for a second screen would read as a second app. */
+  #records {
+    position: relative;
+    width: min(780px, 94vw);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(12px, 1.9vh, 19px);
+    /* Padded on all four sides, unlike #menu — #menu ends in the controls
+       strip, which is a full-bleed band that supplies its own bottom edge.
+       This screen ends in text, and text against a panel edge reads as
+       clipped. */
+    padding: clamp(18px, 2.6vh, 28px) clamp(16px, 2.4vw, 30px) clamp(14px, 2vh, 20px);
+    background: linear-gradient(168deg, var(--m-panel-a), var(--m-panel-b));
+    border: 1px solid var(--m-line);
+    border-radius: 3px;
+    box-shadow: 0 30px 90px rgba(0, 0, 0, .62), inset 0 1px 0 rgba(255, 255, 255, .07);
+    overflow: hidden;
+  }
+  #records.hidden { display: none; }
+  /* The menu needs its own hide rule: `.hidden` is not a global utility here,
+     it is declared per element (see `#overlay.hidden`), and toggling a class
+     nothing styles hides nothing — the first build stacked the records screen
+     UNDER a still-visible menu. */
+  #menu.hidden { display: none; }
+
+  /* Rule tabs. The board is scoped to a rule set, so picking one is not a
+     filter over a bigger list — it IS which board you are looking at. */
+  .rtabs { display: flex; gap: 6px; }
+  .rtab {
+    pointer-events: auto;
+    appearance: none;
+    font: inherit;
+    cursor: pointer;
+    flex: 1;
+    padding: 7px 10px;
+    font-size: 10px;
+    letter-spacing: .26em;
+    text-transform: uppercase;
+    color: var(--m-dim);
+    background: rgba(0, 0, 0, .22);
+    border: 1px solid var(--m-line);
+    border-radius: 2px;
+    transition: color .16s, border-color .16s, background .16s;
+  }
+  .rtab:hover { color: var(--m-ink); border-color: var(--m-line-on); }
+  .rtab[aria-selected="true"] {
+    color: var(--m-accent-hi);
+    border-color: var(--m-line-on);
+    background: rgba(217, 164, 65, .10);
+  }
+
+  /* Two routes, side by side, because comparing them is the point of putting
+     them on one screen. They stack below the breakpoint where five columns of
+     numbers stop fitting. */
+  .rcols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .rcol {
+    border: 1px solid var(--m-line);
+    border-radius: 2px;
+    background: rgba(0, 0, 0, .18);
+    padding: 10px 12px 12px;
+  }
+  .rcol h2 {
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .24em;
+    text-transform: uppercase;
+    color: var(--m-accent);
+  }
+  .rtable { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .rtable th {
+    font-size: 8px;
+    font-weight: 500;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--m-dim);
+    opacity: .55;
+    text-align: left;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--m-line);
+  }
+  .rtable td {
+    font-size: 11px;
+    color: var(--m-dim);
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, .04);
+  }
+  .rtable tr:last-child td { border-bottom: 0; }
+  .rtable .cr { text-align: right; }
+  /* The leader is the only warm row. Rank 1 is what every other row on the
+     board is measured against, and giving five rows equal weight would bury
+     the number you are actually chasing. */
+  .rtable tr.lead td { color: var(--m-accent-hi); }
+  .rtable .rk { width: 18px; opacity: .5; }
+  .rtable .dt { opacity: .5; font-size: 9px; letter-spacing: .06em; }
+  /* An empty board says so in words. A blank panel is indistinguishable from a
+     broken one — which is not hypothetical here: the boards spent their whole
+     first life rendering empty because of a swallowed ReferenceError, and
+     nothing on screen could tell the difference. */
+  .rempty {
+    font-size: 10px;
+    color: var(--m-dim);
+    opacity: .45;
+    padding: 10px 0 4px;
+    letter-spacing: .04em;
+  }
+  #rnote {
+    font-size: 9px;
+    color: var(--m-dim);
+    opacity: .5;
+    letter-spacing: .05em;
+    line-height: 1.5;
+    margin-top: 7px;
+    text-align: center;
+  }
+  #recbtn, #recback {
+    pointer-events: auto;
+    appearance: none;
+    font: inherit;
+    cursor: pointer;
+    display: block;
+    margin: 8px auto 0;
+    padding: 5px 14px;
+    font-size: 9px;
+    letter-spacing: .26em;
+    text-transform: uppercase;
+    color: var(--m-dim);
+    background: none;
+    border: 1px solid var(--m-line);
+    border-radius: 2px;
+    transition: color .16s, border-color .16s;
+  }
+  #recbtn:hover, #recback:hover { color: var(--m-accent-hi); border-color: var(--m-line-on); }
+
+  @media (max-width: 620px) {
+    .rcols { grid-template-columns: 1fr; }
+  }
   .board .rdate { margin-left: auto; opacity: .55; letter-spacing: .06em; }
   .pickcard.on .board { opacity: .72; }
 
@@ -1968,6 +2110,7 @@
     <div class="go">
       <button type="button" id="cta">click to run</button>
       <div id="esc">escape releases the cursor at any time</div>
+      <button type="button" id="recbtn" data-nostart>records &mdash; every route, every rule</button>
     </div>
 
     <div class="ref">
@@ -2010,6 +2153,33 @@
       <div class="lbar"><i></i></div>
       <div class="lsub">the world is baked at boot &mdash; rebuilding the light,
         the grade and every material</div>
+    </div>
+  </div>
+
+  <!-- RECORDS — the boards at full size, one screen, no scrolling.
+       Every route against every rule set, which is six boards, because a time
+       only means something against the course AND the cuff it was set under.
+       It replaces the menu rather than floating over it: the menu is a set of
+       decisions and this is a thing you read, and the two want the same
+       attention. `data-nostart` throughout, or reading your own records would
+       grab the pointer and drop you into a run. -->
+  <div id="records" class="hidden" data-nostart>
+    <div class="title">
+      <h1>Records</h1>
+      <div class="rule">
+        <span></span>
+        <div class="tag">your five fastest, per route, per rule</div>
+        <span></span>
+      </div>
+    </div>
+
+    <div class="rtabs" id="rtabs" role="tablist"></div>
+    <div class="rcols" id="rcols"></div>
+
+    <div class="go">
+      <button type="button" id="recback" data-nostart>back</button>
+      <div id="rnote">a run is filed the moment you cross the finish &mdash;
+        there is nothing to submit. Times live in this browser.</div>
     </div>
   </div>
 </div>
