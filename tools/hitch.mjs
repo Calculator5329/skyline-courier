@@ -26,8 +26,14 @@ export const HITCH_MS = 1000 / 60
  * the mean FPS of the slowest samples, which can hide an isolated stall.
  */
 export function summarizeFrameTimes(values, hitchMs = HITCH_MS) {
-  const times = Array.from(values, Number).filter(Number.isFinite)
+  const times = Array.from(values, Number)
   if (!times.length) throw new Error('cannot summarize an empty frame-time sample')
+  if (times.some((value) => !Number.isFinite(value) || value < 0)) {
+    throw new Error('frame-time samples must all be finite and non-negative')
+  }
+  if (!Number.isFinite(hitchMs) || hitchMs <= 0) {
+    throw new Error('hitch threshold must be finite and positive')
+  }
   const sorted = times.slice().sort((a, b) => a - b)
   const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]
   const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length
@@ -57,6 +63,9 @@ export function summarizeFrameTimes(values, hitchMs = HITCH_MS) {
  * silently grow different hitch definitions.
  */
 export async function measurePumpedFrames(page, name, { frames, dt }) {
+  if (!Number.isInteger(frames) || frames < 2) {
+    throw new Error('measured pumped-frame count must be an integer >= 2')
+  }
   const times = await page.evaluate(({ shot, count, fixedDt }) => {
     const g = window.__game
     const gl = g.renderer.getContext()
@@ -185,6 +194,9 @@ function selfTest() {
   let rejected = false
   try { summarizeFrameTimes([]) } catch { rejected = true }
   if (!rejected) throw new Error('empty sample was accepted')
+  rejected = false
+  try { summarizeFrameTimes([4, Number.NaN, 4]) } catch { rejected = true }
+  if (!rejected) throw new Error('non-finite sample was accepted')
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

@@ -18,24 +18,28 @@ is the only existing lever large enough to clear 240 Hz at native 1440p.
 
 ### Honest performance evidence
 
-The representative mean is terrace + crossing + tower + closeup. The values
-below are only measurements already produced on the RTX 5070 Ti; an em dash is
-deliberately not an estimate. This Codex lane can build the game but Chromium
-startup is denied by its managed sandbox before a page exists
+The representative capture is terrace + crossing + tower + closeup. A mean by
+itself is no longer accepted: each cell now requires mean, p99, 1% low,
+standard deviation, hitch count, and worst hitch from the same synchronized
+frame sample. The values below are only measurements already produced on the
+RTX 5070 Ti; an em dash is deliberately not an estimate. This Codex lane can
+build the game but Chromium startup is denied by its managed sandbox before a
+page exists
 (`sandbox_host_linux.cc:41`, `Operation not permitted`).
 
-| level / exact arm | 1600x900 mean ms/f | 2560x1440 mean ms/f | 1440p at 240 Hz |
-| --- | ---: | ---: | --- |
-| `high`, shipped reference | **2.88** | **5.46** | **misses** 4.167 ms |
+| level / exact arm | 1600x900 consistency | 2560x1440 consistency | consistent-frame verdict |
+| --- | --- | --- | --- |
+| `high`, shipped reference | mean **2.88**; tail fields — | mean **5.46**; tail fields — | mean misses 4.167 ms; consistency receipt pending |
 | `balanced`, new 0.375 / 10 / 6 / 4 | — | — | outside-sandbox capture required |
-| `lite`, exact no-contact arm | — | **2.94** | **reaches** 4.167 ms |
+| `lite`, exact no-contact arm | — | mean **2.94**; tail fields — | mean reaches 4.167 ms; consistency receipt pending |
 
 The 1440p means are computed from the recorded per-shot rows, not inferred from
 the knob values: High is 4.80 / 5.52 / 5.04 / 6.47 ms; Lite's exact
 no-contact implementation is 2.90 / 3.11 / 2.57 / 3.18 ms. Thus the evidence
-supports disabling the pass for Lite and plainly establishes that High misses
-while Lite reaches 240 Hz. It does **not** establish a Balanced verdict or a
-1600x900 Lite number, so this document does not manufacture either one.
+supports disabling the pass for Lite and establishes only a throughput result:
+High's mean misses while Lite's mean reaches 240 Hz. It does **not** establish
+that either arm is consistent, a Balanced verdict, or a 1600x900 Lite number,
+so this document does not manufacture any of them.
 
 Run the fail-capable, socket-free closeout outside the managed Codex sandbox:
 
@@ -45,13 +49,14 @@ node tools/perfbaseline.mjs --quality-levels \
   --screenshot-shot closeup --screenshot-out docs/captures/quality-levels
 ```
 
-That command interleaves every level, takes the minimum of four GPU-synced
-repeats per shot, prints the two-resolution table and writes one `closeup`
-screenshot per level from the same camera. Those three screenshots cannot be
-truthfully published from this lane: Chromium never launched, and this task's
-ownership contract also excludes new files under `docs/captures/`. The command
-exists so the outside-sandbox verifier can close both evidence gaps without
-using a listening socket.
+That command interleaves every level, selects the complete GPU-synced repeat
+with the lowest mean per shot, and prints mean / p99 / 1% low / standard
+deviation / hitch count / worst hitch at both resolutions. It writes one
+`closeup` screenshot per level from the same camera and reports consistency for
+that capture too. Those screenshots cannot be truthfully published from this
+lane: Chromium never launched, and this task's ownership contract also excludes
+new files under `docs/captures/`. The command exists so the outside-sandbox
+verifier can close the evidence gaps without using a listening socket.
 
 ### High-only visual gate calibration
 

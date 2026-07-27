@@ -404,7 +404,7 @@ async function captureQualitySize(browser, width, height, args, options) {
       for (const shot of options.names) {
         for (const quality of order) {
           await page.evaluate((name) => window.__game.setQuality(name), quality)
-          const measured = await pumpShot(page, shot, {
+          await pumpShot(page, shot, {
             frames: args.frames,
             dt: DEFAULTS.dt,
             syncFrames: args.syncFrames,
