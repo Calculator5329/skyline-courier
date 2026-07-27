@@ -94,6 +94,34 @@ async function main() {
     // fully lit, and the departure bar must stay readable without sweeping.
     await shot(browser, server.url, 'menu-skyline-reduced', '', { ...big, reducedMotion: 'reduce' })
 
+    // ---- per-level, per-mode best-time strips ----------------------------
+    // Seed three boards, reload so the boot paints from them, and read back the
+    // strip on each route card. The default mode is NORMAL, so the strips must
+    // show the `:normal` boards — the Skyline's 42.11 and the Void's 1:28.90 —
+    // and NOT the `skyline:fun` time, which proves the board is scoped to the
+    // rules and not just the level.
+    {
+      const { page, errors } = await openGame(browser, server.url, big)
+      await page.evaluate(() => localStorage.setItem('skyline-courier:boards', JSON.stringify({
+        'skyline:normal': [{ t: 42.11, mode: 'normal', level: 'skyline', cps: 3, date: '2026-07-26T00:00:00.000Z' }],
+        'skyline:fun': [{ t: 31.5, mode: 'fun', level: 'skyline', cps: 3, date: '2026-07-26T00:00:00.000Z' }],
+        'void:normal': [{ t: 88.9, mode: 'normal', level: 'void', cps: 4, date: '2026-07-26T00:00:00.000Z' }],
+      })))
+      await page.goto(server.url, { waitUntil: 'load' })
+      await page.waitForFunction('window.__READY__ === true')
+      await settle(page)
+      const rec = await page.evaluate(() => {
+        const g = (map) => {
+          const r = document.querySelector(`.mapbtn[data-map="${map}"] [data-rec]`)
+          return { has: r.classList.contains('has'), time: r.querySelector('.rectime').textContent, mode: r.querySelector('.recmode').textContent }
+        }
+        return { mode: localStorage.getItem('skyline-courier:mode') || 'normal', skyline: g('skyline'), void: g('void') }
+      })
+      console.log('records (normal) ->', JSON.stringify(rec), errors.length ? `ERRORS ${JSON.stringify(errors)}` : 'clean')
+      await page.screenshot({ path: `${OUT}/menu-records.png`, type: 'png' })
+      await page.context().close()
+    }
+
     // ---- interaction: picking a mode must NOT start the run --------------
     const { page, errors } = await openGame(browser, server.url, big)
     await settle(page)
@@ -106,6 +134,20 @@ async function main() {
       hudTag: document.getElementById('modetag').textContent,
     }))
     console.log('click mode-fun ->', JSON.stringify(afterMode))
+
+    // ---- the third mode is real: picking HARDCORE must select it, persist,
+    //      tag the HUD, and re-read the record strips to that mode's boards ---
+    await page.click('#mode-hardcore')
+    const afterHardcore = await page.evaluate(() => ({
+      overlayVisible: !document.getElementById('overlay').classList.contains('hidden'),
+      locked: !!document.pointerLockElement,
+      modeOn: [...document.querySelectorAll('.modebtn.on')].map((b) => b.dataset.mode),
+      modeCards: document.querySelectorAll('.modebtn').length,
+      stored: localStorage.getItem('skyline-courier:mode'),
+      hudTag: document.getElementById('modetag').textContent,
+      recModes: [...document.querySelectorAll('[data-rec] .recmode')].map((n) => n.textContent),
+    }))
+    console.log('click mode-hardcore ->', JSON.stringify(afterHardcore))
 
     // ---- interaction: opening the controls must NOT start the run --------
     await page.click('#keysbox > summary')

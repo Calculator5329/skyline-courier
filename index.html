@@ -1163,7 +1163,62 @@
   }
   .mapbtn:not(.on):hover .cnote { opacity: 1; }
 
+  /* --- the best-time strip ---------------------------------------------- */
+  /*
+   * PER-LEVEL LEADERBOARDS, and deliberately the quietest new thing on the
+   * panel. A route's board is scoped to the level AND the rules it was set
+   * under — a Hardcore time on the Void is not comparable to a Fun time on the
+   * Skyline — so the honest place for it is ONE compact line on the route card,
+   * showing that route's best under the rules currently picked below. It follows
+   * the two decisions the menu already asks (ROUTE, then RULES) rather than
+   * adding a third: change the rule and every route's record re-reads. A full
+   * table was rejected — it would be the loudest object on a screen whose one
+   * lit control is the start button, and would push that button below the fold
+   * on a laptop, which the whole panel layout exists to prevent. The store keeps
+   * more than the line shows (time, mode, level, checkpoints, date, top five
+   * per board — see src/main.js); the strip is just the top of it.
+   *
+   * It is non-interactive content inside the map <button>, so it adds nothing to
+   * tab order and a click on it still selects the route, exactly like the rest
+   * of the card.
+   */
+  .crec {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 3px;
+    font-size: 10px;
+    color: var(--m-dim);
+    opacity: .62;
+    transition: opacity .18s;
+  }
+  .recmedal { width: 12px; height: 12px; flex: none; color: var(--m-accent); opacity: .85; }
+  .rectime {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .04em;
+    color: var(--m-dim);
+  }
+  /* A set record is the only part of the strip that gets any warmth — an empty
+     board stays cold, so a route you have run reads apart from one you have not
+     at a glance. */
+  .crec.has .rectime { color: var(--m-accent-hi); }
+  .recmode {
+    font-style: normal;
+    text-transform: uppercase;
+    letter-spacing: .2em;
+    font-size: 8px;
+    opacity: .7;
+  }
+  .pickcard.on .crec { opacity: .95; }
+
   /* --- rules cards: the smaller decision, at the smaller size ------------ */
+  /* Three across, not two: the RULES row carries three cards in ascending
+     difficulty where ROUTE carries two worlds, so it gets its own column count.
+     Scoped to #modes (an id) rather than to .picks so the two-across map grid is
+     untouched; the narrow-stack media query below re-lists #modes explicitly, or
+     this id would outrank the class rule that collapses the grid to one column. */
+  #modes { grid-template-columns: 1fr 1fr 1fr; }
   .modebtn .cbody { padding: 9px 12px 10px; gap: 4px; }
   .modebtn .cdesc { font-size: 10px; line-height: 1.45; }
 
@@ -1414,7 +1469,7 @@
      becomes a tall crop down the left of the card and the panel stays short
      enough to hold the whole decision plus the button. */
   @media (max-width: 620px) {
-    .picks { grid-template-columns: 1fr; }
+    .picks, #modes { grid-template-columns: 1fr; }
     .mapbtn { flex-direction: row; align-items: stretch; }
     .mapbtn .thumb {
       flex: none;
@@ -1440,7 +1495,7 @@
     #loadnote .lbar i { width: 100%; background: var(--m-accent-hi); opacity: .7; }
     #reticle, #speedfill, .chip, #verb, #toast, #compass, #alt, #nav, #cppips b,
     #wallbar, #wallrail, #wallbar i, #wallrail i,
-    .pickcard, .lamp, .mapbtn .thumb::after, #keysbox > summary::after,
+    .pickcard, .lamp, .crec, .mapbtn .thumb::after, #keysbox > summary::after,
     #overlay.loading #menu > *:not(#loadnote) {
       transition: none !important;
     }
@@ -1698,6 +1753,16 @@
             </span>
             <span class="cdesc">Golden hour over a cloud sea. Drum islands, brass
               lanterns to hook, long warm light.</span>
+            <span class="crec" data-rec>
+              <svg class="recmedal" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                   stroke-width="1.3" aria-hidden="true">
+                <circle cx="8" cy="9.2" r="5.1" />
+                <path d="M8 9.2V5.8" stroke-linecap="round" />
+                <path d="M6.2 1.9h3.6M8 1.9v1.9" stroke-linecap="round" />
+              </svg>
+              <b class="rectime">&mdash;</b>
+              <em class="recmode">no time yet</em>
+            </span>
           </span>
         </button>
 
@@ -1813,30 +1878,51 @@
             </span>
             <span class="cdesc">A 508 m climb through violet dark. Lit sigils, cut
               beams, jagged crystal.</span>
+            <span class="crec" data-rec>
+              <svg class="recmedal" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                   stroke-width="1.3" aria-hidden="true">
+                <circle cx="8" cy="9.2" r="5.1" />
+                <path d="M8 9.2V5.8" stroke-linecap="round" />
+                <path d="M6.2 1.9h3.6M8 1.9v1.9" stroke-linecap="round" />
+              </svg>
+              <b class="rectime">&mdash;</b>
+              <em class="recmode">no time yet</em>
+            </span>
           </span>
         </button>
       </div>
     </div>
 
-    <!-- RULES: how the cuff behaves. Neither card is framed as the lesser one —
-         FUN is not "easy mode", it is the reason the movement feels the way it
-         does, and the copy says so. Half the height of a route card on purpose:
-         this is the smaller of the two decisions. -->
+    <!-- RULES: how the cuff behaves. Three cards, left to right in ASCENDING
+         difficulty — FUN, NORMAL, HARDCORE — and none is framed as the lesser
+         one. FUN is not "easy mode", it is the reason momentum feels the way it
+         does; HARDCORE is not "the real game", it is the same course with the
+         cuff's assistance taken away. The one thing that changes across all
+         three is the grapple, so that is what each line names, honestly and
+         specifically (the differences are real — see MODES in src/player.js).
+         Shorter than a route card on purpose: this is the smaller decision. -->
     <div class="pick">
       <div class="sec-h"><i>2</i>Rules <em>&mdash; how the cuff behaves</em></div>
       <div class="picks" id="modes">
-        <button type="button" class="pickcard modebtn" id="mode-normal" data-mode="normal" aria-pressed="true">
-          <span class="cbody">
-            <span class="crow"><i class="lamp"></i><span class="cname">Normal</span></span>
-            <span class="cdesc">One hook between landings, and gravity still has you
-              through the pull. The course is the parkour.</span>
-          </span>
-        </button>
         <button type="button" class="pickcard modebtn" id="mode-fun" data-mode="fun" aria-pressed="false">
           <span class="cbody">
             <span class="crow"><i class="lamp"></i><span class="cname">Fun</span></span>
-            <span class="cdesc">Chain hooks forever, and every latch hands back your
-              dash and your double jump. Nothing is toned down.</span>
+            <span class="cdesc">Swing, reel, and chain hooks forever &mdash; every latch
+              refills your dash and jump.</span>
+          </span>
+        </button>
+        <button type="button" class="pickcard modebtn" id="mode-normal" data-mode="normal" aria-pressed="true">
+          <span class="cbody">
+            <span class="crow"><i class="lamp"></i><span class="cname">Normal</span></span>
+            <span class="cdesc">The pure winch &mdash; one hook per landing, real gravity
+              through the pull, no free charges.</span>
+          </span>
+        </button>
+        <button type="button" class="pickcard modebtn" id="mode-hardcore" data-mode="hardcore" aria-pressed="false">
+          <span class="cbody">
+            <span class="crow"><i class="lamp"></i><span class="cname">Hardcore</span></span>
+            <span class="cdesc">No winch &mdash; a rigid tether you swing. Time the
+              release, or bank speed to reach.</span>
           </span>
         </button>
       </div>

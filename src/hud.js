@@ -193,6 +193,32 @@ export class Hud {
     }
   }
 
+  /**
+   * Paint the best-time strip on each route card.
+   *
+   * `times` is `{ <map>: seconds | null }` for the CURRENTLY picked rules, and
+   * `modeLabel` names those rules so the line reads as "your best on this route,
+   * under these rules" — the board is scoped to both, so the rule has to be on
+   * the line or the number is a lie the moment you change it. Persistence and
+   * the scoping live in src/main.js; the HUD only renders what it is handed.
+   *
+   * Written on a mode change and on a finish, never per frame — a record is a
+   * fact about a run, not telemetry, exactly like `setMode`.
+   */
+  setRecords(times, modeLabel) {
+    for (const btn of document.querySelectorAll('.mapbtn')) {
+      const rec = btn.querySelector('[data-rec]')
+      if (!rec) continue
+      const t = times ? times[btn.dataset.map] : null
+      const timeEl = rec.querySelector('.rectime')
+      const modeEl = rec.querySelector('.recmode')
+      const has = t != null
+      rec.classList.toggle('has', has)
+      if (timeEl) timeEl.textContent = has ? formatTime(t) : '—'
+      if (modeEl) modeEl.textContent = has ? (modeLabel || '') : 'no time yet'
+    }
+  }
+
   setOverlay(visible) {
     this.overlay.classList.toggle('hidden', !visible)
   }
