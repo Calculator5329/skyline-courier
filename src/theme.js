@@ -161,7 +161,16 @@ const skyline = {
  */
 const voidTheme = {
   name: 'void',
-  label: 'The Void',
+  // USER-FACING NAME. The level is called "The Underworld" everywhere a player
+  // reads it; the INTERNAL identifier stays `void` — the theme key, the
+  // `?theme=void` URL, the file names (levels/void.js, voidkit.js, voidfx.js),
+  // the shot-table keys and ~forty commit messages. Renaming the identifier is
+  // a large mechanical change with real risk, no user-visible benefit, and it
+  // would break every bookmarked URL. So the label moved and the id did not.
+  // Everything the player sees must route through THIS field (Ethan, 2026-07-26:
+  // "call the void The Underworld instead."); a hardcoded name anywhere else is
+  // a bug. See docs/art-direction-void.md §0c.
+  label: 'The Underworld',
 
   /**
    * SHALLOW, not steep — lowered 2026-07-26 from [-0.35, 0.62, 0.70].
@@ -1015,6 +1024,18 @@ const voidTheme = {
 export const THEMES = { skyline, void: voidTheme }
 export const DEFAULT_THEME = 'skyline'
 
+/**
+ * URL/localStorage name aliases → canonical theme key.
+ *
+ * The void level is LABELLED "The Underworld" but its identifier stays `void`
+ * (see `voidTheme.label`). `?theme=underworld` is offered as a courtesy alias
+ * so the name a player now sees also works in the URL — it is an ALIAS, not a
+ * replacement: `?theme=void` remains the canonical address and every bookmark
+ * keeps working. Kept OUT of `THEMES` deliberately so anything iterating the
+ * descriptors for a menu sees one void entry, not two.
+ */
+const THEME_ALIASES = { underworld: 'void' }
+
 let active = THEMES[DEFAULT_THEME]
 
 /**
@@ -1027,7 +1048,8 @@ let active = THEMES[DEFAULT_THEME]
  * is neither look.
  */
 export function selectTheme(name) {
-  if (name && THEMES[name]) { active = THEMES[name]; return active }
+  const resolve = (n) => (n && THEME_ALIASES[n]) || n
+  if (name && THEMES[resolve(name)]) { active = THEMES[resolve(name)]; return active }
   let want = null
   try {
     want = new URLSearchParams(location.search).get('theme')
@@ -1036,7 +1058,7 @@ export function selectTheme(name) {
   if (!want) {
     try { want = localStorage.getItem('skyline-courier:theme') } catch { /* private mode */ }
   }
-  active = THEMES[want] || THEMES[DEFAULT_THEME]
+  active = THEMES[resolve(want)] || THEMES[DEFAULT_THEME]
   return active
 }
 

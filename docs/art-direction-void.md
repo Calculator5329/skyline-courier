@@ -1,7 +1,21 @@
-# Art direction — THEME 2: the Void
+# Art direction — THEME 2: The Underworld (`void` in code)
 
 The second theme. Read `docs/art-direction.md` first for the house rules; this
 document overrides its palette and light, not its principles.
+
+> **NAMING — the level is called "The Underworld"; the code calls it `void`.**
+> Ethan, 2026-07-26: *"call the void The Underworld instead."* Only the
+> user-facing NAME changed — the map card, its description, and anything else a
+> player reads now say "The Underworld", routed through the `label` field of the
+> `void` descriptor in `src/theme.js`. The INTERNAL identifier stays `void`
+> everywhere: the theme key, the `?theme=void` URL, the file names
+> (`src/levels/void.js`, `src/voidkit.js`, `src/fx/voidfx.js`), CSS classes,
+> shot-table keys, this document's own filename, and the commit history. Why the
+> split: renaming the identifier is a large mechanical change with real risk and
+> no player-visible benefit, and it would break every bookmarked `?theme=void`
+> URL. `?theme=underworld` works too, as an alias — not a replacement. So when
+> this document says "the void", read "The Underworld" — they are the same
+> level under its two names.
 
 ## THE REFERENCE IMAGE IS `docs/reference/theme2-void.png`
 
