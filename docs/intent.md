@@ -80,3 +80,24 @@ more speed than a bad one?* If not, it's decoration.
 The hard separation that matters: **level geometry and level collision are
 generated from one source**. Clockwork Garden's recurring bug was a visible
 thing that wasn't solid and a solid thing that wasn't visible.
+
+## 2026-07-27 — Ethan's answers, after playing the deployed build
+
+**Performance target is SMOOTHNESS, not a number.** Asked whether "240fps"
+meant 1080p/1440p/4K native, he answered: *"I care about smoothness, not the
+number."* So the metric for every future perf claim is **frame-time
+consistency** — p99 frame time, hitch count, 1% lows — not mean fps. A build
+with a lower average and no stutter beats a higher average that spikes. Mean
+ms/f alone is no longer a sufficient receipt.
+
+**Lite is allowed to look worse.** *"Yes — Lite may visibly drop contact
+shadows."* Confirms `contactShadows: false` for Lite. High stays byte-identical
+to the shipped reference; that invariant is unchanged. A performance setting
+that costs nothing visually was the placebo we just removed.
+
+**Scope from here: perf, then polish, then done.** *"perf improvements then
+polish what exists and call it done."* The course-length gap (755 m measured
+against the 900–1400 m target in `docs/course-design.md`) and the unbuilt
+sub-zero descent are therefore **explicitly not being closed** — that spec
+target is retired rather than outstanding. No new course content, no new
+mechanics. Finish the frame work, polish what is here, stop.
