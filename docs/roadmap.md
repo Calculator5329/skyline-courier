@@ -1,5 +1,16 @@
 # Roadmap
 
+## Owner direction — 2026-08-02 (Ethan, test-packet reply; NOT a priority now)
+
+Verbatim intent, filed for whenever this repo is next promoted: "we need more
+levels, more like the initial one less like the void, more basic but
+intentional, allowing players to more fully explore all ways of parkour
+combinations in the game, and a much bigger total map. but not a priority
+right now. It will take lots of tokens." So: future level work biases toward
+theme-1-style courses over Void-style ones, breadth of parkour combination
+space over spectacle, and total map size. No lanes on this until Ethan
+promotes it.
+
 ## Now — the Void (theme 2)
 
 - [ ] **Contact shadows split by quality tier (Ethan, 2026-08-01 approvals
