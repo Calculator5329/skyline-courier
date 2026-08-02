@@ -2,6 +2,11 @@
 
 ## Now — the Void (theme 2)
 
+- [ ] **Contact shadows split by quality tier (Ethan, 2026-08-01 approvals
+  packet):** full-resolution contact shadows in the highest graphics preset
+  only; half-resolution in every other preset. Wire through the existing
+  quality-level knob in `src/render/quality.js`.
+
 Acceptance is `docs/art-direction-void.md` §2, measured by
 `node tools/shotset.mjs --theme void`. The sky, atmosphere, exposure and
 energy beams landed 2026-07-25, and the distant scenery layer and the
