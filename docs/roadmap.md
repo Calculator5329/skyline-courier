@@ -417,7 +417,7 @@ plausible fixes were built, measured, and thrown away.
 
 ## Next — feel and content
 
-- [ ] <!-- workspace:id=work:13ca7631-ada5-532d-a9e7-70b5a2f19dc4 --> **Wire `audio: VOID_AUDIO` into `src/theme.js`.** The void's soundscape
+- [x] <!-- workspace:id=work:13ca7631-ada5-532d-a9e7-70b5a2f19dc4 --> <!-- closed 2026-08-12: landed — src/theme.js imports VOID_AUDIO and sets audio: VOID_AUDIO, exactly the two lines the item asked for. Residue: the dead fallback in src/audio.js:537 can be deleted opportunistically --> **Wire `audio: VOID_AUDIO` into `src/theme.js`.** The void's soundscape
       is a theme overlay of exactly the shape `grade`/`exposure`/`aerial`
       already use, and it currently reaches the engine through a named fallback
       in `Audio._resolveTheme` (`theme.name === 'void'`) because `theme.js`
@@ -448,7 +448,7 @@ plausible fixes were built, measured, and thrown away.
       silhouette — the fiction already calls for them.
 - [ ] <!-- workspace:id=work:c3a075c0-03b3-57db-9fb4-01d7d19d4ebc --> Extend the course past the current opening leg to a full 3–5 minute route.
 - [ ] <!-- workspace:id=work:73d46210-f7f2-5915-825c-10e5789c64eb --> Best-time persistence per checkpoint split (localStorage).
-- [ ] <!-- workspace:id=work:559400af-fe8f-58d3-a88b-89a712a6e72b --> Register the repo in `workspace.json` (manifest change needs its own lane).
+- [x] <!-- workspace:id=work:559400af-fe8f-58d3-a88b-89a712a6e72b --> <!-- closed 2026-08-12: superseded — games/skyline-courier is registered in workspace.json (status active, remote set) --> Register the repo in `workspace.json` (manifest change needs its own lane).
 - [ ] <!-- workspace:id=work:6b4885f7-a66d-55c0-9e19-a8248d58b3d2 --> HUD: render the grapple release reason. `Player.lastRelease`
       (`{reason, arrived, speed, dist, fireDist, held}`) and the cumulative
       `Player.releaseTally` are populated and shipped; nothing draws them yet.
@@ -573,7 +573,7 @@ the new timer treatment. *"the rest looks really great."*
       improvement."* Worth a deliberate A/B rather than more iteration.
 - [ ] <!-- workspace:id=work:704b550c-0bf5-5fd6-a84d-0cff3e759ad3 --> **Still cannot reach the other islands.** Third time raised. This is the
       single most repeated complaint in the project.
-- [ ] <!-- workspace:id=work:ba6ecc8a-a551-53ed-bd93-083bcb5ccd7f --> **Drop the checkpoint counter** from the top-left cluster.
+- [x] <!-- workspace:id=work:ba6ecc8a-a551-53ed-bd93-083bcb5ccd7f --> <!-- closed 2026-08-12: landed — the checkpoint counter is gone from the #run cluster (index.html) and hud.js notes its recolour path was removed --> **Drop the checkpoint counter** from the top-left cluster.
 - [ ] <!-- workspace:id=work:6c08de69-3e34-5ccc-8e03-50f3a3ed083a --> **The hook is too strong for a straight parkour game.** *"you can
       literally just fly and because I can just fly this little parkour course
       [is] pretty boring."* Resolution is MODES, not a nerf: **FUN** keeps
@@ -608,7 +608,7 @@ it. What is left is the menu.
       the menu cannot drift from the table it is describing. It must say
       honestly what each level costs visually, not just promise "better
       performance"; `docs/lite-mode.md` has the measured wording.
-- [ ] <!-- workspace:id=work:51567a27-1fb9-5fe3-8785-e2b2cce238a9 --> **[ETHAN] Promote half-resolution contact shadows into the default?**
+- [x] <!-- workspace:id=work:51567a27-1fb9-5fe3-8785-e2b2cce238a9 --> <!-- closed 2026-08-12: superseded — half-resolution contact shadows were promoted to default (src/render/quality.js 'HALF RESOLUTION, EVEN AT HIGH — promoted to default deliberately') and the newer Ethan-approved 2026-08-01 quality-tier item re-specifies the split --> **[ETHAN] Promote half-resolution contact shadows into the default?**
       Worth 16–37% of the frame on every shot on both themes, for a whole-frame
       luminance shift at or below the harness's own run-to-run noise floor
       (under 0.06%). It was left out of `high` only because this lane's
