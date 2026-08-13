@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-08-13 — Firebase's generated hosting cache no longer dirties source
+
+- Stopped tracking `.firebase/hosting.ZGlzdA.cache` and ignored `.firebase/`.
+  The file is deploy-tool state containing build timestamps and content hashes,
+  not game source; every build/deploy refresh made the active checkout appear
+  dirty. The current generated copy was preserved in the dated local archive
+  before the index change, and the prior tracked version remains recoverable
+  from repository history. No deploy ran.
+
 ## 2026-08-13 — the build rule now matches what the build does
 
 Owner ruling `q-verify-rules=fix_guards` (doc-truth-packet-20260812, answered
