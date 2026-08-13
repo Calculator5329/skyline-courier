@@ -8,8 +8,17 @@ First-person momentum parkour in Three.js. Successor to the parked
 
 ```sh
 npm run dev     # then drive it in a browser — screenshot the running game
-npm run build   # must succeed with no warnings before any commit
+npm run build   # must succeed with no errors and no NEW warnings before any commit
 ```
+
+**Known standing warning, as of 2026-08-13.** `npm run build` succeeds and emits one
+warning: `dist/assets/index.js` is 995.89 kB (gzip 311.72 kB), over vite's 500 kB
+chunk advisory. The rule used to read "no warnings", which no commit since the bundle
+crossed 500 kB could satisfy, so it was a rule nobody could follow and everybody
+ignored. Reworded to "no new warnings" per owner ruling `q-verify-rules=fix_guards`
+(doc-truth-packet-20260812). Code splitting is a roadmap item, not a thing to silence
+with `chunkSizeWarningLimit`. A warning that is not this one is a new warning and it
+blocks the commit.
 
 **Compiling is not verification.** That mistake is precisely what parked the
 predecessor. A change to movement is verified by running the course; a change

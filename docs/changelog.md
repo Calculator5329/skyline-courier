@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-13 — the build rule now matches what the build does
+
+Owner ruling `q-verify-rules=fix_guards` (doc-truth-packet-20260812, answered
+2026-08-13).
+
+CLAUDE.md said `npm run build` "must succeed with no warnings before any commit".
+Measured today: the build succeeds and emits one warning, the vite chunk-size advisory
+at `dist/assets/index.js` 995.89 kB (gzip 311.72 kB). No commit since the bundle
+crossed 500 kB could have satisfied the rule as written, so the rule was being ignored
+rather than followed.
+
+- CLAUDE.md verify rule reworded to "no errors and no NEW warnings", with the standing
+  warning named and dated so a second warning is visibly new.
+- Roadmap item filed under Next - performance to code split the bundle, with an
+  explicit note not to close it by raising `chunkSizeWarningLimit`.
+
 ## 2026-07-27 — performance receipts now preserve the slow frames
 
 `tools/hitch.mjs` now owns the shared frame-time summary used by the running

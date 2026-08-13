@@ -388,6 +388,18 @@ minor, and left on purpose rather than missed.
 
 ## Next — performance
 
+- [ ] <!-- filed 2026-08-13, no workspace id yet: the id sweep stamps it --> **Code
+      split the bundle so `npm run build` emits no chunk-size warning.**
+      `dist/assets/index.js` measured 995.89 kB (gzip 311.72 kB) on 2026-08-13,
+      roughly double vite's 500 kB advisory. The verify rule in CLAUDE.md was
+      "no warnings", which nothing could satisfy while this stood; it now reads
+      "no new warnings" per owner ruling `q-verify-rules=fix_guards`
+      (doc-truth-packet-20260812), and closing this item is what makes the
+      stricter reading true again. Do it with `manualChunks` or dynamic
+      `import()`. Do NOT raise `chunkSizeWarningLimit`: that hides the number
+      instead of moving it, and the point of the rule is that a first-person
+      game's first load is a feel problem.
+
 Measured 2026-07-26 with `tools/perfprobe.mjs`, `tools/perfinv.mjs` and
 `tools/hitch.mjs` on an RTX 5070 Ti. Read `docs/perf.md` before opening any of
 these — it records what the numbers were, and, more usefully, which two
