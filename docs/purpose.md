@@ -26,6 +26,14 @@ Phase 3 does not start until phase 1 is accepted in a hands-on playtest.
 ## Non-goals
 
 - Any external asset file. Zero images, zero models, zero audio files.
+
+  Measured 2026-08-12: three owner-approved exceptions now ship.
+  `public/audio/*.ogg` (8 files, loaded by src/music.js:127),
+  `public/sky/void-dome.png` (src/theme.js:360), and
+  `public/tex/void-slab-top.png` (src/materials/slabdecal.js:261). Each is
+  argued in CLAUDE.md rule 1. The rule still holds for everything else: no
+  meshes, and every other texture is a canvas or a shader. Nothing in the build
+  fails when a fourth asset is added, so this is a rule people keep, not a gate.
 - A visible full-body player character. First-person is a deliberate constraint,
   not a limitation to work around later.
 - A game engine or physics library. Three.js is the only runtime dependency.

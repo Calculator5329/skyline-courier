@@ -249,7 +249,13 @@ Side by side, frozen, at 3x zoom, on a distant railing, an art director can
 find it. At normal viewing distance, in motion, a reasonable person cannot —
 the near field, which is where a parkour player is looking, is untouched.
 
-## Why the default was left at full resolution
+## Why the default was left at full resolution, and why that changed
+
+Superseded 2026-07-26 by commit 3b97114. Half-resolution contact shadows are
+now the default in `high`: `src/render/quality.js` line 75 reads
+`contactScale: 0.5`. The measurements below are still the reason, and the
+`closeup` 111.1 vs 111.0 argument is still the record of why the call was close.
+Only the outcome changed.
 
 The half-res contact win is large, cheap, and on the evidence above very nearly
 invisible. It is not shipped as the default anyway, because the brief for this

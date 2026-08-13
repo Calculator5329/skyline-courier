@@ -16,9 +16,12 @@ that teaches you the verbs, and a void that assumes you mean it.
 | Mouse | Look (sensitivity slider in Settings) |
 | Space | Jump / wall-jump |
 | Shift | Sprint |
-| Ctrl or C | Slide |
+| Q or E | Dash |
+| C | Slide |
 | F | Grapple (hold to swing, release to fly) |
 | R | Restart from checkpoint |
+| M | Open the menu |
+| P | Photo mode |
 
 Abilities unlock progressively as the course demands them; a returning player
 gets the whole set at once.

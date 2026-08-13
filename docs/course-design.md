@@ -153,6 +153,19 @@ Build and verify routes against NORMAL, and let FUN be the playground.
 
 ## What "bigger" means concretely
 
+**SUPERSEDED 2026-07-27.** Ethan retired this expansion program: 'perf
+improvements then polish what exists and call it done.' The 900-1400 m length
+target below is retired, not outstanding; the course measures 755 m and stays
+there. The traversal-envelope numbers earlier in this file are still current
+and are still what you build against. Everything from here to the end of this
+section is the plan as it stood on 2026-07-25. See docs/intent.md lines 98-103.
+
+Measured 2026-08-12: the course is 12 checkpoints (`L.checkpoint` calls in
+`src/level.js`, lines 1352-2056), running x=4 to x=708, z=-46 to z=+22, and up
+to y=150.6 at 'the spire'. docs/intent.md records 755 m of travelled route. The
+paragraph below describes the course as it stood on 2026-07-25, when it was
+~230 m on one axis.
+
 The current course is ~230 m along a single straight +X axis, seven
 checkpoints, roughly 45 seconds at pace. That is a tutorial, not a route.
 
@@ -164,7 +177,7 @@ checkpoints, roughly 45 seconds at pace. That is a tutorial, not a route.
    over itself so the player sees where they have been and where they are going.
    Seeing your own route from a new angle is most of what makes a traversal
    world feel like a place.
-3. **Go vertical.** Currently the whole course lives between y=0 and y=8. The
+3. **Go vertical.** On 2026-07-25 the whole course lived between y=0 and y=8; it now reaches y=150.6. The
    reference is islands at wildly different altitudes. Use a range of at least
    y=-20 to y=+90, with the finish genuinely high up.
 4. **Branch.** At least three points where a fast, risky line and a safe,

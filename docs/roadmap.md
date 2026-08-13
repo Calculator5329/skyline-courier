@@ -414,7 +414,9 @@ plausible fixes were built, measured, and thrown away.
       count and its dependent texture fetches, not by arithmetic or by the
       blur — so neither is a lever and no level turns them. Numbers, and the
       honest account of what half resolution costs to look at, are in
-      `docs/lite-mode.md`. Not promoted to the default; see the item below.
+      `docs/lite-mode.md`. Promoted to the default in `high` on 2026-07-26
+      (commit 3b97114); `src/render/quality.js` line 75 is `contactScale: 0.5`.
+      To revert, set it back to 1.
 - [x] <!-- workspace:id=work:f94b4967-092f-58a8-9df6-b9077af15d37 --> 2026-07-26: **Decide the pixel-ratio cap deliberately.** It is now a
       quality-level knob rather than a literal — `high` keeps the shipped cap
       of 2, `balanced` 1.5, `lite` 1 (`src/render/quality.js`, applied in
@@ -458,7 +460,7 @@ plausible fixes were built, measured, and thrown away.
       beams have.
 - [ ] <!-- workspace:id=work:75c24d6a-aefb-5fe7-a5c8-3fc860e87e91 --> Visible courier hands with spring-driven lag and a grapple-cuff
       silhouette — the fiction already calls for them.
-- [ ] <!-- workspace:id=work:c3a075c0-03b3-57db-9fb4-01d7d19d4ebc --> Extend the course past the current opening leg to a full 3–5 minute route.
+- [x] <!-- workspace:id=work:c3a075c0-03b3-57db-9fb4-01d7d19d4ebc --> <!-- closed 2026-08-12: RETIRED, not shipped — Ethan 2026-07-27 'perf improvements then polish what exists and call it done'; the 755 m course against the old 900-1400 m target is deliberately not being closed (docs/intent.md lines 98-103) --> Extend the course past the current opening leg to a full 3–5 minute route.
 - [ ] <!-- workspace:id=work:73d46210-f7f2-5915-825c-10e5789c64eb --> Best-time persistence per checkpoint split (localStorage).
 - [x] <!-- workspace:id=work:559400af-fe8f-58d3-a88b-89a712a6e72b --> <!-- closed 2026-08-12: superseded — games/skyline-courier is registered in workspace.json (status active, remote set) --> Register the repo in `workspace.json` (manifest change needs its own lane).
 - [ ] <!-- workspace:id=work:6b4885f7-a66d-55c0-9e19-a8248d58b3d2 --> HUD: render the grapple release reason. `Player.lastRelease`
@@ -611,15 +613,15 @@ the renderer is fill-bound, and the contact-shadow march is 40%+ of the frame.
 The plumbing and `docs/lite-mode.md` landed 2026-07-26. `src/render/quality.js`
 is the one table every consumer reads; `__game.setQuality('lite')` and
 `?quality=lite` both drive it; `node tools/shotset.mjs --quality lite` captures
-it. What is left is the menu.
+it. The menu landed 2026-07-27 as a Quality segmented control in Settings
+(index.html lines 2591-2592, src/main.js line 1205), not in the start menu.
+What is left is the honest wording.
 
-- [ ] <!-- workspace:id=work:08a335fc-6d4b-51c5-824e-a2dc0c4110c8 --> Lite Mode UI in the start menu, beside ROUTE and RULES. The plumbing is
-      done — this item is the UI only, and it should be one call to
-      `__game.setQuality(name)` per option. Populate the labels from
-      `QUALITY_LEVELS[name].label` and `.note` rather than retyping them, so
-      the menu cannot drift from the table it is describing. It must say
-      honestly what each level costs visually, not just promise "better
-      performance"; `docs/lite-mode.md` has the measured wording.
+- [ ] <!-- workspace:id=work:08a335fc-6d4b-51c5-824e-a2dc0c4110c8 --> The Quality control shows raw level keys. It is fed `QUALITY_NAMES`
+      (src/main.js:1205), so `QUALITY_LEVELS[name].label` and `.note` never
+      reach the player and the control does not say what Lite costs visually.
+      Feed it `.label` and `.note` from the table so the menu cannot drift from
+      what it describes.
 - [x] <!-- workspace:id=work:51567a27-1fb9-5fe3-8785-e2b2cce238a9 --> <!-- closed 2026-08-12: superseded — half-resolution contact shadows were promoted to default (src/render/quality.js 'HALF RESOLUTION, EVEN AT HIGH — promoted to default deliberately') and the newer Ethan-approved 2026-08-01 quality-tier item re-specifies the split --> **[ETHAN] Promote half-resolution contact shadows into the default?**
       Worth 16–37% of the frame on every shot on both themes, for a whole-frame
       luminance shift at or below the harness's own run-to-run noise floor
