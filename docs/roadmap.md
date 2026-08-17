@@ -388,7 +388,7 @@ minor, and left on purpose rather than missed.
 
 ## Next — performance
 
-- [ ] <!-- filed 2026-08-13, no workspace id yet: the id sweep stamps it --> **Code
+- [ ] <!-- workspace:id=work:58f906c6-9795-519d-8e1a-86ed0a6d9412 --> <!-- filed 2026-08-13, no workspace id yet: the id sweep stamps it --> **Code
       split the bundle so `npm run build` emits no chunk-size warning.**
       `dist/assets/index.js` measured 995.89 kB (gzip 311.72 kB) on 2026-08-13,
       roughly double vite's 500 kB advisory. The verify rule in CLAUDE.md was
