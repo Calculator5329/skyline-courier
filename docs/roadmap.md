@@ -488,9 +488,6 @@ Does not start until the playable slice is accepted.
       `L.mesh` and whose collider therefore has a hole a sliding capsule fits
       through — is a whole-course risk, and nothing else in the harness looks
       for it. A probe nobody runs rots.
-- [ ] <!-- workspace:id=work:bb5bdc4e-4844-54fc-ac4e-bb9405fa0b81 --> Custom render pipeline: HDR targets, cascaded shadows, TAA, bloom pyramid.
-- [ ] <!-- workspace:id=work:f747e826-af9a-5596-844b-635735e33ca6 --> BVH broadphase over a triangle soup, replacing the AABB-only collider.
-- [ ] <!-- workspace:id=work:2721b505-187d-5bed-aa5b-7a94a5fa4d06 --> Full Web Audio spatialisation: HRTF panning, occlusion raycasts, IR reverb.
 
 ## Done
 
@@ -596,8 +593,6 @@ the new timer treatment. *"the rest looks really great."*
       **NORMAL** makes the grapple a traversal tool rather than flight. Both
       must keep every verb, and the "reachable without dash or grapple"
       invariant still holds in both.
-- [ ] <!-- workspace:id=work:c7294b20-65d0-554a-af08-21a53d95154f --> Themes come later, and the kit must stay parameterised so a theme is a
-      data change.
 
 ## Lite Mode (graphics settings)
 
@@ -641,3 +636,12 @@ What is left is the honest wording.
       caps at 2, so nothing changed for anyone who does not pick a level. It is
       still the single largest lever available and still the one a player will
       SEE, which is exactly why it is theirs to pull.
+
+## Expired (backlog audit, 2026-08-25)
+
+Ethan's packet reply, planning/reports/backlog-audit-packet-20260825. Reversible: move a line back to its section to revive.
+
+- Custom render pipeline: HDR targets, cascaded shadows, TAA, bloom pyramid. <!-- workspace:id=work:bb5bdc4e-4844-54fc-ac4e-bb9405fa0b81 -->
+- BVH broadphase over a triangle soup, replacing the AABB-only collider. <!-- workspace:id=work:f747e826-af9a-5596-844b-635735e33ca6 -->
+- Full Web Audio spatialisation: HRTF panning, occlusion raycasts, IR reverb. <!-- workspace:id=work:2721b505-187d-5bed-aa5b-7a94a5fa4d06 -->
+- Themes come later, and the kit must stay parameterised so a theme is a data change. <!-- workspace:id=work:c7294b20-65d0-554a-af08-21a53d95154f -->
