@@ -1,6 +1,6 @@
 # Roadmap
 
-- [x] Anti-slop cleanup: archived unused shape helper and clarified look-selection precedence. Verified 2026-09-04 by build and existing terrace screenshot harness; no browser errors.
+- [x] <!-- workspace:id=work:3d5c4ce7-5a9c-5aa7-92a4-9ae5dc2bcbbd --> Anti-slop cleanup: archived unused shape helper and clarified look-selection precedence. Verified 2026-09-04 by build and existing terrace screenshot harness; no browser errors.
 
 ## Owner direction — 2026-08-02 (Ethan, test-packet reply; NOT a priority now)
 
