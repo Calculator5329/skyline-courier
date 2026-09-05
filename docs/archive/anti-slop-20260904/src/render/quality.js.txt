@@ -294,10 +294,23 @@ export function resolveLook(name) {
 const LOOK_KEY = 'skyline-courier:look'
 
 /**
- * Resolve the look from URL, then storage, then the default. `?look=` wins;
- * a look name in `?quality=` remains supported for tools/shotset.mjs.
- * URL overrides do not persist. Missing browser globals or blocked storage
- * fall back to DEFAULT_LOOK.
+ * The active look, read the same three ways a quality level is, so it can be
+ * A/B'd by reload and captured by the shot harness:
+ *
+ *   1. `?look=legacy` on the URL — wins, and does NOT persist, so an evaluator
+ *      A/Bs by reloading and the harness leaves nothing set for the next run.
+ *      This is the primary channel and mirrors how `?quality=` behaves.
+ *   2. THE HARNESS BRIDGE. tools/shotset.mjs forwards `--quality` onto the URL
+ *      but has no `--look` flag (it is outside this lane's owned paths), so a
+ *      look NAME passed to `--quality` is honoured here — but ONLY when it is a
+ *      real look name and NOT a real quality name, so `--quality lite` is still
+ *      unambiguously a quality. This is what lets `shotset --quality legacy`
+ *      capture the legacy look today with the stock harness. Remove it the day
+ *      shotset grows a real `--look`.
+ *   3. localStorage, written by `setLook()` — the persistent console channel.
+ *
+ * Fully guarded: under node (no `location`) every branch throws into the catch
+ * and the default is returned, so kit.js's self-test path is unaffected.
  */
 export function readLook() {
   try {

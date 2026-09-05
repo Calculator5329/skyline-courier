@@ -825,6 +825,16 @@ function normalizeShape(shape) {
 
 // ------------------------------------------------------- section helpers
 
+/** A circle section, for `extrudeAlong` when you want the caps earcut. */
+export function circleShape(r = 0.5, segments = 12) {
+  const out = []
+  for (let i = 0; i < segments; i++) {
+    const th = (i / segments) * TAU
+    out.push([Math.cos(th) * r, Math.sin(th) * r])
+  }
+  return out
+}
+
 /** A rounded rectangle section — a hand rail, a chamfered string course. */
 export function roundedRectShape(w, h, r = 0.04, cornerSegs = 3) {
   const hw = w / 2, hh = h / 2

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-04 — Remove unused shape helper
+
+Archived the uncalled `circleShape` helper and replaced a stale lane-history
+comment with the actual look-selection precedence. All geometry callers and
+look behavior stay unchanged. Build passed with its existing chunk-size warning;
+the built-game terrace screenshot harness passed with no browser errors. Original bytes: `docs/archive/anti-slop-20260904/`.
+
 ## 2026-08-13 — Firebase's generated hosting cache no longer dirties source
 
 - Stopped tracking `.firebase/hosting.ZGlzdA.cache` and ignored `.firebase/`.
