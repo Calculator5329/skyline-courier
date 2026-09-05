@@ -101,3 +101,10 @@ against the 900–1400 m target in `docs/course-design.md`) and the unbuilt
 sub-zero descent are therefore **explicitly not being closed** — that spec
 target is retired rather than outstanding. No new course content, no new
 mechanics. Finish the frame work, polish what is here, stop.
+
+## Anti-slop cleanup — Ethan, 2026-09-04
+
+The current request authorizes behavior-preserving cleanup in this named project
+for this work block; it does not promote the standing docs-only fence for future
+work. Preserve movement, graphics options, and existing course behavior. Remove
+proven unused implementation and present feature-retirement candidates separately.

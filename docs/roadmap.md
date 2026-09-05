@@ -1,5 +1,7 @@
 # Roadmap
 
+- [x] Anti-slop cleanup: archived unused shape helper and clarified look-selection precedence. Verified 2026-09-04 by build and existing terrace screenshot harness; no browser errors.
+
 ## Owner direction — 2026-08-02 (Ethan, test-packet reply; NOT a priority now)
 
 Verbatim intent, filed for whenever this repo is next promoted: "we need more
